@@ -19,13 +19,15 @@ Initialize Octo as a full ACS hot-loader adopter with PCM-governed progression, 
 - Full CGM 0.5.7 eight-module adapter added.
 - `gates` workflow added.
 - ACS assignment + claim state added.
+- ACS adopter audit corrected the missing `pins.cgm.human_output_contract` required by pinned `hotload_check.py`.
+- `PROJECT.md` now carries project-level success conditions and explicit scope-change control.
 - Issue #18 now owns later PDD/system/security/API/TDD projections.
 
 ## Outstanding acceptance
 
 - Apply main ruleset: PR required, `gates` required, block deletion/force push, 0 external approvals in single-owner mode.
 - Enable repository Allow auto-merge.
-- Resolve or understand the hosted Actions run that never reached a runner.
+- Resolve the hosted Actions failure: latest run `36781308614` on head `8a635d762b79875ed7691092ddfe5976a1220878` again ended with `runner_id=0` and zero steps, so validators still have not executed in CI.
 - Run pinned ACS hotload_check + PCM validate + CGM adapter validation and record exact outputs.
 - Merge only after real gate evidence.
 

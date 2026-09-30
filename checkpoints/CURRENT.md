@@ -6,7 +6,7 @@
 
 Octo is in bootstrap. GitHub issues #1–#16 were created before deeper design documents, and issue #18 now owns the later PDD/system/security/API/TDD projections. PR #17 contains substantive repository initialization.
 
-Full helper pins are recorded for ACS, PCM, and CGM. The adopter coordination files are `.coord/assignment.json` and `.coord/boss_claim.json`.
+Full helper pins are recorded for ACS, PCM, and CGM. The adopter coordination files are `.coord/assignment.json` and `.coord/boss_claim.json`. The ACS adopter audit found and fixed the missing CGM `human_output_contract` list required by the pinned hot-load validator; the current decision-boss lease is held by `chatgpt-sol-orchestrator` while its recorded heartbeat remains valid.
 
 ## Active task
 
@@ -15,7 +15,7 @@ OCTO-0001 / issue #2 — complete full ACS hot-load adoption and enforce the Git
 ## Observed blockers
 
 - Repository `allow_auto_merge` is false and no ruleset is installed; the current connector lacks repository-administration writes.
-- First workflow run 36773617802 produced job `gates` but failed before any runner executed a step (runner_id=0, no steps/log blob). Treat this as Actions infrastructure/capacity/policy until evidence shows otherwise.
+- Latest workflow run `36781308614` on head `8a635d762b79875ed7691092ddfe5976a1220878` again produced `gates` but failed before any runner executed a step (`runner_id=0`, zero steps). PCM/CGM/ACS validators therefore have not run in CI; treat the cause as unresolved Actions infrastructure/capacity/policy until evidence identifies it.
 - The scheduled watchdog is intentionally not armed while Actions availability is unproven; the adopter config still defines the 10-minute agent-less policy.
 
 ## Merge policy
