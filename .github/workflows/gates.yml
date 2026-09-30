@@ -48,3 +48,16 @@ jobs:
             --root /tmp/cgm \
             --adapter .content-system \
             --project-root .
+
+      - name: Validate pinned ACS hot-loader
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet jsonschema
+          git clone --quiet https://github.com/Pukujan/agent-custom-setup.git /tmp/acs
+          git -C /tmp/acs checkout --quiet fa57bae9a5229b454b57ea0b3f3e4dac0bbc8b4e
+          python /tmp/acs/modules/coordination/multi-agent-hotload/v0.1.0/scripts/hotload_check.py \
+            --root /tmp/acs/modules/coordination/multi-agent-hotload/v0.1.0 \
+            --assignment "$GITHUB_WORKSPACE/.coord/assignment.json" \
+            --cgm-root /tmp/cgm \
+            --adopter-root "$GITHUB_WORKSPACE"
