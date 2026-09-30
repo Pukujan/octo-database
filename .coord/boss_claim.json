@@ -1,10 +1,10 @@
 {
   "schema_version": "octo.boss-claim.v1",
   "status": "active",
-  "who_is_boss_now": "chatgpt-sol-bootstrap",
-  "last_heartbeat": "2026-09-30T20:40:00Z",
-  "last_github_activity": "2026-09-30T20:40:00Z",
+  "who_is_boss_now": "chatgpt-sol-orchestrator",
+  "last_heartbeat": "2026-09-30T21:44:00Z",
+  "last_github_activity": "2026-09-30T21:44:00Z",
   "claim_queue": [],
-  "recorded_at": "2026-09-30T20:40:00Z",
-  "notes": "Bootstrap lease only. Re-read issue #2 and this claim on wake. If stale, follow the pinned ACS vacancy and FIFO claim rules; an old boss never auto-reclaims."
+  "recorded_at": "2026-09-30T21:44:00Z",
+  "notes": "Previous bootstrap lease expired after 30 minutes with no valid check-in. Queue was empty; this live continuer claimed the vacant decision-boss seat under ACS FIFO rules."
 }

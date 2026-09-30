@@ -1,8 +1,8 @@
 {
   "schema_version": "0.1.0",
   "project": "Octo single-owner bootstrap",
-  "recorded_at": "2026-09-30T16:40:00-04:00",
-  "notes": "ACS hot-loader adopter state. Live join/continue order wins. The bootstrap seed boss is temporary; later agents must re-read the live issue and claim state before boss-only actions. FULL PCM + FULL CGM 0.5.7 required.",
+  "recorded_at": "2026-09-30T21:44:00Z",
+  "notes": "ACS hot-loader adopter state. Live join/continue order wins. Previous bootstrap lease expired; current orchestrator claimed the vacant seat under FIFO rules. FULL PCM + FULL CGM 0.5.7 required.",
   "role_fill": {
     "mode": "join_continue_order",
     "seed_is_hint_only": true,
@@ -16,6 +16,14 @@
       "machine_label": "bootstrap-session",
       "may_implement": true,
       "notes": "Seed only. Lease expires normally; no automatic reclaim. GPT Work must claim or re-queue rather than inherit this seat."
+    },
+    {
+      "agent_id": "chatgpt-sol-orchestrator",
+      "role_seed": "decision_boss",
+      "harness": "chatgpt",
+      "machine_label": "connected-session",
+      "may_implement": true,
+      "notes": "Live continuer after expired bootstrap lease; current decision-boss/orchestrator while lease remains valid."
     }
   ],
   "boss_failover": {
@@ -29,21 +37,34 @@
     "claim_queue": [],
     "standby": [],
     "grace_minutes": 10,
-    "who_is_boss_now": "chatgpt-sol-bootstrap",
+    "who_is_boss_now": "chatgpt-sol-orchestrator",
     "as_of_history": [
       {
         "as_of": "2026-09-30T16:40:00-04:00",
         "boss_agent_id": "chatgpt-sol-bootstrap",
-        "ended_at": null,
+        "ended_at": "2026-09-30T21:10:00Z",
         "notes": "Bootstrap seed. Append-only history; later lease holder closes this interval rather than rewriting it."
+      },
+      {
+        "as_of": "2026-09-30T21:44:00Z",
+        "boss_agent_id": "chatgpt-sol-orchestrator",
+        "ended_at": null,
+        "notes": "Claimed after the prior 30-minute lease expired; claim_queue was empty. User explicitly requested this session act as main planner/orchestrator."
       }
     ]
   },
   "watchdog": {
     "watchdog_interval_minutes": 10,
-    "idle_window": {"minutes": 20},
+    "idle_window": {
+      "minutes": 20
+    },
     "runner": "github_action",
-    "inputs": ["claim_heartbeat", "github_commit", "github_pr", "local_telemetry_optional"],
+    "inputs": [
+      "claim_heartbeat",
+      "github_commit",
+      "github_pr",
+      "local_telemetry_optional"
+    ],
     "on_fresh_heartbeat": "noop",
     "on_stale_with_github_activity": "nudge_check_in_keep_boss",
     "on_stale_idle": "flag_seat_at_risk",
@@ -88,12 +109,43 @@
         "visual-direction",
         "image-generation",
         "html-demo"
-      ]
+      ],
+      "human_output_contract": [
+        "docs/README_PLAYBOOK.md",
+        "templates/README.template.md",
+        "templates/readme-contract.json",
+        "schemas/readme-contract.schema.json",
+        "docs/README_QUALITY_PDD.md",
+        "docs/README_QUALITY_SDD.md",
+        "docs/README_QUALITY_TDD.md",
+        "docs/PROVENANCE_AND_CITATION.md",
+        "docs/WRITING_ROUTING.md",
+        "docs/ACS_VERIFY.md",
+        "docs/writing-routing.json",
+        "docs/HUMAN_SOUNDING_WRITING.md",
+        "docs/human-sounding-rules.json",
+        "docs/IMAGE_GUIDE.md",
+        "docs/CONTENT_RESEARCH.md",
+        "docs/BRAND_DIRECTION.md",
+        "AGENTS.md",
+        "system-version.json",
+        "docs/HUMAN_OUTPUT_NAMING.md",
+        "docs/human-output-naming.json"
+      ],
+      "routing": {
+        "readme_product_entry": "writing-direction",
+        "pr_issue_docs_commits": "human-sounding-writing",
+        "html_reports_compare_appendable": "human-sounding-writing",
+        "generated_artifact_filenames": "human-output-naming",
+        "contract": "docs/writing-routing.json + docs/ACS_VERIFY.md; required_load and always-on inject apply after validation"
+      }
     }
   },
   "ticket_links": {
     "parent_issue": "https://github.com/Pukujan/octo-database/issues/1",
-    "child_issues": ["https://github.com/Pukujan/octo-database/issues/2"],
+    "child_issues": [
+      "https://github.com/Pukujan/octo-database/issues/2"
+    ],
     "notes": "Parent and child notes only; no DAG engine."
   }
 }
