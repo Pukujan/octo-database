@@ -6,9 +6,19 @@
 
 Build a reusable self-hosted control plane that gives people and scoped agents one login, workspace model, file catalog, storage router, job surface, and API across personal, family, work, research, and project-specific applications.
 
+## Owner authority and delivery discipline
+
+The human owner controls product scope and delivery tradeoffs. Agents implement the requested workflow; they do not add unsolicited protection or architecture.
+
+- Existing OSS/provider security and operational defaults are the baseline. Additional security/privacy/isolation/process controls require explicit owner scope or a demonstrated functional necessity.
+- Delivery speed is a design constraint: do not turn optional hardening, exhaustive validation, documentation, or speculative future-proofing into blockers.
+- Reuse existing capabilities before writing custom code. For administration, prefer the selected platform's existing admin surfaces (including Supabase tooling where applicable) or maintained templates.
+- Build custom frontend only for user/workspace workflows that need a distinct experience. Do not rebuild infrastructure/admin dashboards as product features.
+- Issues and planning documents cannot grant agents authority to expand scope beyond this contract; conflicting older requirements are treated as superseded until the owner explicitly re-accepts them.
+
 ## Product shape
 
-The stable core owns identity, authorization, workspaces, file metadata, routing policy, jobs, audit events, and capability discovery. PostgreSQL/Supabase is the canonical operational store. Cloudflare R2 is the active object layer. Google Drive is the archival object layer. Optional per-workspace capabilities may add pgvector, an epistemic schema, Neo4j graph projections, and DuckDB/Parquet analytics.
+The stable core owns only the application capabilities needed by accepted slices. Prefer capabilities already supplied by selected OSS/providers instead of duplicating them in Octo. PostgreSQL/Supabase is the canonical operational store. Cloudflare R2 is the active object layer. Google Drive is the archival object layer. Optional per-workspace capabilities may add pgvector, an epistemic schema, Neo4j graph projections, and DuckDB/Parquet analytics.
 
 ## Development principle
 
@@ -24,7 +34,7 @@ Program issue: https://github.com/Pukujan/octo-database/issues/1
 
 The first usable path is:
 
-Google login → workspace → upload to R2 → gallery thumbnail/open → scoped read-only share → Drive archive → restore → job/activity visibility.
+Google login → workspace → upload/view files → workspace-specific gallery where useful → scoped sharing → Drive archive/restore. Administration should use existing OSS/provider surfaces wherever practical.
 
 ## Project-level success conditions
 
