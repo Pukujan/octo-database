@@ -4,18 +4,24 @@
 
 ## Current state
 
-Octo is in repository bootstrap. The complete program and slices were first written to GitHub issues #1–#16 so the issue log remains the task authority before deeper planning documents are added.
+Octo is in bootstrap. GitHub issues #1–#16 were created before deeper design documents, and issue #18 now owns the later PDD/system/security/API/TDD projections. PR #17 contains substantive repository initialization.
 
-The repository began empty. A minimal README seed on main was necessary to create the first branch; all substantive bootstrap work is on `task/OCTO-0001-bootstrap-platform-contract`.
+Full helper pins are recorded for ACS, PCM, and CGM. The adopter coordination files are `.coord/assignment.json` and `.coord/boss_claim.json`.
 
 ## Active task
 
-OCTO-0001 / issue #2 — establish full ACS hot-load adoption, PCM continuity/governance projections, full CGM 0.5.7 adapter, and the `gates` workflow.
+OCTO-0001 / issue #2 — complete full ACS hot-load adoption and enforce the GitHub delivery path.
 
-## Known enforcement gap
+## Observed blockers
 
-Repository metadata observed before bootstrap reported `allow_auto_merge=false`. The current connected GitHub action surface does not expose the repository-settings/ruleset write endpoint needed to enable auto-merge, require one human approval, or install the main ruleset. The repo files document the exact desired controls; an admin-capable follow-up must apply and verify them.
+- Repository `allow_auto_merge` is false and no ruleset is installed; the current connector lacks repository-administration writes.
+- First workflow run 36773617802 produced job `gates` but failed before any runner executed a step (runner_id=0, no steps/log blob). Treat this as Actions infrastructure/capacity/policy until evidence shows otherwise.
+- The scheduled watchdog is intentionally not armed while Actions availability is unproven; the adopter config still defines the 10-minute agent-less policy.
+
+## Merge policy
+
+The repository currently has one human maintainer, so the target is 0 external approvals + accepted issue direction + required green `gates` + PR-only protection + auto-merge. Do not require the author to approve their own PR.
 
 ## Next action
 
-Open the OCTO-0001 bootstrap pull request, verify the `gates` workflow on the exact head commit, apply/verify GitHub ruleset settings when an admin-capable surface is available, then merge and move to planning projections / Slice 1.
+GPT Work/admin-capable session: claim/re-read the ACS lease, apply repository auto-merge and the main ruleset, diagnose Actions runner availability, execute pinned ACS/PCM/CGM validators, record evidence on issue #2/PR #17, then merge only when gates are genuinely satisfied.
