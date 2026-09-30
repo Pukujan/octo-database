@@ -1,0 +1,27 @@
+{
+  "schema_version": "content-generation.adapter.v1",
+  "system": "content-generation-modules",
+  "helper_repository": "https://github.com/Pukujan/content-generation-modules",
+  "helper_version": "0.5.7",
+  "helper_commit": "c069613ca8b3e02bcf5aba1960160583537f8a3a",
+  "helper_pin_note": "FULL CGM 0.5.7 required: all eight modules. Validate with pinned scripts/validate_content_system.py; apply writing routing at agent boot.",
+  "modules": [
+    "brand-foundation",
+    "content-context",
+    "writing-direction",
+    "human-sounding-writing",
+    "human-output-naming",
+    "visual-direction",
+    "image-generation",
+    "html-demo"
+  ],
+  "authoritative_project_files": [
+    "PROJECT.md",
+    "AGENTS.md",
+    "checkpoints/CURRENT.md",
+    "HANDOFF.md",
+    "https://github.com/Pukujan/octo-database/issues/1"
+  ],
+  "review_outputs": [],
+  "adoption_status": "bootstrap adapter pinned; implementation evidence will be appended through accepted issues/PRs"
+}

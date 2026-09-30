@@ -1,0 +1,9 @@
+{
+  "schema_version": "content-generation.review-rubric.v1",
+  "dimensions": [
+    {"id": "clarity", "question": "Can a newcomer explain what Octo does and what is intentionally deferred?"},
+    {"id": "evidence", "question": "Are shipped/planned claims distinguished and linked to repository evidence?"},
+    {"id": "scope", "question": "Does this change solve the owning issue without silently expanding the platform?"}
+  ],
+  "decision_rule": "human review plus deterministic repository gates"
+}

@@ -1,0 +1,7 @@
+{
+  "schema_version": "content-generation.brand-language.v1",
+  "name": "Octo",
+  "personality": ["clear", "practical", "calm", "operator-friendly"],
+  "promise": "One understandable control plane for the storage, workspaces, apps, and agents you actually use.",
+  "avoid": ["cloud-theater", "unexplained acronyms", "hype", "premature scale claims", "methodology-heavy product copy"]
+}

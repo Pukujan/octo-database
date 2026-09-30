@@ -1,0 +1,50 @@
+name: validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Octo
+        uses: actions/checkout@v4
+
+      - name: Parse repository JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          paths = list(Path(".continuity").rglob("*.json")) + list(Path(".content-system").rglob("*.json")) + list(Path("schemas/v1").rglob("*.json"))
+          for path in paths:
+              json.loads(path.read_text(encoding="utf-8"))
+          print(f"parsed {len(paths)} JSON files")
+          PY
+
+      - name: Validate pinned PCM adopter state
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/Pukujan/project-continuity-modules.git /tmp/pcm
+          git -C /tmp/pcm checkout --quiet 4e2385474b4af9249ca009cbdcb38c4498932475
+          PYTHONPATH=/tmp/pcm/src python -m continuity validate --root .
+
+      - name: Validate full CGM adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/Pukujan/content-generation-modules.git /tmp/cgm
+          git -C /tmp/cgm checkout --quiet c069613ca8b3e02bcf5aba1960160583537f8a3a
+          python /tmp/cgm/scripts/validate_content_system.py \
+            --root /tmp/cgm \
+            --adapter .content-system \
+            --project-root .
