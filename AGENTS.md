@@ -7,42 +7,43 @@ Octo is the working repository. ACS, PCM, and CGM are helpers only.
 Before editing:
 
 1. Read the live owning GitHub issue.
-2. Read `PROJECT.md`.
-3. Read `checkpoints/CURRENT.md`.
-4. Read the active `tasks/TASK-OCTO-*.md`.
-5. Read only the minimum linked plan/spec.
-6. Re-read the current GitHub branch/PR state before claiming delivery.
+2. Read `.coord/assignment.json` and `.coord/boss_claim.json` when coordination is active; re-check the lease/claim before boss-only actions.
+3. Read `PROJECT.md`.
+4. Read `checkpoints/CURRENT.md`.
+5. Read the active `tasks/TASK-OCTO-*.md`.
+6. Read only the minimum linked plan/spec.
+7. Re-read current GitHub branch/PR/check state before claiming delivery.
 
 GitHub issues own task scope, acceptance, dependencies, ownership, and lifecycle. Repository task/current files are versioned projections.
 
 ## Full hot-load requirement
 
-Use the complete stacks, not slim subsets:
+Use the complete stacks:
 
+- ACS hot-loader v0.1.0 @ `fa57bae9a5229b454b57ea0b3f3e4dac0bbc8b4e`.
 - PCM @ `4e2385474b4af9249ca009cbdcb38c4498932475` / CLI 0.6.0.
 - CGM 0.5.7 @ `c069613ca8b3e02bcf5aba1960160583537f8a3a`, all eight modules.
-- ACS multi-agent-hotload v0.1.0 runtime for join-order roles, lease/claim queue/watchdog/proposal behavior when multiple agents participate.
 
-Follow the pinned ACS HOTLOAD and BEHAVIOR documents rather than duplicating or silently modifying their policy here.
+ACS join/continue order, boss lease, claim queue, zombie, watchdog, proposal, and working-repo rules remain binding. A returning or stale boss never auto-reclaims.
 
 ## Git and delivery
 
-- After the one-time empty-repository seed, never commit directly to main.
+- The one-time empty-repository seed is the only direct-main bootstrap exception.
 - One primary writer owns an active task branch/checkpoint stream.
 - Never force-push.
-- Keep issue, task projection, CURRENT/HANDOFF, and relevant docs synchronized before final task push.
 - Required status check is `gates`.
-- Intended merge policy is one approving human + green gates + auto-merge.
-- Do not claim completion while repository settings/checks/merge facts are unverified.
+- **Single-owner mode:** do not require an impossible self-review. Use 0 external approvals, accepted issue direction, green required gates, protected PR-only flow, and auto-merge.
+- If additional maintainers join, change review requirements only through an accepted issue.
+- Never claim completion while settings/checks/merge facts are unverified.
 
 ## Human-facing writing
 
-For every human-facing issue, PR, commit subject/body, documentation page, HTML report, or comparison artifact, apply the pinned CGM writing routing. README/product entry uses writing-direction; other human-facing prose uses human-sounding-writing; generated media/output basenames use human-output-naming.
+Apply the pinned CGM routing. README/product entry → writing-direction. Other human-facing GitHub/docs/HTML prose → human-sounding-writing. Generated artifact/media basenames → human-output-naming.
 
 ## Security
 
-Never commit or print credentials, refresh tokens, access tokens, cookies, service keys, private .env contents, or secret-bearing backups. Agent principals should receive Octo-scoped capabilities rather than infrastructure master credentials.
+Never commit or print credentials, refresh/access tokens, cookies, service keys, private .env contents, or secret-bearing backups. Agents receive Octo-scoped capabilities rather than infrastructure master credentials.
 
 ## Working-repository boundary
 
-Code, claims, PRs, lease/boss actions, and task writes are limited to this repository when Octo is the hot-loaded working repo. Cross-repo findings may be proposed as issues on the owning repo but must not mutate its code unless explicitly working there under its own authority.
+Code, claims, PRs, and boss actions are limited to this repository while Octo is the hot-loaded working repo. Cross-repo findings may be proposed as issues on their owning repository, not implemented there without that project's own authority.
