@@ -1,0 +1,99 @@
+{
+  "schema_version": "0.1.0",
+  "project": "Octo single-owner bootstrap",
+  "recorded_at": "2026-09-30T16:40:00-04:00",
+  "notes": "ACS hot-loader adopter state. Live join/continue order wins. The bootstrap seed boss is temporary; later agents must re-read the live issue and claim state before boss-only actions. FULL PCM + FULL CGM 0.5.7 required.",
+  "role_fill": {
+    "mode": "join_continue_order",
+    "seed_is_hint_only": true,
+    "notes": "First live continuer with a valid lease is decision boss; later continuers fill coder or worker seats."
+  },
+  "agents": [
+    {
+      "agent_id": "chatgpt-sol-bootstrap",
+      "role_seed": "decision_boss",
+      "harness": "chatgpt",
+      "machine_label": "bootstrap-session",
+      "may_implement": true,
+      "notes": "Seed only. Lease expires normally; no automatic reclaim. GPT Work must claim or re-queue rather than inherit this seat."
+    }
+  ],
+  "boss_failover": {
+    "lease_ttl_minutes": 30,
+    "check_in": {
+      "mechanism": "issue_comment",
+      "interval_hint_minutes": 15,
+      "issue_url": "https://github.com/Pukujan/octo-database/issues/2",
+      "claim_file_path": ".coord/boss_claim.json"
+    },
+    "claim_queue": [],
+    "standby": [],
+    "grace_minutes": 10,
+    "who_is_boss_now": "chatgpt-sol-bootstrap",
+    "as_of_history": [
+      {
+        "as_of": "2026-09-30T16:40:00-04:00",
+        "boss_agent_id": "chatgpt-sol-bootstrap",
+        "ended_at": null,
+        "notes": "Bootstrap seed. Append-only history; later lease holder closes this interval rather than rewriting it."
+      }
+    ]
+  },
+  "watchdog": {
+    "watchdog_interval_minutes": 10,
+    "idle_window": {"minutes": 20},
+    "runner": "github_action",
+    "inputs": ["claim_heartbeat", "github_commit", "github_pr", "local_telemetry_optional"],
+    "on_fresh_heartbeat": "noop",
+    "on_stale_with_github_activity": "nudge_check_in_keep_boss",
+    "on_stale_idle": "flag_seat_at_risk",
+    "on_past_lease_ttl": "write_vacant_in_claim_file",
+    "notes": "Agent-less only. Scheduled enforcement stays disabled until GitHub Actions capacity is proven; manual dry-run can verify configuration."
+  },
+  "pins": {
+    "acs": {
+      "repo": "https://github.com/Pukujan/agent-custom-setup",
+      "revision": "fa57bae9a5229b454b57ea0b3f3e4dac0bbc8b4e",
+      "module": "modules/coordination/multi-agent-hotload/v0.1.0",
+      "version": "0.1.0"
+    },
+    "pcm": {
+      "repo": "https://github.com/Pukujan/project-continuity-modules",
+      "revision": "4e2385474b4af9249ca009cbdcb38c4498932475",
+      "cli_version": "0.6.0",
+      "protocol": "0.1.0-draft",
+      "role": "full_stack",
+      "required_features": [
+        "checkout_continuity_checkpoints",
+        "github_issues_own_task_progression",
+        "pr_only_to_default_branch",
+        "required_ci_gates",
+        "branch_protection_preference",
+        "github_auto_merge_preference",
+        "fail_closed_on_missing_gates",
+        "leaf_parent_dependency_receipts"
+      ]
+    },
+    "cgm": {
+      "repo": "https://github.com/Pukujan/content-generation-modules",
+      "revision": "c069613ca8b3e02bcf5aba1960160583537f8a3a",
+      "version": "0.5.7",
+      "role": "full_stack",
+      "modules": [
+        "brand-foundation",
+        "content-context",
+        "writing-direction",
+        "human-sounding-writing",
+        "human-output-naming",
+        "visual-direction",
+        "image-generation",
+        "html-demo"
+      ]
+    }
+  },
+  "ticket_links": {
+    "parent_issue": "https://github.com/Pukujan/octo-database/issues/1",
+    "child_issues": ["https://github.com/Pukujan/octo-database/issues/2"],
+    "notes": "Parent and child notes only; no DAG engine."
+  }
+}
