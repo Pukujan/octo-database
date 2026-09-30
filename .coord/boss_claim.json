@@ -1,0 +1,10 @@
+{
+  "schema_version": "octo.boss-claim.v1",
+  "status": "active",
+  "who_is_boss_now": "chatgpt-sol-bootstrap",
+  "last_heartbeat": "2026-09-30T20:40:00Z",
+  "last_github_activity": "2026-09-30T20:40:00Z",
+  "claim_queue": [],
+  "recorded_at": "2026-09-30T20:40:00Z",
+  "notes": "Bootstrap lease only. Re-read issue #2 and this claim on wake. If stale, follow the pinned ACS vacancy and FIFO claim rules; an old boss never auto-reclaims."
+}
