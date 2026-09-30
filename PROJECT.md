@@ -11,9 +11,10 @@ Build a reusable self-hosted control plane that gives people and scoped agents o
 The human owner controls product scope and delivery tradeoffs. Agents implement the requested workflow; they do not add unsolicited protection or architecture.
 
 - Existing OSS/provider security and operational defaults are the baseline. Additional security/privacy/isolation/process controls require explicit owner scope or a demonstrated functional necessity.
+- Auto-merge and CI integrity/integration validation, type checking, lint, and Ruff are explicit owner requirements.
 - Delivery speed is a design constraint: do not turn optional hardening, exhaustive validation, documentation, or speculative future-proofing into blockers.
 - Reuse existing capabilities before writing custom code. For administration, prefer the selected platform's existing admin surfaces (including Supabase tooling where applicable) or maintained templates.
-- Build custom frontend only for user/workspace workflows that need a distinct experience. Do not rebuild infrastructure/admin dashboards as product features.
+- Deliver the owner-requested control dashboard (#3), workspace gallery (#5), and operations page (#8). Keep them simple, aesthetic, and lightweight using maintained templates or standard components such as MUI, with minimal customization. Use Supabase/provider consoles for deeper infrastructure administration.
 - Issues and planning documents cannot grant agents authority to expand scope beyond this contract; conflicting older requirements are treated as superseded until the owner explicitly re-accepts them.
 
 ## Product shape
@@ -34,7 +35,7 @@ Program issue: https://github.com/Pukujan/octo-database/issues/1
 
 The first usable path is:
 
-Google login → workspace → upload/view files → workspace-specific gallery where useful → scoped sharing → Drive archive/restore. Administration should use existing OSS/provider surfaces wherever practical.
+Google login → workspace → upload/view files → workspace-specific gallery where useful → scoped sharing → Drive archive/restore. A simple control dashboard and operations page are part of this path; use existing OSS/provider surfaces for deeper administration.
 
 ## Project-level success conditions
 

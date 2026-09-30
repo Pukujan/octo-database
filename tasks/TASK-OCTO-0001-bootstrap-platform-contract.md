@@ -1,6 +1,6 @@
-# OCTO-0001 — Bootstrap the platform contract
+# OCTO-0001 Bootstrap the platform contract
 
-<!-- continuity:task {"acceptance":["minimal seed creates main and all substantive bootstrap changes land through a PR","full PCM adopter continuity files and pinned schemas are present","full CGM 0.5.7 adapter lists all eight modules and passes pinned validation","ACS adopter assignment and lease/claim state are present and pinned","CI exposes a job named exactly gates","single-owner GitHub rules require PR plus gates, block force-push/deletion, and enable auto-merge with zero external approvals","repository settings that cannot be changed through the current connector are recorded as an explicit blocker/follow-up","no secrets are stored"],"depends_on":[],"goal":"Initialize Octo as a full ACS hot-loader adopter with PCM-governed GitHub progression, full CGM writing contracts, deterministic validation, and a single-owner gated auto-merge policy.","id":"OCTO-0001","issue_url":"https://github.com/Pukujan/octo-database/issues/2","next_action":"GPT Work/admin-capable session must apply the main ruleset and repository auto-merge setting, resolve the Actions runner blocker, run pinned ACS/PCM/CGM validation, and merge only after genuine green gates.","owner":"active ACS decision boss / GitHub owner Pukujan","priority":"P0","protocol_version":"0.1.0-draft","schema":"project-continuity.task.v1","status":"active","why":"Every later storage, auth, gallery, agent, graph, and analytics slice needs one durable governance, coordination, and continuity contract before implementation starts."} -->
+<!-- continuity:task {"acceptance":["minimal seed creates main and all substantive bootstrap changes land through a PR","full PCM adopter continuity files and pinned schemas are present","full CGM 0.5.7 adapter lists all eight modules and passes pinned validation","ACS adopter assignment and lease/claim state are present and pinned","CI exposes a job named exactly gates","no secrets are stored","owner-requested auto-merge configured and gates cover integrity/integration, strict types, lint and Ruff"],"depends_on":[],"goal":"Install usable PCM, CGM, and ACS adopter contracts and run genuine gates on the existing home runner.","id":"OCTO-0001","issue_url":"https://github.com/Pukujan/octo-database/issues/2","next_action":"Run pinned validators through PR #17 on the existing home runner; fix concrete failures, merge after green gates, then begin #3.","owner":"Pukujan; main agent coordinates implementation","priority":"P0","protocol_version":"0.1.0-draft","schema":"project-continuity.task.v1","status":"active","why":"Give fresh agents clear owner-directed scope and continuity without adding product blockers."} -->
 
 - Status: active
 - Priority: P0
@@ -9,28 +9,19 @@
 
 ## Goal
 
-Initialize Octo as a full ACS hot-loader adopter with PCM-governed progression, full CGM contracts, deterministic validation, and a single-owner gated auto-merge policy.
+Install usable PCM, CGM, and ACS adopter contracts and run genuine gates on the existing home runner.
 
-## Completed in the branch
+## Prepared on this branch
 
-- Program/slice issues #1–#16 were created before deeper specs.
-- Minimal main seed created the only direct-main bootstrap exception.
-- PCM adopter state and exact schemas added.
-- Full CGM 0.5.7 eight-module adapter added.
-- `gates` workflow added.
-- ACS assignment + claim state added.
-- ACS adopter audit corrected the missing `pins.cgm.human_output_contract` required by pinned `hotload_check.py`.
-- `PROJECT.md` now carries project-level success conditions and explicit scope-change control.
-- Issue #18 now owns later PDD/system/security/API/TDD projections.
+PCM continuity files and pinned schemas, the full CGM eight-module adapter, ACS assignment state, owner policy, project goals and success conditions, and the `gates` workflow.
 
-## Outstanding acceptance
+## Remaining work
 
-- Apply main ruleset: PR required, `gates` required, block deletion/force push, 0 external approvals in single-owner mode.
-- Enable repository Allow auto-merge.
-- Resolve the hosted Actions failure: latest run `36781308614` on head `8a635d762b79875ed7691092ddfe5976a1220878` again ended with `runner_id=0` and zero steps, so validators still have not executed in CI.
-- Run pinned ACS hotload_check + PCM validate + CGM adapter validation and record exact outputs.
-- Merge only after real gate evidence.
+Run PCM, CGM, and ACS checks on the final PR candidate using `[self-hosted, gravebuster]`.
+Fix demonstrated failures and merge after genuine green gates.
+Enable owner-requested auto-merge and require genuine gates. Include integrity/integration validation, type checking, lint, and Ruff. Do not add unrelated review requirements.
+Then begin #3; #15/#18 do not block product work.
 
-## Next
+## Checkpoint log
 
-GPT Work follows `planning/WORK_HANDOFF.md` Stage A.
+The continuation audit aligned policy, handoff, task, and issue scope with the owner instructions. Local Ruff lint/format, strict mypy, 18 JSON contracts, and four integrity tests pass. Pinned helper validation is being checked; remote runner execution and repository auto-merge remain unresolved.

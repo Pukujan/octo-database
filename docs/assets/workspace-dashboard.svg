@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-labelledby="title description">
+  <title id="title">Draft Octo workspace dashboard layout</title>
+  <desc id="description">A simple template-style shell with workspace selection, files, gallery, and jobs navigation. This is a layout reference, not a working product screen.</desc>
+  <rect width="960" height="540" fill="#f5f6fa"/>
+  <rect width="206" height="540" fill="#ffffff"/>
+  <path d="M206 0v540" stroke="#e6e8f0"/>
+  <g font-family="Arial, sans-serif" fill="#252a3d">
+    <text x="28" y="46" font-size="24" font-weight="700">Octo</text>
+    <text x="28" y="81" font-size="12" fill="#72798e">Your workspaces</text>
+    <rect x="16" y="109" width="174" height="42" rx="8" fill="#eeeafb"/>
+    <text x="29" y="136" font-size="14" fill="#6652b3">Personal</text>
+    <text x="29" y="184" font-size="14">Files</text>
+    <text x="29" y="228" font-size="14">Gallery</text>
+    <text x="29" y="272" font-size="14">Jobs and activity</text>
+    <text x="29" y="501" font-size="12" fill="#72798e">Settings</text>
+    <text x="240" y="49" font-size="12" fill="#72798e">Workspace / Personal</text>
+    <text x="240" y="92" font-size="28" font-weight="700">Personal</text>
+    <text x="240" y="121" font-size="14" fill="#72798e">Files, albums, and recent work in one place.</text>
+    <rect x="794" y="66" width="130" height="40" rx="8" fill="#6652b3"/>
+    <text x="822" y="91" font-size="14" fill="#ffffff">Upload file</text>
+    <rect x="240" y="157" width="332" height="119" rx="10" fill="#ffffff" stroke="#e6e8f0"/>
+    <text x="264" y="190" font-size="16" font-weight="700">Files</text>
+    <text x="264" y="219" font-size="14" fill="#72798e">Browse and manage workspace files</text>
+    <text x="264" y="251" font-size="14" fill="#6652b3">Open files</text>
+    <rect x="592" y="157" width="332" height="119" rx="10" fill="#ffffff" stroke="#e6e8f0"/>
+    <text x="616" y="190" font-size="16" font-weight="700">Gallery</text>
+    <text x="616" y="219" font-size="14" fill="#72798e">View private photos and albums</text>
+    <text x="616" y="251" font-size="14" fill="#6652b3">Open gallery</text>
+    <rect x="240" y="296" width="684" height="173" rx="10" fill="#ffffff" stroke="#e6e8f0"/>
+    <text x="264" y="331" font-size="16" font-weight="700">Recent activity</text>
+    <text x="264" y="366" font-size="14" fill="#72798e">Job status and useful updates appear here.</text>
+    <text x="264" y="438" font-size="14" fill="#6652b3">View jobs</text>
+    <text x="240" y="507" font-size="12" fill="#72798e">Draft layout reference. Features appear as their slices are implemented.</text>
+  </g>
+</svg>

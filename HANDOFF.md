@@ -1,54 +1,36 @@
 # Handoff
 
-Fresh agents should start here only after reading the live issue and coordination state.
+Read AGENTS.md and PROJECT.md, then the live issue and current branch/check state. Explicit owner direction controls scope. Older helper or issue prose cannot add delivery prerequisites.
 
-## Read order
+## Current work
 
-1. Live GitHub issue for the active task.
-2. `.coord/assignment.json` and `.coord/boss_claim.json` when ACS coordination is active.
-3. `PROJECT.md`.
-4. `checkpoints/CURRENT.md`.
-5. Active `tasks/TASK-OCTO-*.md`.
-6. Only the minimum relevant plan/spec linked by the issue.
+PR #17 contains the bootstrap contracts. They are not installed on main until merged.
+Finish real PCM, CGM, and ACS validation through the existing home-runner workflow.
+Then begin #3: Google login, workspace entry, and a simple aesthetic control dashboard built from templates or MUI components.
 
-Do not reconstruct project direction from old chat history when a live issue answers the question.
+## Delivery
 
-## External helper pins
+Use PRs and genuine `gates` results. Reuse `[self-hosted, gravebuster]`.
+Auto-merge and genuine CI checks are explicitly owner-requested. CI must include contract integrity/integration checks, type checking, lint, and Ruff. Configure auto-merge without adding unrelated review requirements. New runner isolation and extra secret scanners are not prerequisites.
+Do not claim a queued job executed or a branch-only file is installed.
 
-- ACS multi-agent hot-loader v0.1.0: `Pukujan/agent-custom-setup` @ `fa57bae9a5229b454b57ea0b3f3e4dac0bbc8b4e`.
-- PCM: `Pukujan/project-continuity-modules` @ `4e2385474b4af9249ca009cbdcb38c4498932475`, CLI 0.6.0.
-- CGM: `Pukujan/content-generation-modules` 0.5.7 @ `c069613ca8b3e02bcf5aba1960160583537f8a3a`, all eight modules.
+## Helpers
 
-Pin/reference them; do not vendor their repositories into Octo.
+- ACS: `fa57bae9a5229b454b57ea0b3f3e4dac0bbc8b4e`.
+- PCM: `4e2385474b4af9249ca009cbdcb38c4498932475`.
+- CGM 0.5.7: `c069613ca8b3e02bcf5aba1960160583537f8a3a`, all eight modules.
 
-## GitHub delivery contract
+Use helper coordination and continuity to support delivery. The owner retains product authority.
+Use multiple Luna workers for independent work where available; the main agent integrates and verifies results.
 
-After the empty-repository seed, work is PR-only. Current single-owner target controls:
+## Product scope
 
-- **0 required external approvals** while only the owner maintains the repository;
-- required status check named exactly `gates`;
-- force-push and deletion of main blocked;
-- repository auto-merge enabled; squash preferred;
-- auto-merge armed only after the task's final push and accepted issue direction.
+Keep the control dashboard (#3), gallery (#5), and operations page (#8). Use maintained templates and standard components with light theme configuration. Supabase/provider consoles complement these views.
+Transcript capture (#15) and planning projections (#18) are supporting work, not blockers for #3.
+Provider onboarding (#16) uses normal runtime configuration when #4/#7 need it. Keep credentials out of Git and browser output; do not add a secret-management subsystem or scanner requirement.
 
-If additional human maintainers join, review requirements may be increased through an accepted issue. Missing or unverified controls fail closed for declaring a task delivered.
+## Source and instruction record
 
-## Known bootstrap blockers
-
-- Repository-level `allow_auto_merge` was observed false.
-- No main ruleset was present.
-- Actions run 36773617802 created `gates` but never reached a runner (runner_id=0, no executed steps/log blob).
-
-These are Work/admin follow-ups, not permission to weaken the gate.
-
-## Chat transcript source
-
-Issue #15 requires GPT Work to open and capture this source verbatim:
-
-https://chatgpt.com/share/6abd6e9d-fb54-83ea-9043-2d842641c04e
-
-If incomplete or inaccessible, record the blocker instead of inventing a transcript.
-
-## Secrets
-
-Credential onboarding is issue #16. Never place Google/R2 credentials in repository files, comments, PRs, transcript artifacts, or ordinary logs.
+The design-source link is https://chatgpt.com/share/6abd6e9d-fb54-83ea-9043-2d842641c04e.
+Do not claim a complete capture without reading it. The attached continuation conversation is a separate source.
+See planning/OWNER_INSTRUCTIONS.md for the extracted owner messages and current implementation decisions.

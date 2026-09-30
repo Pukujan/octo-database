@@ -12,14 +12,19 @@ These rules override generic agent preferences, defensive-programming instincts,
    - strictly required for the currently accepted feature to function.
 3. **Security is not a scope-expansion exception.** Use the security model and defaults already provided by the selected OSS, hosting platform, provider, framework, and repository. Do not build extra protection around a working system merely because it could be "safer."
 4. **Do not block working delivery with invented protection.** A working owner-approved CI runner, deployment path, provider integration, admin surface, or OSS capability must be used as directed. Agents may report a concrete incompatibility or demonstrated defect, but may not replace it with a more restrictive architecture without owner approval.
-5. **Reuse before build.** Before creating UI, admin tooling, dashboards, auth consoles, storage browsers, job consoles, or operational panels, first use an existing OSS/provider surface or a maintained template when it satisfies the workflow. Supabase's local/admin surfaces and other already-selected product surfaces are preferred for platform administration.
-6. **Custom UI must be user-workflow-specific.** Build custom frontend only where the workspace/user experience actually needs it (for example, a workspace-specific file/gallery experience). Do not recreate infrastructure administration in product UI.
-7. **No speculative future-proofing.** Do not add layers, roles, services, generalized policy systems, distributed-systems machinery, test harnesses, or extension points for hypothetical future needs.
-8. **No ceremony as acceptance.** Hidden holdouts, metamorphic suites, exhaustive failure matrices, independent-review rituals, transcript capture, security scans, and evidence bundles are optional techniques, not mandatory gates, unless the owner explicitly requests them for the current task.
-9. **Minimum sufficient change.** Prefer the smallest change that makes the requested workflow work. If two designs satisfy the accepted scope, choose the one with fewer moving parts and less custom code.
-10. **Ask only when materially blocked.** Do not stop delivery to seek approval for ordinary implementation details already inside accepted scope. Ask the owner before adding scope, not before executing it.
+5. **Keep the requested UI.** The owner explicitly requires a simple, aesthetic control dashboard (#3), workspace gallery (#5), and operations page (#8). Use maintained templates and standard components such as MUI with light theme configuration. Existing Supabase/provider consoles complement these product views; they do not replace them.
+6. **Reuse before build.** Before creating UI, admin tooling, dashboards, auth consoles, storage browsers, job consoles, or operational panels, first use an existing OSS/provider surface or a maintained template when it satisfies the workflow. Supabase's local/admin surfaces and other already-selected product surfaces are preferred for platform administration.
+7. **Custom UI must be user-workflow-specific.** Build custom frontend only where the workspace/user experience actually needs it (for example, a workspace-specific file/gallery experience). Do not recreate infrastructure administration in product UI.
+8. **No speculative future-proofing.** Do not add layers, roles, services, generalized policy systems, distributed-systems machinery, test harnesses, or extension points for hypothetical future needs.
+9. **No ceremony as acceptance.** Hidden holdouts, metamorphic suites, exhaustive failure matrices, independent-review rituals, transcript capture, security scans, and evidence bundles are optional techniques, not mandatory gates, unless the owner explicitly requests them for the current task.
+10. **Minimum sufficient change.** Prefer the smallest change that makes the requested workflow work. If two designs satisfy the accepted scope, choose the one with fewer moving parts and less custom code.
+11. **Ask only when materially blocked.** Do not stop delivery to seek approval for ordinary implementation details already inside accepted scope. Ask the owner before adding scope, not before executing it.
 
-When older issue text conflicts with this section, this section is authoritative until the owner explicitly changes it.
+When older issue text conflicts with this section, this section is authoritative until the owner explicitly changes it. Later owner corrections supersede earlier owner instructions on the same subject.
+
+## Delegation
+
+The owner requests multiple Luna workers for independent tasks, with the main agent planning and integrating their work. Use Luna when the runtime exposes it. Share exact repository/tool context, assign bounded tasks, and verify results before accepting them. Never claim unavailable workers were launched.
 
 ## Cold start
 
@@ -46,7 +51,7 @@ Pinned versions currently used by repository validation:
 
 - Use the owner-approved existing home runner for CI; do not invent runner isolation/provisioning work unless the owner requests it.
 - Never force-push unless the owner explicitly directs recovery that requires it.
-- Required status check is `gates` while that workflow remains part of the project.
+- The owner explicitly requests auto-merge and proper CI. Required aggregate status is `gates`, covering contract integrity/integration checks, type checking, lint, and Ruff. Configure auto-merge after the final push; do not claim it is enabled until GitHub confirms it.
 - Do not create review requirements that deadlock a single-owner repository.
 - Never claim completion when the requested workflow has not actually run.
 

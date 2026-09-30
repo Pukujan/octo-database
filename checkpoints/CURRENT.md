@@ -1,27 +1,21 @@
-# Current Repository Checkpoint
+# Current repository checkpoint
 
 <!-- continuity:current {"active_task":"OCTO-0001","active_task_file":"tasks/TASK-OCTO-0001-bootstrap-platform-contract.md","protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
 
 ## Current state
 
-Octo is in bootstrap. GitHub issues #1–#16 were created before deeper design documents, and issue #18 now owns the later PDD/system/security/API/TDD projections. PR #17 contains substantive repository initialization.
+Main contains the initial README. PR #17 holds the PCM, CGM, and ACS bootstrap contracts.
+The prior continuation changed CI to the existing `[self-hosted, gravebuster]` runner.
+Run 36783305776 was queued at this audit; it has no successful validator evidence yet.
 
-Full helper pins are recorded for ACS, PCM, and CGM. The adopter coordination files are `.coord/assignment.json` and `.coord/boss_claim.json`. The ACS adopter audit found and fixed the missing CGM `human_output_contract` list required by the pinned hot-load validator; the current decision-boss lease is held by `chatgpt-sol-orchestrator` while its recorded heartbeat remains valid.
+## Owner corrections
 
-## Active task
-
-OCTO-0001 / issue #2 — complete full ACS hot-load adoption and enforce the GitHub delivery path.
-
-## Observed blockers
-
-- Repository `allow_auto_merge` is false and no ruleset is installed; the current connector lacks repository-administration writes.
-- Latest workflow run `36781308614` on head `8a635d762b79875ed7691092ddfe5976a1220878` again produced `gates` but failed before any runner executed a step (`runner_id=0`, zero steps). PCM/CGM/ACS validators therefore have not run in CI; treat the cause as unresolved Actions infrastructure/capacity/policy until evidence identifies it.
-- The scheduled watchdog is intentionally not armed while Actions availability is unproven; the adopter config still defines the 10-minute agent-less policy.
-
-## Merge policy
-
-The repository currently has one human maintainer, so the target is 0 external approvals + accepted issue direction + required green `gates` + PR-only protection + auto-merge. Do not require the author to approve their own PR.
+Owner instructions prohibit unsolicited hardening and delivery gates.
+The requested control dashboard, gallery, and operations page remain in scope.
+Use maintained templates or MUI components with light theme configuration.
+Auto-merge and proper CI (integrity/integration validation, type checking, lint, Ruff) are explicitly requested. New runner registration, transcript capture, and design projections do not block product work.
 
 ## Next action
 
-GPT Work/admin-capable session: claim/re-read the ACS lease, apply repository auto-merge and the main ruleset, diagnose Actions runner availability, execute pinned ACS/PCM/CGM validators, record evidence on issue #2/PR #17, then merge only when gates are genuinely satisfied.
+Run genuine gates for PR #17 on the existing home runner, resolve concrete failures, and merge after green checks. Begin #3 next.
+Use planning/OWNER_INSTRUCTIONS.md for the owner-message list and implementation record.
