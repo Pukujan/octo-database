@@ -58,6 +58,8 @@ export interface DashboardProps {
   onUploadFile?: (name: string, mimeType: string, content: string) => Promise<void>;
   onUploadBinaryFile?: (file: File) => Promise<void>;
   onDeleteFile?: (fileId: string) => Promise<void>;
+  onArchiveFile?: (fileId: string) => Promise<void>;
+  onRestoreFile?: (fileId: string) => Promise<void>;
   onCreateApiKey?: (name: string, isAccountWide: boolean) => Promise<{ rawSecret: string }>;
   shares?: ShareSummary[];
   jobs?: OperationsJob[];
@@ -131,6 +133,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onUploadFile,
   onUploadBinaryFile,
   onDeleteFile,
+  onArchiveFile,
+  onRestoreFile,
   onCreateApiKey,
   shares = [],
   jobs = [],
@@ -527,11 +531,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       <Table size="small">
                         <TableHead>
                           <TableRow>
-                            <TableCell sx={{ fontWeight: 600, width: '28%' }}>Name</TableCell>
-                            <TableCell sx={{ fontWeight: 600, width: '12%' }}>Size</TableCell>
-                            <TableCell sx={{ fontWeight: 600, width: '16%' }}>MIME Type</TableCell>
+                            <TableCell sx={{ fontWeight: 600, width: '24%' }}>Name</TableCell>
+                            <TableCell sx={{ fontWeight: 600, width: '10%' }}>Size</TableCell>
+                            <TableCell sx={{ fontWeight: 600, width: '14%' }}>MIME Type</TableCell>
+                            <TableCell sx={{ fontWeight: 600, width: '16%' }}>Storage Tier</TableCell>
                             <TableCell sx={{ fontWeight: 600 }}>Storage Key</TableCell>
-                            <TableCell sx={{ fontWeight: 600, width: '12%' }} align="right">
+                            <TableCell sx={{ fontWeight: 600, width: '18%' }} align="right">
                               Actions
                             </TableCell>
                           </TableRow>
@@ -542,9 +547,35 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               <TableCell sx={{ fontWeight: 500 }}>{f.name}</TableCell>
                               <TableCell sx={{ whiteSpace: 'nowrap' }}>{f.sizeBytes} B</TableCell>
                               <TableCell sx={{ whiteSpace: 'nowrap' }}>{f.mimeType}</TableCell>
+                              <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                                <Chip
+                                  size="small"
+                                  label={
+                                    f.archiveState === 'archived_drive'
+                                      ? 'Drive (Cold)'
+                                      : f.archiveState === 'archiving'
+                                      ? 'Archiving...'
+                                      : f.archiveState === 'restoring'
+                                      ? 'Restoring...'
+                                      : f.archiveState === 'reconciliation_required'
+                                      ? 'Needs Reconcile'
+                                      : 'R2 (Active)'
+                                  }
+                                  color={
+                                    f.archiveState === 'archived_drive'
+                                      ? 'info'
+                                      : f.archiveState === 'reconciliation_required'
+                                      ? 'error'
+                                      : f.archiveState === 'archiving' || f.archiveState === 'restoring'
+                                      ? 'warning'
+                                      : 'success'
+                                  }
+                                  variant="outlined"
+                                />
+                              </TableCell>
                               <TableCell
                                 sx={{
-                                  maxWidth: 260,
+                                  maxWidth: 220,
                                   overflow: 'hidden',
                                   textOverflow: 'ellipsis',
                                   whiteSpace: 'nowrap',
@@ -553,14 +584,38 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               >
                                 <code>{f.storageKey}</code>
                               </TableCell>
-                              <TableCell align="right">
+                              <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                                {f.archiveState === 'archived_drive' ? (
+                                  onRestoreFile && (
+                                    <Button
+                                      size="small"
+                                      variant="outlined"
+                                      color="info"
+                                      onClick={() => onRestoreFile(f.id)}
+                                      sx={{ mr: 1 }}
+                                    >
+                                      Restore
+                                    </Button>
+                                  )
+                                ) : (
+                                  onArchiveFile && (
+                                    <Button
+                                      size="small"
+                                      variant="outlined"
+                                      color="secondary"
+                                      onClick={() => onArchiveFile(f.id)}
+                                      sx={{ mr: 1 }}
+                                    >
+                                      Archive
+                                    </Button>
+                                  )
+                                )}
                                 {onDeleteFile && activeContext.capabilities.canDeleteWorkspace && (
                                   <Button
                                     size="small"
                                     variant="outlined"
                                     color="error"
                                     onClick={() => onDeleteFile(f.id)}
-                                    sx={{ whiteSpace: 'nowrap' }}
                                   >
                                     Delete
                                   </Button>
