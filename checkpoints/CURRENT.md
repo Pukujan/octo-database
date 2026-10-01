@@ -1,11 +1,11 @@
 # Current repository checkpoint
 
-<!-- continuity:current {"active_task":"OCTO-0200","active_task_file":"tasks/TASK-OCTO-0200-files-and-api-access.md","protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
+<!-- continuity:current {"active_task":"OCTO-0400","active_task_file":"tasks/TASK-OCTO-0400-playwright-and-vision-ci.md","protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
 
 ## Current state
 
-Slice 1 merged to main as `18d66e8` with green GitHub-hosted gates (run 36799342512).
-Slice 2 (Issue #4) and API Access (Issue #9) implemented: R2 bucket active storage, logical file catalog, guest login, and workspace-scoped / account-wide API gateway.
+Full-stack server and UI merged to main as `16a1639` with green GitHub-hosted gates (run 36803762345).
+OCTO-0400 implemented: Playwright E2E testing with Qwen 3.8 Flash vision model verification via InferHub, CGM visual direction styling, and CI integration.
 
 ## Owner corrections
 
@@ -16,5 +16,5 @@ Auto-merge and proper CI (integrity/integration validation, type checking, lint,
 
 ## Next action
 
-Push PR for Slice 2, verify gates on GitHub-hosted runner, merge via auto-merge, and begin downstream slices.
+Push PR for Playwright & Vision CI, verify gates on GitHub-hosted runner, merge via auto-merge, and proceed with remaining slices.
 Use planning/OWNER_INSTRUCTIONS.md for the owner-message list and implementation record.

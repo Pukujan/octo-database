@@ -14,6 +14,18 @@ jobs:
   gates:
     name: gates
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Check out Octo
         uses: actions/checkout@v4
@@ -63,6 +75,29 @@ jobs:
 
       - name: Frontend and authorization tests
         run: npm test
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Apply database migrations in CI
+        run: |
+          PGPASSWORD=postgres psql -h localhost -p 54329 -U postgres <<'EOF'
+          CREATE SCHEMA IF NOT EXISTS auth;
+          CREATE OR REPLACE FUNCTION auth.uid() RETURNS UUID AS $$ SELECT NULLIF(current_setting('request.jwt.claim.sub', true), '')::uuid; $$ LANGUAGE sql STABLE;
+          CREATE OR REPLACE FUNCTION auth.role() RETURNS TEXT AS $$ SELECT COALESCE(NULLIF(current_setting('request.jwt.claim.role', true), ''), 'anon'); $$ LANGUAGE sql STABLE;
+          DO $$ BEGIN
+              IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF;
+              IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+          END $$;
+          GRANT USAGE ON SCHEMA auth TO anon, authenticated;
+          EOF
+          PGPASSWORD=postgres psql -h localhost -p 54329 -U postgres < supabase/migrations/20261001000000_slice1_principals_workspaces_memberships.sql
+          PGPASSWORD=postgres psql -h localhost -p 54329 -U postgres < supabase/migrations/20261001010000_slice2_files_and_api_keys.sql
+
+      - name: Playwright E2E and Multimodal Vision QA
+        env:
+          INFERHUB_API_KEY: ${{ secrets.INFERHUB_API_KEY }}
+        run: npx playwright test
       - name: Validate pinned PCM adopter state
         shell: bash
         run: |

@@ -1,9 +1,10 @@
 /**
  * Octo Workspace Control Dashboard (Slices 1, 2, and 7)
  *
- * Simple aesthetic control dashboard with Google sign-in, Guest login,
+ * Polished control dashboard with Google sign-in, Guest login,
  * authorized workspace selector, file catalog (R2), and API key management.
- * Adheres to docs/UI_DIRECTION.md and owner instructions.
+ * Follows CGM visual direction guidelines (clear visual hierarchy, restrained palette,
+ * consistent spacing, and expressive vector visuals).
  */
 
 import React, { useState } from 'react';
@@ -54,6 +55,53 @@ export interface DashboardProps {
   isLoading?: boolean;
 }
 
+// Decorative SVG Illustration for Login Hero per CGM visual guidelines
+const LoginHeroIllustration: React.FC = () => (
+  <svg
+    width="100%"
+    height="160"
+    viewBox="0 0 400 160"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    style={{ maxWidth: 360, margin: '0 auto 16px auto', display: 'block' }}
+  >
+    <rect width="400" height="160" rx="12" fill="#eff6ff" />
+    {/* Central Octo Hub */}
+    <circle cx="200" cy="80" r="36" fill="#2563eb" fillOpacity="0.1" />
+    <circle cx="200" cy="80" r="26" fill="#2563eb" />
+    <text x="200" y="86" textAnchor="middle" fill="#ffffff" fontSize="20" fontWeight="bold">
+      🐙
+    </text>
+
+    {/* Connected Nodes */}
+    {/* Left Node: Database / Workspace */}
+    <circle cx="90" cy="80" r="22" fill="#ffffff" stroke="#cbd5e1" strokeWidth="2" />
+    <text x="90" y="85" textAnchor="middle" fill="#475569" fontSize="13">
+      🗄️
+    </text>
+    <path d="M114 80H172" stroke="#93c5fd" strokeWidth="2" strokeDasharray="4 4" />
+
+    {/* Right Node: Cloudflare R2 Active Storage */}
+    <circle cx="310" cy="80" r="22" fill="#ffffff" stroke="#cbd5e1" strokeWidth="2" />
+    <text x="310" y="85" textAnchor="middle" fill="#475569" fontSize="13">
+      ☁️
+    </text>
+    <path d="M228 80H286" stroke="#93c5fd" strokeWidth="2" strokeDasharray="4 4" />
+
+    {/* Top Node: Scoped API Gateway */}
+    <circle cx="200" cy="25" r="16" fill="#ffffff" stroke="#cbd5e1" strokeWidth="2" />
+    <text x="200" y="30" textAnchor="middle" fill="#475569" fontSize="10">
+      🔑
+    </text>
+    <path d="M200 43V52" stroke="#93c5fd" strokeWidth="2" />
+
+    {/* Bottom Label */}
+    <text x="200" y="142" textAnchor="middle" fill="#334155" fontSize="12" fontWeight="600">
+      Personal Control Plane • Workspaces • R2 Storage • Machine APIs
+    </text>
+  </svg>
+);
+
 export const Dashboard: React.FC<DashboardProps> = ({
   principal,
   workspaces,
@@ -76,6 +124,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [newKeyIsAccountWide, setNewKeyIsAccountWide] = useState(false);
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
 
+  const [uploadFileName, setUploadFileName] = useState('');
+  const [uploadFileContent, setUploadFileContent] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+
   const handleWorkspaceChange = (newId: string) => {
     setSelectedWsId(newId);
     onSelectWorkspace(newId);
@@ -92,26 +144,43 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
+  const handleUpload = async () => {
+    if (!uploadFileName.trim() || !onUploadFile) return;
+    try {
+      setIsUploading(true);
+      await onUploadFile(uploadFileName.trim(), 'text/plain', uploadFileContent);
+      setUploadFileName('');
+      setUploadFileContent('');
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   // 1. Unauthenticated View (Google Sign-In + Guest Login)
   if (!principal) {
     return (
       <ThemeProvider theme={octoTheme}>
         <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
           <AppBar position="static">
-            <Toolbar>
+            <Toolbar sx={{ px: 3 }}>
               <Typography variant="h6" component="div" sx={{ flexGrow: 1, fontWeight: 700 }}>
-                Octo
+                🐙 Octo
               </Typography>
+              <Chip label="v0.1.0" size="small" variant="outlined" />
             </Toolbar>
           </AppBar>
 
-          <Container maxWidth="sm" sx={{ mt: 12, textAlign: 'center' }}>
-            <Card sx={{ p: 4, borderRadius: 2 }}>
-              <Typography variant="h5" gutterBottom sx={{ fontWeight: 700 }}>
+          <Container maxWidth="sm" sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', py: 4 }}>
+            <Card sx={{ p: 4, borderRadius: 3, boxShadow: '0 4px 20px -2px rgba(0,0,0,0.06)' }}>
+              <LoginHeroIllustration />
+
+              <Typography variant="h5" align="center" gutterBottom sx={{ fontWeight: 700 }}>
                 Welcome to Octo
               </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>
-                Access your personal control plane, workspaces, R2 storage catalog, and platform APIs.
+              <Typography variant="body2" color="text.secondary" align="center" sx={{ mb: 4, px: 2 }}>
+                Connect your database, manage private files in Cloudflare R2, and create scoped API keys for agents.
               </Typography>
 
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -121,7 +190,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   fullWidth
                   onClick={onSignInWithGoogle}
                   disabled={isLoading}
-                  sx={{ py: 1.5, textTransform: 'none', fontSize: '1rem' }}
+                  sx={{ py: 1.5, fontSize: '0.95rem' }}
                 >
                   Sign in with Google
                 </Button>
@@ -133,9 +202,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     fullWidth
                     onClick={onSignInAsGuest}
                     disabled={isLoading}
-                    sx={{ py: 1.5, textTransform: 'none', fontSize: '1rem' }}
+                    sx={{ py: 1.5, fontSize: '0.95rem' }}
                   >
-                    Continue as Guest
+                    Continue as Guest (Instant Access)
                   </Button>
                 )}
               </Box>
@@ -149,13 +218,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
   // 2. Authenticated Control Dashboard
   return (
     <ThemeProvider theme={octoTheme}>
-      <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
+      <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', pb: 6 }}>
         {/* Navigation Bar */}
         <AppBar position="static">
-          <Toolbar sx={{ justifyContent: 'space-between' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Toolbar sx={{ justifyContent: 'space-between', px: { xs: 2, sm: 4 } }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
               <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: '-0.02em' }}>
-                Octo
+                🐙 Octo
               </Typography>
               <Chip
                 label="Control Plane"
@@ -165,7 +234,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               />
               {principal.isGuest && (
                 <Chip
-                  label="Guest Mode"
+                  label="Guest Sandbox"
                   size="small"
                   color="warning"
                   variant="filled"
@@ -179,7 +248,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <Avatar
                   src={principal.avatarUrl ?? undefined}
                   alt={principal.displayName ?? principal.email}
-                  sx={{ width: 32, height: 32, bgcolor: 'primary.main', fontSize: '0.875rem' }}
+                  sx={{ width: 34, height: 34, bgcolor: 'primary.main', fontSize: '0.875rem' }}
                 >
                   {principal.email.charAt(0).toUpperCase()}
                 </Avatar>
@@ -223,12 +292,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 Workspace Control Dashboard
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Select an authorized workspace to inspect files, active R2 storage, and API keys.
+                Inspect files, active Cloudflare R2 storage, and machine API keys.
               </Typography>
             </div>
 
             {workspaces.length > 0 && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                 <Typography variant="body2" color="text.secondary">
                   Active Workspace:
                 </Typography>
@@ -236,7 +305,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   size="small"
                   value={selectedWsId || (workspaces[0]?.id ?? '')}
                   onChange={(e) => handleWorkspaceChange(e.target.value)}
-                  sx={{ minWidth: 200, bgcolor: 'background.paper' }}
+                  sx={{ minWidth: 220, bgcolor: 'background.paper', borderRadius: 1.5 }}
                 >
                   {workspaces.map((ws) => (
                     <MenuItem key={ws.id} value={ws.id}>
@@ -250,7 +319,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
           {/* Empty / Unauthorized State */}
           {workspaces.length === 0 ? (
-            <Card sx={{ p: 4, textAlign: 'center' }}>
+            <Card sx={{ p: 4, textAlign: 'center', borderRadius: 2 }}>
               <Typography variant="h6" gutterBottom>
                 No Authorized Workspaces
               </Typography>
@@ -261,9 +330,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
           ) : activeContext ? (
             <Box>
               {/* Active Workspace Metadata */}
-              <Card sx={{ mb: 4, p: 1 }}>
-                <CardContent>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+              <Card sx={{ mb: 4, p: 2, borderRadius: 2 }}>
+                <CardContent sx={{ pb: 1 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
                     <div>
                       <Typography variant="h6" sx={{ fontWeight: 700 }}>
                         {activeContext.workspace.name}
@@ -281,7 +350,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </Box>
 
                   {activeContext.workspace.description && (
-                    <Typography variant="body2" sx={{ mb: 2 }}>
+                    <Typography variant="body2" sx={{ mb: 2, color: 'text.secondary' }}>
                       {activeContext.workspace.description}
                     </Typography>
                   )}
@@ -293,7 +362,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                     <Chip
-                      label="Upload Files"
+                      label="Upload Files (R2)"
                       size="small"
                       variant={activeContext.capabilities.canUploadFiles ? 'filled' : 'outlined'}
                       color={activeContext.capabilities.canUploadFiles ? 'success' : 'default'}
@@ -321,18 +390,48 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </Card>
 
               {/* File Catalog (Slice 2) */}
-              <Card sx={{ mb: 4 }}>
+              <Card sx={{ mb: 4, borderRadius: 2 }}>
                 <CardContent>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                     <div>
                       <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                        File Catalog (Cloudflare R2)
+                        📁 File Catalog (Cloudflare R2)
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        Active objects stored in private R2 bucket mapped to stable logical IDs.
+                        Logical file records pointing to objects stored in the dedicated Cloudflare R2 bucket.
                       </Typography>
                     </div>
                   </Box>
+
+                  {/* Upload Form */}
+                  {onUploadFile && activeContext.capabilities.canUploadFiles && (
+                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 3, flexWrap: 'wrap' }}>
+                      <TextField
+                        size="small"
+                        label="File Name"
+                        placeholder="notes.txt"
+                        value={uploadFileName}
+                        onChange={(e) => setUploadFileName(e.target.value)}
+                        sx={{ minWidth: 200 }}
+                      />
+                      <TextField
+                        size="small"
+                        label="Content"
+                        placeholder="File body content..."
+                        value={uploadFileContent}
+                        onChange={(e) => setUploadFileContent(e.target.value)}
+                        sx={{ flexGrow: 1, minWidth: 220 }}
+                      />
+                      <Button
+                        variant="contained"
+                        size="medium"
+                        onClick={handleUpload}
+                        disabled={isUploading || !uploadFileName.trim()}
+                      >
+                        Upload to R2
+                      </Button>
+                    </Box>
+                  )}
 
                   {files.length === 0 ? (
                     <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
@@ -353,7 +452,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <TableBody>
                           {files.map((f) => (
                             <TableRow key={f.id}>
-                              <TableCell>{f.name}</TableCell>
+                              <TableCell sx={{ fontWeight: 500 }}>{f.name}</TableCell>
                               <TableCell>{f.sizeBytes} B</TableCell>
                               <TableCell>{f.mimeType}</TableCell>
                               <TableCell><code>{f.storageKey}</code></TableCell>
@@ -378,24 +477,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </Card>
 
               {/* API Keys (Account-Wide & Workspace-Scoped) */}
-              <Card sx={{ mb: 4 }}>
+              <Card sx={{ mb: 4, borderRadius: 2 }}>
                 <CardContent>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                     <div>
                       <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                        API Keys (Account-Wide & Workspace-Scoped)
+                        🔑 API Keys (Account-Wide & Workspace-Scoped)
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        Machine credentials for agents and external automation. Secrets are hashed with SHA-256.
+                        Machine credentials for automation and agents. Hashed with SHA-256; secrets never stored in plaintext.
                       </Typography>
                     </div>
                   </Box>
 
                   {/* Created Key Alert */}
                   {createdSecret && (
-                    <Card sx={{ p: 2, mb: 2, bgcolor: '#f0fdf4', borderColor: '#86efac' }}>
+                    <Card sx={{ p: 2, mb: 3, bgcolor: '#f0fdf4', borderColor: '#86efac', borderRadius: 2 }}>
                       <Typography variant="subtitle2" sx={{ color: '#166534', fontWeight: 600 }}>
-                        New API Key Created (Copy Now - will not be displayed again):
+                        New API Key Minted (Copy Now - will not be displayed again):
                       </Typography>
                       <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all', mt: 0.5 }}>
                         {createdSecret}
@@ -405,11 +504,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                   {/* Create Key Form */}
                   {onCreateApiKey && (
-                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 3 }}>
+                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 3, flexWrap: 'wrap' }}>
                       <TextField
                         size="small"
                         label="Key Name"
-                        placeholder="e.g. Backup Agent"
+                        placeholder="e.g. Ingest Agent"
                         value={newKeyName}
                         onChange={(e) => setNewKeyName(e.target.value)}
                         sx={{ minWidth: 220 }}
@@ -418,6 +517,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         size="small"
                         value={newKeyIsAccountWide ? 'account' : 'workspace'}
                         onChange={(e) => setNewKeyIsAccountWide(e.target.value === 'account')}
+                        sx={{ minWidth: 180 }}
                       >
                         <MenuItem value="workspace">Workspace-Scoped</MenuItem>
                         <MenuItem value="account">Account-Wide</MenuItem>
@@ -453,7 +553,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <TableBody>
                           {apiKeys.map((k) => (
                             <TableRow key={k.id}>
-                              <TableCell>{k.name}</TableCell>
+                              <TableCell sx={{ fontWeight: 500 }}>{k.name}</TableCell>
                               <TableCell><code>{k.prefix}...</code></TableCell>
                               <TableCell>
                                 <Chip
@@ -474,7 +574,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </Card>
             </Box>
           ) : (
-            <Card sx={{ p: 3 }}>
+            <Card sx={{ p: 4, textAlign: 'center' }}>
               <Typography variant="body2" color="text.secondary">
                 Loading workspace details...
               </Typography>
