@@ -1,8 +1,8 @@
 # OCTO-0400 Scoped gallery/folder share links
 
-<!-- continuity:task {"acceptance":["owner creates a read-only album share returning a high-entropy token once","logged-out recipient views only the shared album and nothing else","sibling resources, workspace routes, and admin surfaces are unreachable with the token","only the token hash is stored; the raw token never appears in storage, logs, or audit output","revocation causes subsequent authorization to fail immediately","expiry boundary is enforced at the configured instant","upload permission is off by default and must be requested explicitly"],"depends_on":["OCTO-0300"],"goal":"Deliver scoped read-only share links with revocation and expiry for one gallery resource","id":"OCTO-0400","issue_url":"https://github.com/Pukujan/octo-database/issues/6","next_action":"Push PR for Slice 4, verify green CI gates, and auto-merge.","owner":"Pukujan; main agent coordinates implementation","priority":"P1","protocol_version":"0.1.0-draft","schema":"project-continuity.task.v1","status":"active","why":"Let an owner share exactly one album without granting access to the workspace or admin console."} -->
+<!-- continuity:task {"acceptance":["owner creates a read-only album share returning a high-entropy token once","logged-out recipient views only the shared album and nothing else","sibling resources, workspace routes, and admin surfaces are unreachable with the token","only the token hash is stored; the raw token never appears in storage, logs, or audit output","revocation causes subsequent authorization to fail immediately","expiry boundary is enforced at the configured instant","upload permission is off by default and must be requested explicitly"],"depends_on":["OCTO-0300"],"goal":"Deliver scoped read-only share links with revocation and expiry for one gallery resource","id":"OCTO-0400","issue_url":"https://github.com/Pukujan/octo-database/issues/6","next_action":"Merged in PR #29 with green gates.","owner":"Pukujan; main agent coordinates implementation","priority":"P1","protocol_version":"0.1.0-draft","schema":"project-continuity.task.v1","status":"completed","why":"Let an owner share exactly one album without granting access to the workspace or admin console."} -->
 
-- Status: active
+- Status: completed
 - Priority: P1
 - Branch: `task/OCTO-0400-scoped-share-links`
 - GitHub issue: https://github.com/Pukujan/octo-database/issues/6
@@ -75,3 +75,26 @@ Completed (defects found and fixed while verifying):
 - A past `validUntil` surfaced the database check constraint as a 500; it is now a clear 400.
 - A malformed bearer token reached a `uuid` cast and returned 500 instead of 401; tokens are now shape-checked before querying.
 - Renumbered the Playwright/vision task from OCTO-0400 to OCTO-0080, since issue #6 assigns OCTO-0400 to Slice 4 and task IDs are the stable handle across issues, tasks, and checkpoints.
+
+### 2026-10-01 04:40:43 UTC — Pukujan
+
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":["tasks/TASK-OCTO-0400-scoped-share-links.md","checkpoints/CURRENT.md"],"completed":["Slice 4 scoped share links closed out after merge"],"decisions":["Record the merge in the task and advance the current projection rather than leaving Slice 4 marked in review"],"evidence":["PR #29 merged into main as 04bea28 with green gates (run 36816234849)"],"next_action":"Begin the next accepted slice after this closeout.","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-0400","timestamp":"2026-10-01T04:40:43Z"} -->
+
+Completed:
+- Slice 4 scoped share links closed out after merge
+
+Evidence:
+- PR #29 merged into main as 04bea28 with green gates (run 36816234849)
+
+Decisions:
+- Record the merge in the task and advance the current projection rather than leaving Slice 4 marked in review
+
+Changed:
+- tasks/TASK-OCTO-0400-scoped-share-links.md
+- checkpoints/CURRENT.md
+
+Blocked/uncertain:
+- none
+
+Next:
+- Begin the next accepted slice after this closeout.

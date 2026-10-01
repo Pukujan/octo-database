@@ -1,6 +1,6 @@
 # Current repository checkpoint
 
-<!-- continuity:current {"active_task":"OCTO-0400","active_task_file":"tasks/TASK-OCTO-0400-scoped-share-links.md","protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
+<!-- continuity:current {"active_task":null,"active_task_file":null,"protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
 
 ## Current state
 
@@ -11,7 +11,8 @@
 - **Provider Runtime (Issue #16 / OCTO-0050)**: Merged (`PR #19`) — Provider credentials contract, blank `.env.example`, and live verified Google Drive 5TB storage quota.
 - **Slice 5 (Issue #7 / OCTO-0500)**: Merged (`PR #24`) — Google Drive 5TB cold archival & restore, 3-workspace guest storage verification, prompt-generated editorial PNG hero banner, and full CGM 0.5.7 narrative metadata.
 - **Slice 3 (Issue #5 / OCTO-0300)**: Merged (`PR #27`) — media classifier, idempotent thumbnail derivatives, backend-agnostic object store, signed media URLs, gallery service and routes, React MUI gallery grid with modal lightbox.
-- **Slice 4 (Issue #6 / OCTO-0400)**: In review — scoped read-only share links with token-hash storage, revocation, expiry, and share-scoped media signing.
+- **Slice 4 (Issue #6 / OCTO-0400)**: Merged (`PR #29`) — scoped read-only share links with token-hash storage, revocation, expiry, and share-scoped media signing.
+- **Fork-safe vision audit (OCTO-0401)**: Merged (`PR #28`) — the Playwright multimodal audit skips with a logged reason where `INFERHUB_API_KEY` cannot exist, so fork pull requests are no longer blocked by a secret they can never receive, while same-repo runs still assert the real score.
 - **Schema hardening**: Grants narrowed to DML (TRUNCATE is not subject to RLS), anon-reachable principal lookup removed, and API-key roles capped at the creator's live role.
 - **Live Verification**: 3 guest workspaces verified live across active R2 and Google Drive archival tiers (`scripts/verify_live_guest_storage.py`).
 - **CGM Visual Direction**: Pinned editorial hero PNG (`docs/assets/octo-hero-banner.png`) registered in asset manifest and embedded in README.
@@ -20,7 +21,8 @@
 
 - Anti-overengineering rules active in AGENTS.md: zero unsolicited security layers or speculative abstractions.
 - All gates passing locally and on GitHub Actions CI: Python unittests, Vitest tests, `tsc --noEmit`, Ruff, Mypy, and 18 JSON contracts.
+- Auto-merge: repository auto-merge is enabled, `main` requires only the aggregate `gates` check, and no review approval is required. `.github/workflows/auto-merge.yml` arms squash auto-merge on every same-repo pull request, so an agent push needs no manual merge step.
 
 ## Next action
 
-Merge Slice 4 after green gates, then continue with the next accepted slice.
+No task is active. Slice 3 (`PR #27`), Slice 4 (`PR #29`), and the fork-safe vision audit (`PR #28`) are merged and closed out. Pick the next accepted slice from the open issues and open its task file before implementing.
