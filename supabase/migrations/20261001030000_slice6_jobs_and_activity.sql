@@ -67,7 +67,11 @@ CREATE POLICY activity_select_member ON octo.activity
 -- Atomically claims the next runnable job for a worker.
 -- SKIP LOCKED gives exactly one worker a given job, and the lease means a crashed
 -- worker's job becomes claimable again after expiry instead of vanishing.
-CREATE OR REPLACE FUNCTION octo.claim_job(target_worker TEXT, lease_seconds INT DEFAULT 60)
+CREATE OR REPLACE FUNCTION octo.claim_job(
+    target_worker TEXT,
+    lease_seconds INT DEFAULT 60,
+    target_workspace UUID DEFAULT NULL
+)
 RETURNS TABLE (
     job_id UUID,
     workspace_id UUID,
@@ -84,6 +88,7 @@ BEGIN
             (j.state = 'queued' AND j.available_at <= now())
             OR (j.state = 'running' AND j.lease_expires_at IS NOT NULL AND j.lease_expires_at <= now())
           )
+      AND (target_workspace IS NULL OR j.workspace_id = target_workspace)
     ORDER BY j.available_at ASC, j.created_at ASC
     FOR UPDATE SKIP LOCKED
     LIMIT 1;

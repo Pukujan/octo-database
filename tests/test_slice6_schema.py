@@ -52,6 +52,11 @@ class Slice6SchemaTests(unittest.TestCase):
             "lease_expires_at = now() + make_interval(secs => lease_seconds)",
             self.sql_content,
         )
+        self.assertIn("target_workspace UUID DEFAULT NULL", self.sql_content)
+        self.assertIn(
+            "target_workspace IS NULL OR j.workspace_id = target_workspace",
+            self.sql_content,
+        )
         # A crashed worker's running job must become claimable again.
         self.assertIn(
             "j.state = 'running' AND j.lease_expires_at IS NOT NULL "

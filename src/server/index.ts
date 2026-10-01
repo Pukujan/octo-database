@@ -364,7 +364,7 @@ async function drainQueueOnce(targetWorkspaceId?: string, maxJobs = 10): Promise
   const outcomes: JobOutcome[] = [];
 
   for (let i = 0; i < maxJobs; i += 1) {
-    const job = await dbClaimJob('octo-server-worker', 60);
+    const job = await dbClaimJob('octo-server-worker', 60, targetWorkspaceId ?? null);
     if (!job) break;
 
     const outcome = await processJob(job, {
