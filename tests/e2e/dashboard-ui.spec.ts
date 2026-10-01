@@ -6,7 +6,7 @@
  */
 
 import { expect, test } from '@playwright/test';
-import { verifyUiScreenshotWithVision } from '../../src/qa/vision-verifier';
+import { auditPage } from './vision-audit';
 
 test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
   test('renders login screen, audits visual quality with vision model, and enters guest mode', async ({
@@ -26,20 +26,14 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     }
     await expect(page.locator('text=Continue as Guest')).toBeVisible();
 
-    // 2. Capture screenshot of unauthenticated login hero
-    const loginScreenshot = await page.screenshot({ fullPage: true });
-
-    // 3. Multimodal Vision Audit (Qwen 3.8 Flash on InferHub)
-    console.log('Auditing Login Screen screenshot with Qwen 3.8 Flash...');
-    const loginVisionResult = await verifyUiScreenshotWithVision(loginScreenshot, 'Login Screen');
-    console.log(`- Model: ${loginVisionResult.modelUsed}`);
-    console.log(`- Score: ${loginVisionResult.score}/100`);
-    console.log(`- Summary: ${loginVisionResult.summary}`);
-    if (loginVisionResult.issues.length > 0) {
-      console.log(`- Notes: ${loginVisionResult.issues.join(', ')}`);
+    // 2 & 3. Multimodal Vision Audit (Qwen 3.8 Flash on InferHub).
+    // Skipped only where the credential cannot exist (fork PRs); every same-repo
+    // run performs the real audit.
+    const loginVisionResult = await auditPage(page, 'Login Screen');
+    if (loginVisionResult) {
+      expect(loginVisionResult.passed).toBe(true);
+      expect(loginVisionResult.score).toBeGreaterThanOrEqual(75);
     }
-    expect(loginVisionResult.passed).toBe(true);
-    expect(loginVisionResult.score).toBeGreaterThanOrEqual(75);
 
     // 4. Click "Continue as Guest"
     await page.click('text=Continue as Guest');
@@ -52,20 +46,12 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     await expect(page.locator('text=API Keys (Account-Wide & Workspace-Scoped)')).toBeVisible();
     await expect(page.getByRole('heading', { name: /Gallery$/ })).toBeVisible();
 
-    // 6. Capture screenshot of authenticated workspace dashboard
-    const dashboardScreenshot = await page.screenshot({ fullPage: true });
-
-    // 7. Multimodal Vision Audit on Dashboard (Qwen 3.8 Flash on InferHub)
-    console.log('Auditing Authenticated Dashboard screenshot with Qwen 3.8 Flash...');
-    const dashVisionResult = await verifyUiScreenshotWithVision(dashboardScreenshot, 'Dashboard');
-    console.log(`- Model: ${dashVisionResult.modelUsed}`);
-    console.log(`- Score: ${dashVisionResult.score}/100`);
-    console.log(`- Summary: ${dashVisionResult.summary}`);
-    if (dashVisionResult.issues.length > 0) {
-      console.log(`- Notes: ${dashVisionResult.issues.join(', ')}`);
+    // 6 & 7. Multimodal Vision Audit on the authenticated dashboard.
+    const dashVisionResult = await auditPage(page, 'Dashboard');
+    if (dashVisionResult) {
+      expect(dashVisionResult.passed).toBe(true);
+      expect(dashVisionResult.score).toBeGreaterThanOrEqual(75);
     }
-    expect(dashVisionResult.passed).toBe(true);
-    expect(dashVisionResult.score).toBeGreaterThanOrEqual(75);
 
     // 8. Test File Upload via UI
     await page.fill('input[placeholder="notes.txt"]', 'qa_report.txt');
