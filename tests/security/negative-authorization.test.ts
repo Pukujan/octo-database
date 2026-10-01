@@ -95,6 +95,7 @@ describe('Security Negative: Workspace ID Forgery & Missing Memberships', () => 
       displayName: null,
       avatarUrl: null,
       isPlatformOwner: false,
+      isGuest: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

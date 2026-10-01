@@ -18,6 +18,7 @@ export interface Principal {
   displayName: string | null;
   avatarUrl: string | null;
   isPlatformOwner: boolean;
+  isGuest: boolean;
   createdAt: string;
   updatedAt: string;
 }

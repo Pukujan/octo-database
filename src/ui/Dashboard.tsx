@@ -1,8 +1,8 @@
 /**
- * Octo Workspace Control Dashboard (Slice 1)
+ * Octo Workspace Control Dashboard (Slices 1, 2, and 7)
  *
- * Simple aesthetic control dashboard with Google sign-in, authorized workspace
- * selector, and workspace entry.
+ * Simple aesthetic control dashboard with Google sign-in, Guest login,
+ * authorized workspace selector, file catalog (R2), and API key management.
  * Adheres to docs/UI_DIRECTION.md and owner instructions.
  */
 
@@ -21,21 +21,36 @@ import {
   Grid,
   MenuItem,
   Select,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TextField,
   ThemeProvider,
   Toolbar,
   Typography,
 } from '@mui/material';
 import { Principal, WorkspaceRole, WorkspaceSummary } from '../types/auth';
 import { WorkspaceContext } from '../auth/workspace-service';
+import { FileRecord } from '../storage/file-service';
+import { ApiKey } from '../api/keys';
 import { octoTheme } from './theme';
 
 export interface DashboardProps {
   principal: Principal | null;
   workspaces: WorkspaceSummary[];
   activeContext: WorkspaceContext | null;
+  files?: FileRecord[];
+  apiKeys?: ApiKey[];
   onSignInWithGoogle: () => void;
+  onSignInAsGuest?: () => void;
   onSignOut: () => void;
   onSelectWorkspace: (workspaceId: string) => void;
+  onUploadFile?: (name: string, mimeType: string, content: string) => Promise<void>;
+  onDeleteFile?: (fileId: string) => Promise<void>;
+  onCreateApiKey?: (name: string, isAccountWide: boolean) => Promise<{ rawSecret: string }>;
   isLoading?: boolean;
 }
 
@@ -43,21 +58,41 @@ export const Dashboard: React.FC<DashboardProps> = ({
   principal,
   workspaces,
   activeContext,
+  files = [],
+  apiKeys = [],
   onSignInWithGoogle,
+  onSignInAsGuest,
   onSignOut,
   onSelectWorkspace,
+  onUploadFile,
+  onDeleteFile,
+  onCreateApiKey,
   isLoading = false,
 }) => {
   const [selectedWsId, setSelectedWsId] = useState<string>(
     activeContext?.workspace.id ?? workspaces[0]?.id ?? ''
   );
+  const [newKeyName, setNewKeyName] = useState('');
+  const [newKeyIsAccountWide, setNewKeyIsAccountWide] = useState(false);
+  const [createdSecret, setCreatedSecret] = useState<string | null>(null);
 
   const handleWorkspaceChange = (newId: string) => {
     setSelectedWsId(newId);
     onSelectWorkspace(newId);
   };
 
-  // 1. Unauthenticated View
+  const handleCreateKey = async () => {
+    if (!newKeyName.trim() || !onCreateApiKey) return;
+    try {
+      const res = await onCreateApiKey(newKeyName.trim(), newKeyIsAccountWide);
+      setCreatedSecret(res.rawSecret);
+      setNewKeyName('');
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // 1. Unauthenticated View (Google Sign-In + Guest Login)
   if (!principal) {
     return (
       <ThemeProvider theme={octoTheme}>
@@ -76,18 +111,34 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 Welcome to Octo
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>
-                Sign in with your Google account to access your personal control plane and authorized workspaces.
+                Access your personal control plane, workspaces, R2 storage catalog, and platform APIs.
               </Typography>
-              <Button
-                variant="contained"
-                size="large"
-                fullWidth
-                onClick={onSignInWithGoogle}
-                disabled={isLoading}
-                sx={{ py: 1.5, textTransform: 'none', fontSize: '1rem' }}
-              >
-                Sign in with Google
-              </Button>
+
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <Button
+                  variant="contained"
+                  size="large"
+                  fullWidth
+                  onClick={onSignInWithGoogle}
+                  disabled={isLoading}
+                  sx={{ py: 1.5, textTransform: 'none', fontSize: '1rem' }}
+                >
+                  Sign in with Google
+                </Button>
+
+                {onSignInAsGuest && (
+                  <Button
+                    variant="outlined"
+                    size="large"
+                    fullWidth
+                    onClick={onSignInAsGuest}
+                    disabled={isLoading}
+                    sx={{ py: 1.5, textTransform: 'none', fontSize: '1rem' }}
+                  >
+                    Continue as Guest
+                  </Button>
+                )}
+              </Box>
             </Card>
           </Container>
         </Box>
@@ -112,6 +163,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 variant="outlined"
                 sx={{ fontSize: '0.75rem', borderColor: 'divider' }}
               />
+              {principal.isGuest && (
+                <Chip
+                  label="Guest Mode"
+                  size="small"
+                  color="warning"
+                  variant="filled"
+                  sx={{ fontSize: '0.75rem', fontWeight: 600 }}
+                />
+              )}
             </Box>
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -163,7 +223,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 Workspace Control Dashboard
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Select an authorized workspace to enter and inspect storage and platform capabilities.
+                Select an authorized workspace to inspect files, active R2 storage, and API keys.
               </Typography>
             </div>
 
@@ -196,12 +256,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 Your account ({principal.email}) does not belong to any active workspaces yet.
-                Contact the platform administrator to be added.
               </Typography>
             </Card>
           ) : activeContext ? (
-            /* Active Workspace View */
             <Box>
+              {/* Active Workspace Metadata */}
               <Card sx={{ mb: 4, p: 1 }}>
                 <CardContent>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
@@ -261,62 +320,158 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </CardContent>
               </Card>
 
-              {/* Downstream Slice Cards (Files #4, Gallery #5, Operations #8) */}
-              <Grid container spacing={3}>
-                <Grid item xs={12} md={4}>
-                  <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                    <CardContent sx={{ flexGrow: 1 }}>
-                      <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
-                        File Catalog
+              {/* File Catalog (Slice 2) */}
+              <Card sx={{ mb: 4 }}>
+                <CardContent>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                    <div>
+                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                        File Catalog (Cloudflare R2)
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        Active R2 object storage backed by one platform API (Slice 2, #4).
+                        Active objects stored in private R2 bucket mapped to stable logical IDs.
                       </Typography>
-                    </CardContent>
-                    <CardActions sx={{ p: 2, pt: 0 }}>
-                      <Button size="small" disabled>
-                        Browse Files
-                      </Button>
-                    </CardActions>
-                  </Card>
-                </Grid>
+                    </div>
+                  </Box>
 
-                <Grid item xs={12} md={4}>
-                  <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                    <CardContent sx={{ flexGrow: 1 }}>
-                      <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
-                        Gallery
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Simple workspace image and video grid with responsive viewer (Slice 3, #5).
-                      </Typography>
-                    </CardContent>
-                    <CardActions sx={{ p: 2, pt: 0 }}>
-                      <Button size="small" disabled>
-                        Open Gallery
-                      </Button>
-                    </CardActions>
-                  </Card>
-                </Grid>
+                  {files.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+                      No files uploaded yet in this workspace.
+                    </Typography>
+                  ) : (
+                    <TableContainer>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell sx={{ fontWeight: 600 }}>Name</TableCell>
+                            <TableCell sx={{ fontWeight: 600 }}>Size</TableCell>
+                            <TableCell sx={{ fontWeight: 600 }}>MIME Type</TableCell>
+                            <TableCell sx={{ fontWeight: 600 }}>Storage Key</TableCell>
+                            <TableCell sx={{ fontWeight: 600 }}>Actions</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {files.map((f) => (
+                            <TableRow key={f.id}>
+                              <TableCell>{f.name}</TableCell>
+                              <TableCell>{f.sizeBytes} B</TableCell>
+                              <TableCell>{f.mimeType}</TableCell>
+                              <TableCell><code>{f.storageKey}</code></TableCell>
+                              <TableCell>
+                                {onDeleteFile && activeContext.capabilities.canDeleteWorkspace && (
+                                  <Button
+                                    size="small"
+                                    color="error"
+                                    onClick={() => onDeleteFile(f.id)}
+                                  >
+                                    Delete
+                                  </Button>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  )}
+                </CardContent>
+              </Card>
 
-                <Grid item xs={12} md={4}>
-                  <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                    <CardContent sx={{ flexGrow: 1 }}>
-                      <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
-                        Operations
+              {/* API Keys (Account-Wide & Workspace-Scoped) */}
+              <Card sx={{ mb: 4 }}>
+                <CardContent>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                    <div>
+                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                        API Keys (Account-Wide & Workspace-Scoped)
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        Job status, activity logs, and system health oversight (Slice 6, #8).
+                        Machine credentials for agents and external automation. Secrets are hashed with SHA-256.
                       </Typography>
-                    </CardContent>
-                    <CardActions sx={{ p: 2, pt: 0 }}>
-                      <Button size="small" disabled>
-                        View Jobs
+                    </div>
+                  </Box>
+
+                  {/* Created Key Alert */}
+                  {createdSecret && (
+                    <Card sx={{ p: 2, mb: 2, bgcolor: '#f0fdf4', borderColor: '#86efac' }}>
+                      <Typography variant="subtitle2" sx={{ color: '#166534', fontWeight: 600 }}>
+                        New API Key Created (Copy Now - will not be displayed again):
+                      </Typography>
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all', mt: 0.5 }}>
+                        {createdSecret}
+                      </Typography>
+                    </Card>
+                  )}
+
+                  {/* Create Key Form */}
+                  {onCreateApiKey && (
+                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 3 }}>
+                      <TextField
+                        size="small"
+                        label="Key Name"
+                        placeholder="e.g. Backup Agent"
+                        value={newKeyName}
+                        onChange={(e) => setNewKeyName(e.target.value)}
+                        sx={{ minWidth: 220 }}
+                      />
+                      <Select
+                        size="small"
+                        value={newKeyIsAccountWide ? 'account' : 'workspace'}
+                        onChange={(e) => setNewKeyIsAccountWide(e.target.value === 'account')}
+                      >
+                        <MenuItem value="workspace">Workspace-Scoped</MenuItem>
+                        <MenuItem value="account">Account-Wide</MenuItem>
+                      </Select>
+                      <Button
+                        variant="contained"
+                        size="medium"
+                        onClick={handleCreateKey}
+                        disabled={!newKeyName.trim()}
+                      >
+                        Generate API Key
                       </Button>
-                    </CardActions>
-                  </Card>
-                </Grid>
-              </Grid>
+                    </Box>
+                  )}
+
+                  {/* Keys Table */}
+                  {apiKeys.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
+                      No API keys generated yet.
+                    </Typography>
+                  ) : (
+                    <TableContainer>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell sx={{ fontWeight: 600 }}>Name</TableCell>
+                            <TableCell sx={{ fontWeight: 600 }}>Prefix</TableCell>
+                            <TableCell sx={{ fontWeight: 600 }}>Scope</TableCell>
+                            <TableCell sx={{ fontWeight: 600 }}>Scopes</TableCell>
+                            <TableCell sx={{ fontWeight: 600 }}>Last Used</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {apiKeys.map((k) => (
+                            <TableRow key={k.id}>
+                              <TableCell>{k.name}</TableCell>
+                              <TableCell><code>{k.prefix}...</code></TableCell>
+                              <TableCell>
+                                <Chip
+                                  label={k.isAccountWide ? 'Account-Wide' : 'Workspace-Scoped'}
+                                  size="small"
+                                  color={k.isAccountWide ? 'primary' : 'default'}
+                                />
+                              </TableCell>
+                              <TableCell>{k.scopes.join(', ')}</TableCell>
+                              <TableCell>{k.lastUsedAt ?? 'Never'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  )}
+                </CardContent>
+              </Card>
             </Box>
           ) : (
             <Card sx={{ p: 3 }}>

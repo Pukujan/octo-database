@@ -40,26 +40,63 @@ export interface MockMembershipRow {
   updated_at: string;
 }
 
+export interface MockFileRow {
+  [key: string]: unknown;
+  id: string;
+  workspace_id: string;
+  created_by: string;
+  name: string;
+  mime_type: string;
+  size_bytes: number;
+  provider: string;
+  storage_key: string;
+  status: string;
+  content_hash: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MockApiKeyRow {
+  [key: string]: unknown;
+  id: string;
+  key_hash: string;
+  prefix: string;
+  name: string;
+  principal_id: string;
+  workspace_id: string | null;
+  role: WorkspaceRole | null;
+  scopes: string[];
+  expires_at: string | null;
+  created_at: string;
+  last_used_at: string | null;
+}
+
 export class MockDatabase {
   principals: MockPrincipalRow[] = [];
   workspaces: MockWorkspaceRow[] = [];
   memberships: MockMembershipRow[] = [];
+  files: MockFileRow[] = [];
+  api_keys: MockApiKeyRow[] = [];
 
   clear(): void {
     this.principals = [];
     this.workspaces = [];
     this.memberships = [];
+    this.files = [];
+    this.api_keys = [];
   }
 }
 
 export function createMockSupabaseClient(
   db: MockDatabase,
-  currentUser: User | null
+  initialUser: User | null
 ): SupabaseClient {
-  const getCurrentPrincipal = () =>
-    currentUser
-      ? db.principals.find((p) => p.auth_user_id === currentUser.id)
-      : undefined;
+  let currentUser = initialUser;
+  const getCurrentPrincipal = () => {
+    const u = currentUser;
+    return u ? db.principals.find((p) => p.auth_user_id === u.id) : undefined;
+  };
 
   const client = {
     auth: {
@@ -81,6 +118,17 @@ export function createMockSupabaseClient(
       async signOut() {
         return { error: null };
       },
+      async signInAnonymously() {
+        const anonUser: User = {
+          id: `guest-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          app_metadata: { provider: 'anonymous' },
+          user_metadata: {},
+          aud: 'authenticated',
+          created_at: new Date().toISOString(),
+        };
+        currentUser = anonUser;
+        return { data: { user: anonUser }, error: null };
+      },
     },
 
     schema(schemaName: string) {
@@ -90,7 +138,24 @@ export function createMockSupabaseClient(
 
       return {
         from(tableName: string) {
-          return createQueryBuilder(tableName, db, currentUser, getCurrentPrincipal);
+          return createQueryBuilder(tableName, db, () => currentUser, getCurrentPrincipal);
+        },
+        rpc(fnName: string, params: Record<string, unknown>) {
+          if (fnName === 'verify_api_key') {
+            const hash = params['target_hash'] as string;
+            const key = db.api_keys.find((k) => k.key_hash === hash);
+            if (key) {
+              key.last_used_at = new Date().toISOString();
+              return Promise.resolve({ data: [key], error: null });
+            }
+            return Promise.resolve({ data: null, error: null });
+          }
+          if (fnName === 'resolve_principal_by_id') {
+            const id = params['target_id'] as string;
+            const p = db.principals.find((pr) => pr.id === id);
+            return Promise.resolve({ data: p ? [p] : null, error: null });
+          }
+          return Promise.resolve({ data: null, error: new Error(`Unknown RPC: ${fnName}`) });
         },
       };
     },
@@ -107,7 +172,7 @@ interface FilterCondition {
 function createQueryBuilder(
   tableName: string,
   db: MockDatabase,
-  currentUser: User | null,
+  getCurrentUser: () => User | null,
   getCurrentPrincipal: () => MockPrincipalRow | undefined
 ) {
   const filters: FilterCondition[] = [];
@@ -121,6 +186,10 @@ function createQueryBuilder(
 
     eq(field: string, value: unknown) {
       filters.push({ field, value });
+      return builder;
+    },
+
+    order(_field: string, _options?: { ascending?: boolean }) {
       return builder;
     },
 
@@ -142,6 +211,7 @@ function createQueryBuilder(
       const inserted: unknown[] = [];
       let insertError: Error | null = null;
 
+      const currentUser = getCurrentUser();
       for (const item of items) {
         if (tableName === 'principals') {
           if (!currentUser || item['auth_user_id'] !== currentUser.id) {
@@ -160,6 +230,7 @@ function createQueryBuilder(
             display_name: (item['display_name'] as string | null) ?? null,
             avatar_url: (item['avatar_url'] as string | null) ?? null,
             is_platform_owner: Boolean(item['is_platform_owner']),
+            is_guest: Boolean(item['is_guest']),
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           };
@@ -192,6 +263,40 @@ function createQueryBuilder(
             updated_at: new Date().toISOString(),
           };
           db.memberships.push(row);
+          inserted.push(row);
+        } else if (tableName === 'files') {
+          const row: MockFileRow = {
+            id: (item['id'] as string) ?? `f-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            workspace_id: item['workspace_id'] as string,
+            created_by: item['created_by'] as string,
+            name: item['name'] as string,
+            mime_type: item['mime_type'] as string,
+            size_bytes: Number(item['size_bytes'] ?? 0),
+            provider: (item['provider'] as string) ?? 'r2',
+            storage_key: item['storage_key'] as string,
+            status: (item['status'] as string) ?? 'active',
+            content_hash: (item['content_hash'] as string | null) ?? null,
+            metadata: (item['metadata'] as Record<string, unknown>) ?? {},
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+          db.files.push(row);
+          inserted.push(row);
+        } else if (tableName === 'api_keys') {
+          const row: MockApiKeyRow = {
+            id: (item['id'] as string) ?? `key-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            key_hash: item['key_hash'] as string,
+            prefix: item['prefix'] as string,
+            name: item['name'] as string,
+            principal_id: item['principal_id'] as string,
+            workspace_id: (item['workspace_id'] as string | null) ?? null,
+            role: (item['role'] as WorkspaceRole | null) ?? null,
+            scopes: (item['scopes'] as string[]) ?? ['read', 'write'],
+            expires_at: (item['expires_at'] as string | null) ?? null,
+            created_at: new Date().toISOString(),
+            last_used_at: null,
+          };
+          db.api_keys.push(row);
           inserted.push(row);
         }
       }
@@ -230,19 +335,34 @@ function createQueryBuilder(
       return builder.insert(record);
     },
 
-    async delete() {
-      // Find matching items and delete
-      if (tableName === 'workspace_memberships') {
-        const wsIdFilter = filters.find((f) => f.field === 'workspace_id')?.value;
-        const pIdFilter = filters.find((f) => f.field === 'principal_id')?.value;
-
-        db.memberships = db.memberships.filter((m) => {
-          if (wsIdFilter && m.workspace_id !== wsIdFilter) return true;
-          if (pIdFilter && m.principal_id !== pIdFilter) return true;
-          return false;
-        });
-      }
-      return { error: null };
+    delete() {
+      const deletePromise = {
+        eq(field: string, value: unknown) {
+          filters.push({ field, value });
+          return deletePromise;
+        },
+        async then(resolve: (val: { data: null; error: null }) => void) {
+          if (tableName === 'workspace_memberships') {
+            const wsIdFilter = filters.find((f) => f.field === 'workspace_id')?.value;
+            const pIdFilter = filters.find((f) => f.field === 'principal_id')?.value;
+            db.memberships = db.memberships.filter((m) => {
+              if (wsIdFilter && m.workspace_id !== wsIdFilter) return true;
+              if (pIdFilter && m.principal_id !== pIdFilter) return true;
+              return false;
+            });
+          }
+          if (tableName === 'files') {
+            const idFilter = filters.find((f) => f.field === 'id')?.value;
+            db.files = db.files.filter((f) => (idFilter ? f.id !== idFilter : true));
+          }
+          if (tableName === 'api_keys') {
+            const idFilter = filters.find((f) => f.field === 'id')?.value;
+            db.api_keys = db.api_keys.filter((k) => (idFilter ? k.id !== idFilter : true));
+          }
+          resolve({ data: null, error: null });
+        },
+      };
+      return deletePromise;
     },
 
     async then(resolve: (val: { data: unknown[]; error: null }) => void) {
@@ -251,6 +371,7 @@ function createQueryBuilder(
     },
 
     async _execute(): Promise<unknown[]> {
+      const currentUser = getCurrentUser();
       const currentPrincipal = getCurrentPrincipal();
 
       if (tableName === 'principals') {
@@ -296,6 +417,24 @@ function createQueryBuilder(
           );
           if (!userIsInWorkspace) return false;
           return matchesFilters(m, filters);
+        });
+      }
+      if (tableName === 'files') {
+        return db.files.filter((f) => {
+          if (!currentPrincipal) return false;
+          const userIsInWorkspace = db.memberships.some(
+            (m) => m.workspace_id === f.workspace_id && m.principal_id === currentPrincipal.id
+          );
+          if (!userIsInWorkspace) return false;
+          return matchesFilters(f, filters);
+        });
+      }
+
+      if (tableName === 'api_keys') {
+        return db.api_keys.filter((k) => {
+          if (!currentPrincipal) return false;
+          if (k.principal_id !== currentPrincipal.id) return false;
+          return matchesFilters(k, filters);
         });
       }
 
