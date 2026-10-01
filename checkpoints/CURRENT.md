@@ -19,7 +19,7 @@
 - **Slice 9 (Issue #11 / OCTO-0900)**: Merged (`PR #34`) — bitemporal epistemic schema.
 - **Schema hardening**: Grants narrowed to DML (TRUNCATE is not subject to RLS), anon-reachable principal lookup removed, API-key roles capped at the creator's live role, and `claim_job` scoped by workspace (`PR #38`, `PR #40`).
 - **Dashboard storage tiers**: Merged (`PR #41`) — storage tier chips and archive/restore actions in the dashboard.
-- **Deployment implementation (Issue #43 / OCTO-1000)**: Implemented OAuth callback, /api/me, frontend fragment pickup, public origin resolution, static file serving, and gravebuster Docker Compose stack with systemd autodeploy.
+- **Deployment implementation (Issue #43 / OCTO-1000)**: Merged (`PR #47`) — Implemented OAuth callback, /api/me, frontend fragment pickup, public origin resolution, static file serving, and gravebuster Docker Compose stack with systemd autodeploy. Hardened container init migrations, systemd user unit, static SPA routing, and session token purging.
 - **Live Verification**: 3 guest workspaces verified live across active R2 and Google Drive archival tiers (`scripts/verify_live_guest_storage.py`).
 - **CGM Visual Direction**: Pinned editorial hero PNG (`docs/assets/octo-hero-banner.png`) registered in asset manifest and embedded in README.
 
@@ -31,5 +31,5 @@
 
 ## Next action
 
-Merge OCTO-1000 implementation PR after green gates; then owner performs external actions (register OAuth redirect URI, map tunnel hostname in Zero Trust, verify port 8090 on gravebuster).
+Merge OCTO-1000 hardening PR to main; initialize origin/production branch; then owner performs external actions (register OAuth redirect URI, map tunnel hostname in Zero Trust, verify port 8090 on gravebuster).
 

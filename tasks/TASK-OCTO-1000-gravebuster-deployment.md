@@ -1,6 +1,6 @@
 # OCTO-1000 Host Octo on gravebuster with a production branch and gated CI/CD
 
-<!-- continuity:task {"acceptance":["octodb.design-bakery.com serves the Octo UI over HTTPS","Google sign-in completes and lands on an authenticated dashboard","guest login still works","a merge to main does not deploy; a merge to production deploys within 5 minutes","a failing smoke test rolls back to the previous image automatically","gates runs on pull requests into both main and production","no secret is committed to the repository"],"depends_on":["OCTO-0100"],"goal":"Host Octo's frontend and backend as containers on gravebuster with a gated promotion path to production","id":"OCTO-1000","issue_url":"https://github.com/Pukujan/octo-database/issues/43","next_action":"Create pull request with auto-merge for OCTO-1000.","owner":"Pukujan; main agent coordinates implementation","priority":"P1","protocol_version":"0.1.0-draft","schema":"project-continuity.task.v1","status":"active","why":"Octo has no hosted instance and no delivery path from a merged commit to a running service."} -->
+<!-- continuity:task {"acceptance":["octodb.design-bakery.com serves the Octo UI over HTTPS","Google sign-in completes and lands on an authenticated dashboard","guest login still works","a merge to main does not deploy; a merge to production deploys within 5 minutes","a failing smoke test rolls back to the previous image automatically","gates runs on pull requests into both main and production","no secret is committed to the repository"],"depends_on":["OCTO-0100"],"goal":"Host Octo's frontend and backend as containers on gravebuster with a gated promotion path to production","id":"OCTO-1000","issue_url":"https://github.com/Pukujan/octo-database/issues/43","next_action":"Create pull request with auto-merge to main for deployment hardening fixes.","owner":"Pukujan; main agent coordinates implementation","priority":"P1","protocol_version":"0.1.0-draft","schema":"project-continuity.task.v1","status":"active","why":"Octo has no hosted instance and no delivery path from a merged commit to a running service."} -->
 
 - Status: active
 - Priority: P1
@@ -103,6 +103,43 @@ Blocked/uncertain:
 - none
 
 Next:
-- Create pull request with auto-merge for OCTO-1000
+- Merged PR #47 to main; harden container migration execution, systemd user unit, static serving, and session restoration
+
+### 2026-10-01 20:00:00 UTC — Pukujan
+
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":["deploy/gravebuster/docker-compose.yml","deploy/gravebuster/initdb/01-apply-migrations.sh","deploy/gravebuster/systemd/octo-autodeploy.service","deploy/local/docker-compose.yml","src/main.tsx","src/server/index.ts","tests/unit/oauth-and-origin.test.ts"],"completed":["Mounted 01-apply-migrations.sh to execute migrations on Postgres container init","Removed invalid User= directive from systemd user service unit","Fixed static asset serving path traversal check and excluded /api/ routes from SPA fallback","Purged stale tokens in frontend on 401 response from /api/me","Added test coverage for forwarded headers and 404 JSON handling"],"decisions":["Explicitly execute /docker-entrypoint-initdb.d/migrations/*.sql via 01-apply-migrations.sh since Postgres does not recurse into subdirectories","Keep user service units without User= directive per systemd standard"],"evidence":["115 Vitest tests pass across 20 files","tsc --noEmit passes","55 python unit tests pass","JSON contract integrity passes (18 contracts)","PCM validate passes"],"next_action":"Create pull request with auto-merge to main for deployment hardening fixes","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-1000","timestamp":"2026-10-01T20:00:00Z"} -->
+
+Completed:
+- Mounted 01-apply-migrations.sh to execute migrations on Postgres container init
+- Removed invalid User= directive from systemd user service unit
+- Fixed static asset serving path traversal check and excluded /api/ routes from SPA fallback
+- Purged stale tokens in frontend on 401 response from /api/me
+- Added test coverage for forwarded headers and 404 JSON handling
+
+Evidence:
+- 115 Vitest tests pass across 20 files
+- tsc --noEmit passes
+- 55 python unit tests pass
+- JSON contract integrity passes (18 contracts)
+- PCM validate passes
+
+Decisions:
+- Explicitly execute /docker-entrypoint-initdb.d/migrations/*.sql via 01-apply-migrations.sh since Postgres does not recurse into subdirectories
+- Keep user service units without User= directive per systemd standard
+
+Changed:
+- deploy/gravebuster/docker-compose.yml
+- deploy/gravebuster/initdb/01-apply-migrations.sh
+- deploy/gravebuster/systemd/octo-autodeploy.service
+- deploy/local/docker-compose.yml
+- src/main.tsx
+- src/server/index.ts
+- tests/unit/oauth-and-origin.test.ts
+
+Blocked/uncertain:
+- none
+
+Next:
+- Create pull request with auto-merge to main for deployment hardening fixes
 
 

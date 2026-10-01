@@ -52,6 +52,23 @@ describe('getPublicOrigin', () => {
     expect(getPublicOrigin(req, url)).toBe('https://octodb.design-bakery.com');
   });
 
+  it('handles X-Forwarded-Host without X-Forwarded-Proto (defaulting to http)', () => {
+    const req = makeMockRequest({
+      'x-forwarded-host': 'forwarded.example.com',
+    });
+    const url = new URL('http://localhost:3001/api/auth/google');
+    expect(getPublicOrigin(req, url)).toBe('http://forwarded.example.com');
+  });
+
+  it('handles X-Forwarded-Proto combined with Host header', () => {
+    const req = makeMockRequest({
+      'x-forwarded-proto': 'https',
+      host: 'secure.example.com',
+    });
+    const url = new URL('http://localhost:3001/api/auth/google');
+    expect(getPublicOrigin(req, url)).toBe('https://secure.example.com');
+  });
+
   it('falls back to Host header when forwarded headers are absent', () => {
     const req = makeMockRequest({
       host: 'preview.octo.local:8090',
@@ -175,6 +192,13 @@ describe('Server OAuth & Me HTTP Routes', () => {
     expect(res.status).toBe(302);
     const location = res.headers.get('location');
     expect(location).toBe('https://octodb.design-bakery.com/#auth_error=access_denied');
+  });
+
+  it('GET /api/nonexistent returns 404 JSON and does not trigger SPA fallback', async () => {
+    const res = await fetch(`${baseUrl}/api/nonexistent`);
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toContain('Not found');
   });
 });
 
