@@ -20,6 +20,7 @@ import { ensureThumbnail } from '../media/thumbnail-service';
 import { signMediaUrl, verifyMediaToken } from '../media/media-token';
 import { hashShareToken } from '../media/share-service';
 import { JobOutcome, processJob } from '../jobs/worker';
+import { AUTH_GUIDANCE, capabilitiesForScopes, hasScope, OctoScope } from '../api/capabilities';
 import { hashApiKeySecret } from '../api/keys';
 import {
   dbDeleteFile,
@@ -293,6 +294,35 @@ async function drainQueueOnce(maxJobs = 10): Promise<JobOutcome[]> {
   return outcomes;
 }
 
+/**
+ * Enforces a token scope. Human sessions carry no scope list and are not limited
+ * here; API-key callers must hold the required scope or the call is refused.
+ */
+function requireScope(auth: AuthContext, scope: OctoScope): boolean {
+  if (!auth.apiKey) return true;
+  return hasScope(auth.apiKey.scopes, scope);
+}
+
+/** Standard refusal body for a missing scope. */
+function scopeDenied(res: ServerResponse, scope: OctoScope): void {
+  sendJson(res, 403, { error: `FORBIDDEN: Token is missing the required '${scope}' scope` });
+}
+
+/** Attributes an agent action to its principal for audit. Best-effort. */
+async function attributeAgentAction(
+  auth: AuthContext,
+  workspaceId: string,
+  eventType: string,
+  summary: string
+): Promise<void> {
+  if (!auth.apiKey) return;
+  try {
+    await dbRecordActivity(workspaceId, eventType, summary, null, auth.principal.id);
+  } catch {
+    // Audit attribution must never break the request path.
+  }
+}
+
 export const server = createServer(async (req, res) => {
   // Handle CORS Preflight
   if (req.method === 'OPTIONS') {
@@ -399,6 +429,10 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
       }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
 
       // If workspace-scoped key, restrict list to that specific workspace
       if (auth.apiKey && auth.apiKey.workspaceId) {
@@ -443,6 +477,10 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
       }
+      if (!requireScope(auth, 'files')) {
+        scopeDenied(res, 'files');
+        return;
+      }
 
       const workspaceId = url.searchParams.get('workspaceId');
       if (!workspaceId) {
@@ -472,6 +510,10 @@ export const server = createServer(async (req, res) => {
       const auth = await authenticateRequest(req);
       if (!auth) {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
         return;
       }
 
@@ -544,6 +586,12 @@ export const server = createServer(async (req, res) => {
         etag?.replace(/"/g, '') ?? null
       );
 
+      await attributeAgentAction(
+        auth,
+        workspaceId,
+        'file.uploaded',
+        `File ${name} uploaded by agent principal`
+      );
       sendJson(res, 201, fileRecord);
       return;
     }
@@ -676,6 +724,10 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
       }
+      if (!requireScope(auth, 'delete')) {
+        scopeDenied(res, 'delete');
+        return;
+      }
 
       const fileId = pathname.slice('/api/files/'.length);
       const workspaceId = url.searchParams.get('workspaceId');
@@ -700,6 +752,7 @@ export const server = createServer(async (req, res) => {
         await objectStore.delete(deleted.storageKey);
       }
 
+      await attributeAgentAction(auth, workspaceId, 'file.deleted', `File ${fileId} deleted by agent principal`);
       sendJson(res, 200, { success: true, fileId });
       return;
     }
@@ -709,6 +762,10 @@ export const server = createServer(async (req, res) => {
       const auth = await authenticateRequest(req);
       if (!auth) {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'files')) {
+        scopeDenied(res, 'files');
         return;
       }
 
@@ -791,11 +848,28 @@ export const server = createServer(async (req, res) => {
 
       const bodyStr = await readBody(req);
       const parsed = JSON.parse(bodyStr);
-      const { name, workspaceId } = parsed;
+      const { name, workspaceId, scopes: requestedScopes } = parsed;
 
       if (!name) {
         sendJson(res, 400, { error: 'name is required' });
         return;
+      }
+
+      // Default is non-destructive: a new token can read and write files but
+      // cannot delete anything unless the delete scope is requested explicitly.
+      const ALLOWED_SCOPES = ['read', 'write', 'files', 'delete', 'admin'];
+      let scopes: string[] = ['read', 'write', 'files'];
+      if (requestedScopes !== undefined) {
+        if (!Array.isArray(requestedScopes) || requestedScopes.length === 0) {
+          sendJson(res, 400, { error: 'BAD_REQUEST: scopes must be a non-empty array' });
+          return;
+        }
+        const unknown = requestedScopes.filter((s: string) => !ALLOWED_SCOPES.includes(s));
+        if (unknown.length > 0) {
+          sendJson(res, 400, { error: `BAD_REQUEST: unknown scopes: ${unknown.join(', ')}` });
+          return;
+        }
+        scopes = requestedScopes;
       }
 
       // If workspace-scoped key requested, verify caller belongs to that workspace
@@ -832,7 +906,7 @@ export const server = createServer(async (req, res) => {
         auth.principal.id,
         workspaceId ?? null,
         keyRole,
-        ['read', 'write', 'files']
+        scopes
       );
 
       sendJson(res, 201, {
@@ -842,10 +916,39 @@ export const server = createServer(async (req, res) => {
           name,
           workspaceId: workspaceId ?? null,
           isAccountWide,
-          scopes: ['read', 'write', 'files'],
+          scopes,
         },
         rawSecret,
       });
+      return;
+    }
+
+    // 8b. Revoke an API key: DELETE /api/keys/:id
+    // Without this, a leaked agent token could never be withdrawn.
+    if (pathname.startsWith('/api/keys/') && req.method === 'DELETE') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const keyId = pathname.slice('/api/keys/'.length);
+      if (!keyId) {
+        sendJson(res, 400, { error: 'keyId is required' });
+        return;
+      }
+
+      const rows = await query<{ id: string }>(
+        'DELETE FROM octo.api_keys WHERE id = $1 AND principal_id = $2 RETURNING id',
+        [keyId, auth.principal.id]
+      );
+
+      if (rows.length === 0) {
+        sendJson(res, 404, { error: 'KEY_NOT_FOUND: no such key owned by this principal' });
+        return;
+      }
+
+      sendJson(res, 200, { success: true, keyId });
       return;
     }
 
@@ -1044,12 +1147,51 @@ export const server = createServer(async (req, res) => {
       return;
     }
 
+    // 9b. Capability discovery (Slice 7)
+    // Describes HOW to call Octo for the presented token, filtered to the scopes
+    // the token actually holds. The description is documentation only: every call
+    // is still authorized server-side against the token's scopes.
+    if (pathname === '/api/capabilities' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      // A session (human) caller is not scope-limited; report the full surface.
+      const scopes = auth.apiKey ? auth.apiKey.scopes : ['read', 'write', 'delete', 'files', 'admin'];
+      const capabilities = capabilitiesForScopes(scopes);
+
+      sendJson(res, 200, {
+        principal: {
+          id: auth.principal.id,
+          isGuest: auth.principal.isGuest,
+          // No email, provider token, or infrastructure credential is disclosed.
+        },
+        token: auth.apiKey
+          ? {
+              prefix: auth.apiKey.prefix,
+              workspaceId: auth.apiKey.workspaceId,
+              isAccountWide: auth.apiKey.isAccountWide,
+              scopes: auth.apiKey.scopes,
+            }
+          : { type: 'session' },
+        auth: AUTH_GUIDANCE,
+        capabilities,
+      });
+      return;
+    }
+
     // 10. Operations: jobs and activity (Slice 6)
     // Enqueue: POST /api/jobs
     if (pathname === '/api/jobs' && req.method === 'POST') {
       const auth = await authenticateRequest(req);
       if (!auth) {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
         return;
       }
 
@@ -1097,6 +1239,10 @@ export const server = createServer(async (req, res) => {
       const auth = await authenticateRequest(req);
       if (!auth) {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
         return;
       }
 

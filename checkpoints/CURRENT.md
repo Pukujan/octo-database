@@ -1,6 +1,6 @@
 # Current repository checkpoint
 
-<!-- continuity:current {"active_task":null,"active_task_file":null,"protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
+<!-- continuity:current {"active_task":"OCTO-0700","active_task_file":"tasks/TASK-OCTO-0700-agent-capabilities.md","protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
 
 ## Current state
 
@@ -14,6 +14,7 @@
 - **Slice 4 (Issue #6 / OCTO-0400)**: Merged (`PR #29`) — scoped read-only share links with token-hash storage, revocation, expiry, and share-scoped media signing.
 - **Fork-safe vision audit (OCTO-0401)**: Merged (`PR #28`) — the Playwright multimodal audit skips with a logged reason where `INFERHUB_API_KEY` cannot exist, so fork pull requests are no longer blocked by a secret they can never receive, while same-repo runs still assert the real score.
 - **Slice 6 (Issue #8 / OCTO-0600)**: Merged (`PR #31`) — durable Postgres job queue with lease-based recovery, retry accounting, idempotent enqueue, activity feed, and an operations page.
+- **Slice 7 (Issue #9 / OCTO-0700)**: In review — scoped agent tokens with capability discovery, server-side scope enforcement, audit attribution, and revocation.
 - **Schema hardening**: Grants narrowed to DML (TRUNCATE is not subject to RLS), anon-reachable principal lookup removed, and API-key roles capped at the creator's live role.
 - **Live Verification**: 3 guest workspaces verified live across active R2 and Google Drive archival tiers (`scripts/verify_live_guest_storage.py`).
 - **CGM Visual Direction**: Pinned editorial hero PNG (`docs/assets/octo-hero-banner.png`) registered in asset manifest and embedded in README.
@@ -26,4 +27,5 @@
 
 ## Next action
 
-No task is active. Slices 3 (`PR #27`), 4 (`PR #29`), 6 (`PR #31`), and the fork-safe vision audit (`PR #28`) are merged and closed out. Pick the next accepted slice from the open issues and open its task file before implementing.
+Merge Slice 7 after green gates, then continue with the next accepted slice.
+
