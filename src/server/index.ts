@@ -13,11 +13,12 @@ if (fs.existsSync('.env') && typeof process.loadEnvFile === 'function') {
   process.loadEnvFile('.env');
 }
 import { createServer, IncomingMessage, ServerResponse } from 'http';
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { loadR2ConfigFromEnv, R2StorageProvider } from '../storage/r2-client';
 import { LocalObjectStore, ObjectStore, R2ObjectStore } from '../storage/object-store';
 import { ensureThumbnail } from '../media/thumbnail-service';
 import { signMediaUrl, verifyMediaToken } from '../media/media-token';
+import { hashShareToken } from '../media/share-service';
 import { hashApiKeySecret } from '../api/keys';
 import {
   dbDeleteFile,
@@ -30,7 +31,12 @@ import {
   dbInsertMembership,
   dbInsertWorkspace,
   dbListApiKeys,
+  dbListShares,
   dbListWorkspaceFiles,
+  dbResolveShareById,
+  dbResolveShareByTokenHash,
+  dbRevokeShare,
+  dbInsertShare,
   dbVerifyApiKey,
   query,
   testDbConnection,
@@ -38,6 +44,8 @@ import {
 import { Principal, WorkspaceRole } from '../types/auth';
 
 const PORT = parseInt(process.env['PORT'] ?? '3001', 10);
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Explicit opt-in local storage backend for CI/dev only. Production default is R2
 // and fails closed when credentials are absent, so uploads can never silently land
@@ -157,7 +165,13 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
     };
   }
 
-  // 2. Direct session / principal ID token (e.g. from guest login)
+  // 2. Direct session / principal ID token (e.g. from guest login).
+  // Shape-check before querying so a malformed token returns 401 rather than
+  // surfacing a Postgres uuid cast error as a 500.
+  if (!UUID_PATTERN.test(token)) {
+    return null;
+  }
+
   const rows = await query<{
     id: string;
     auth_user_id: string;
@@ -213,21 +227,27 @@ async function authorizeMediaRequest(
     return { principalId: bearer.principal.id, workspaceId, fileId };
   }
 
-  const claims = verifyMediaToken(
-    url.searchParams.get('fileId'),
-    url.searchParams.get('workspaceId'),
-    url.searchParams.get('principalId'),
-    url.searchParams.get('exp'),
-    url.searchParams.get('sig')
-  );
+  const claims = verifyMediaToken(url.searchParams);
   if (!claims) return null;
 
-  // Membership is still re-checked, so revoking access invalidates live tokens.
-  const mem = await dbGetWorkspaceMembership(claims.workspaceId, claims.principalId);
-  if (!mem) return null;
+  if (claims.kind === 'principal') {
+    // Membership is still re-checked, so revoking access invalidates live tokens.
+    const mem = await dbGetWorkspaceMembership(claims.workspaceId, claims.principalId);
+    if (!mem) return null;
+    return {
+      principalId: claims.principalId,
+      workspaceId: claims.workspaceId,
+      fileId: claims.fileId,
+    };
+  }
+
+  // Share-scoped media: the share must still be active. Revoking or expiring the
+  // link therefore also invalidates every media URL it signed.
+  const share = await dbResolveShareById(claims.shareId);
+  if (!share || share.workspaceId !== claims.workspaceId) return null;
 
   return {
-    principalId: claims.principalId,
+    principalId: share.createdBy,
     workspaceId: claims.workspaceId,
     fileId: claims.fileId,
   };
@@ -587,7 +607,12 @@ export const server = createServer(async (req, res) => {
         // Not an image (or original missing/corrupt): send the caller to the full
         // object instead of inventing a derivative.
         res.writeHead(302, {
-          Location: signMediaUrl('/api/files/content', { fileId, workspaceId, principalId }),
+          Location: signMediaUrl('/api/files/content', {
+            kind: 'principal',
+            fileId,
+            workspaceId,
+            principalId,
+          }),
         });
         res.end();
         return;
@@ -666,7 +691,12 @@ export const server = createServer(async (req, res) => {
 
       const items = [];
       for (const f of mediaFiles) {
-        const claims = { fileId: f.id, workspaceId, principalId: auth.principal.id };
+        const claims = {
+          kind: 'principal' as const,
+          fileId: f.id,
+          workspaceId,
+          principalId: auth.principal.id,
+        };
 
         // The full view uses the original (presigned R2 URL when available, else the
         // signed content route). The grid always uses the small cached derivative.
@@ -775,6 +805,201 @@ export const server = createServer(async (req, res) => {
           scopes: ['read', 'write', 'files'],
         },
         rawSecret,
+      });
+      return;
+    }
+
+    // 9. Scoped share links (Slice 4)
+    // Create: POST /api/workspaces/shares
+    if (pathname === '/api/workspaces/shares' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const bodyStr = await readBody(req);
+      const parsed = JSON.parse(bodyStr);
+      const { workspaceId, resourceType, resourceId, permission, expiresInHours, validUntil } = parsed;
+
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+
+      // The server connects as a trusted role, so authorization is enforced here.
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to create share links' });
+        return;
+      }
+
+      if (permission && permission !== 'read' && permission !== 'upload') {
+        sendJson(res, 400, { error: "BAD_REQUEST: permission must be 'read' or 'upload'" });
+        return;
+      }
+
+      const rawToken = `octo_share_${randomBytes(32).toString('base64url')}`;
+      const tokenHash = hashShareToken(rawToken);
+      const tokenPrefix = rawToken.slice(0, 18);
+
+      let expiry: string | null = validUntil ?? null;
+      if (!expiry && typeof expiresInHours === 'number' && expiresInHours > 0) {
+        const d = new Date();
+        d.setHours(d.getHours() + expiresInHours);
+        expiry = d.toISOString();
+      }
+
+      // Reject a nonsensical expiry with a clear 400 instead of surfacing the
+      // database check constraint as an internal error.
+      if (expiry) {
+        const parsedExpiry = new Date(expiry);
+        if (!Number.isFinite(parsedExpiry.getTime())) {
+          sendJson(res, 400, { error: 'BAD_REQUEST: validUntil is not a valid timestamp' });
+          return;
+        }
+        if (parsedExpiry.getTime() <= Date.now()) {
+          sendJson(res, 400, { error: 'BAD_REQUEST: validUntil must be in the future' });
+          return;
+        }
+      }
+
+      const share = await dbInsertShare(
+        randomUUID(),
+        workspaceId,
+        resourceType ?? 'gallery',
+        resourceId ?? null,
+        tokenHash,
+        tokenPrefix,
+        permission ?? 'read',
+        expiry,
+        auth.principal.id
+      );
+
+      // The raw token is returned exactly once and never persisted or logged.
+      sendJson(res, 201, {
+        share: { ...share, tokenHash: undefined },
+        shareUrl: `/share/${rawToken}`,
+        rawToken,
+      });
+      return;
+    }
+
+    // List: GET /api/workspaces/shares?workspaceId=...
+    if (pathname === '/api/workspaces/shares' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to list share links' });
+        return;
+      }
+
+      const shares = await dbListShares(workspaceId);
+      sendJson(res, 200, shares);
+      return;
+    }
+
+    // Revoke: DELETE /api/shares/:id?workspaceId=...
+    if (pathname.startsWith('/api/shares/') && req.method === 'DELETE') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const shareId = pathname.slice('/api/shares/'.length);
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!shareId || !workspaceId) {
+        sendJson(res, 400, { error: 'shareId and workspaceId are required' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to revoke share links' });
+        return;
+      }
+
+      const revoked = await dbRevokeShare(shareId);
+      if (!revoked || revoked.workspaceId !== workspaceId) {
+        sendJson(res, 404, { error: 'SHARE_NOT_FOUND' });
+        return;
+      }
+
+      sendJson(res, 200, { success: true, shareId });
+      return;
+    }
+
+    // Anonymous public view: GET /api/public/shares/:token
+    // Resolves the token to exactly one target resource. No workspace, sibling
+    // album, or admin route is reachable with the token alone.
+    if (pathname.startsWith('/api/public/shares/') && req.method === 'GET') {
+      const rawToken = pathname.slice('/api/public/shares/'.length);
+      if (!rawToken) {
+        sendJson(res, 400, { error: 'share token is required' });
+        return;
+      }
+
+      const tokenHash = hashShareToken(rawToken);
+      const share = await dbResolveShareByTokenHash(tokenHash);
+
+      // Unknown, revoked, not-yet-valid, and expired all fail identically, so the
+      // response cannot be used to probe which links ever existed.
+      if (!share) {
+        sendJson(res, 404, { error: 'SHARE_NOT_FOUND_OR_INACTIVE' });
+        return;
+      }
+
+      const mediaFiles = (await dbListWorkspaceFiles(share.workspaceId)).filter(
+        (f) => f.mimeType.startsWith('image/') || f.mimeType.startsWith('video/')
+      );
+
+      const items = [];
+      for (const f of mediaFiles) {
+        const claims = {
+          kind: 'share' as const,
+          fileId: f.id,
+          workspaceId: share.workspaceId,
+          shareId: share.shareId,
+        };
+
+        // Media URLs are capped at the share's own expiry so they cannot outlive it.
+        const fullUrl = signMediaUrl('/api/files/content', claims, 3600, share.validUntil);
+        const thumbnailUrl = signMediaUrl('/api/files/thumbnail', claims, 3600, share.validUntil);
+
+        items.push({
+          id: f.id,
+          name: f.name,
+          mimeType: f.mimeType,
+          sizeBytes: f.sizeBytes,
+          kind: f.mimeType.startsWith('video/') ? 'video' : 'image',
+          thumbnailUrl,
+          fullUrl,
+          createdAt: f.createdAt,
+        });
+      }
+
+      // Only share-scoped fields are returned: no workspace name, members, or IDs
+      // beyond the shared target itself.
+      sendJson(res, 200, {
+        share: {
+          id: share.shareId,
+          resourceType: share.resourceType,
+          permission: share.permission,
+          validUntil: share.validUntil,
+        },
+        items,
       });
       return;
     }

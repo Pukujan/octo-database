@@ -259,3 +259,131 @@ export async function dbListApiKeys(principalId: string): Promise<
   `;
   return query(sql, [principalId]);
 }
+
+// 4. Scoped Share Operations (Slice 4)
+export interface DbShareRow {
+  id: string;
+  workspaceId: string;
+  resourceType: string;
+  resourceId: string | null;
+  tokenPrefix: string;
+  permission: string;
+  validFrom: string;
+  validUntil: string | null;
+  revokedAt: string | null;
+  createdBy: string;
+  createdAt: string;
+  lastAccessedAt: string | null;
+  accessCount: number;
+}
+
+export async function dbInsertShare(
+  id: string,
+  workspaceId: string,
+  resourceType: string,
+  resourceId: string | null,
+  tokenHash: string,
+  tokenPrefix: string,
+  permission: string,
+  validUntil: string | null,
+  createdBy: string
+): Promise<DbShareRow> {
+  const sql = `
+    INSERT INTO octo.shares
+      (id, workspace_id, resource_type, resource_id, token_hash, token_prefix, permission, valid_until, created_by)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    RETURNING
+      id, workspace_id AS "workspaceId", resource_type AS "resourceType", resource_id AS "resourceId",
+      token_prefix AS "tokenPrefix", permission, valid_from AS "validFrom", valid_until AS "validUntil",
+      revoked_at AS "revokedAt", created_by AS "createdBy", created_at AS "createdAt",
+      last_accessed_at AS "lastAccessedAt", access_count AS "accessCount";
+  `;
+  const rows = await query<DbShareRow>(sql, [
+    id,
+    workspaceId,
+    resourceType,
+    resourceId,
+    tokenHash,
+    tokenPrefix,
+    permission,
+    validUntil,
+    createdBy,
+  ]);
+  return rows[0]!;
+}
+
+/**
+ * Resolves an active share by token hash through the SECURITY DEFINER function.
+ * Anonymous callers have no session, so this must not rely on RLS.
+ */
+export async function dbResolveShareByTokenHash(tokenHash: string): Promise<{
+  shareId: string;
+  workspaceId: string;
+  resourceType: string;
+  resourceId: string | null;
+  permission: string;
+  validUntil: string | null;
+  createdBy: string;
+} | null> {
+  const sql = `
+    SELECT s.id AS "shareId", s.workspace_id AS "workspaceId", s.resource_type AS "resourceType",
+           s.resource_id AS "resourceId", s.permission, s.valid_until AS "validUntil",
+           s.created_by AS "createdBy"
+    FROM octo.resolve_share($1) r
+    JOIN octo.shares s ON s.id = r.share_id;
+  `;
+  const rows = await query<{
+    shareId: string;
+    workspaceId: string;
+    resourceType: string;
+    resourceId: string | null;
+    permission: string;
+    validUntil: string | null;
+    createdBy: string;
+  }>(sql, [tokenHash]);
+  return rows[0] ?? null;
+}
+
+/** Re-checks that a share referenced by a signed media URL is still active. */
+export async function dbResolveShareById(shareId: string): Promise<{
+  workspaceId: string;
+  createdBy: string;
+} | null> {
+  const sql = `
+    SELECT workspace_id AS "workspaceId", created_by AS "createdBy"
+    FROM octo.shares
+    WHERE id = $1
+      AND revoked_at IS NULL
+      AND valid_from <= now()
+      AND (valid_until IS NULL OR valid_until > now())
+    LIMIT 1;
+  `;
+  const rows = await query<{ workspaceId: string; createdBy: string }>(sql, [shareId]);
+  return rows[0] ?? null;
+}
+
+export async function dbListShares(workspaceId: string): Promise<DbShareRow[]> {
+  const sql = `
+    SELECT
+      id, workspace_id AS "workspaceId", resource_type AS "resourceType", resource_id AS "resourceId",
+      token_prefix AS "tokenPrefix", permission, valid_from AS "validFrom", valid_until AS "validUntil",
+      revoked_at AS "revokedAt", created_by AS "createdBy", created_at AS "createdAt",
+      last_accessed_at AS "lastAccessedAt", access_count AS "accessCount"
+    FROM octo.shares
+    WHERE workspace_id = $1
+    ORDER BY created_at DESC;
+  `;
+  return query<DbShareRow>(sql, [workspaceId]);
+}
+
+/** Revokes a share. Returns the workspace id, or null when no such share exists. */
+export async function dbRevokeShare(shareId: string): Promise<{ workspaceId: string } | null> {
+  const sql = `
+    UPDATE octo.shares
+    SET revoked_at = now()
+    WHERE id = $1 AND revoked_at IS NULL
+    RETURNING workspace_id AS "workspaceId";
+  `;
+  const rows = await query<{ workspaceId: string }>(sql, [shareId]);
+  return rows[0] ?? null;
+}

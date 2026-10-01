@@ -37,6 +37,7 @@ import { Principal, WorkspaceRole, WorkspaceSummary } from '../types/auth';
 import { WorkspaceContext } from '../auth/workspace-service';
 import { FileRecord } from '../storage/file-service';
 import { ApiKey } from '../api/keys';
+import { ShareSummary } from '../media/share-service';
 import { GalleryItem } from '../media/gallery-service';
 import { Gallery } from './Gallery';
 import { octoTheme } from './theme';
@@ -57,6 +58,9 @@ export interface DashboardProps {
   onUploadBinaryFile?: (file: File) => Promise<void>;
   onDeleteFile?: (fileId: string) => Promise<void>;
   onCreateApiKey?: (name: string, isAccountWide: boolean) => Promise<{ rawSecret: string }>;
+  shares?: ShareSummary[];
+  onCreateShare?: (expiresInHours: number | null) => Promise<{ rawToken: string }>;
+  onRevokeShare?: (shareId: string) => Promise<void>;
   isLoading?: boolean;
 }
 
@@ -123,6 +127,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onUploadBinaryFile,
   onDeleteFile,
   onCreateApiKey,
+  shares = [],
+  onCreateShare,
+  onRevokeShare,
   isLoading = false,
 }) => {
   const [selectedWsId, setSelectedWsId] = useState<string>(
@@ -131,6 +138,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [newKeyName, setNewKeyName] = useState('');
   const [newKeyIsAccountWide, setNewKeyIsAccountWide] = useState(false);
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
+  const [createdShareUrl, setCreatedShareUrl] = useState<string | null>(null);
+  const [shareExpiry, setShareExpiry] = useState<number>(0);
 
   const [uploadFileName, setUploadFileName] = useState('');
   const [uploadFileContent, setUploadFileContent] = useState('');
@@ -147,6 +156,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const res = await onCreateApiKey(newKeyName.trim(), newKeyIsAccountWide);
       setCreatedSecret(res.rawSecret);
       setNewKeyName('');
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleCreateShare = async () => {
+    if (!onCreateShare) return;
+    try {
+      const res = await onCreateShare(shareExpiry > 0 ? shareExpiry : null);
+      setCreatedShareUrl(`${window.location.origin}/share/${res.rawToken}`);
     } catch (e) {
       console.error(e);
     }
@@ -554,6 +573,110 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     items={galleryItems}
                     workspaceName={activeContext.workspace.name}
                   />
+                </CardContent>
+              </Card>
+
+              {/* Scoped Share Links (Slice 4) */}
+              <Card sx={{ mb: 4, borderRadius: 2 }}>
+                <CardContent>
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                      🔗 Scoped Share Links
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Read-only links that expose exactly this gallery. Anyone with the link can view it;
+                      revoking takes effect immediately.
+                    </Typography>
+                  </Box>
+
+                  {createdShareUrl && (
+                    <Card sx={{ p: 2, mb: 3, bgcolor: '#f0fdf4', borderColor: '#86efac', borderRadius: 2 }}>
+                      <Typography variant="subtitle2" sx={{ color: '#166534', fontWeight: 600 }}>
+                        Share link created (copy now — it is not stored and cannot be shown again):
+                      </Typography>
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all', mt: 0.5 }}>
+                        {createdShareUrl}
+                      </Typography>
+                    </Card>
+                  )}
+
+                  {onCreateShare && activeContext.capabilities.canManageSettings && (
+                    <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', mb: 3, flexWrap: 'wrap' }}>
+                      <Select
+                        size="small"
+                        value={shareExpiry}
+                        onChange={(e) => setShareExpiry(Number(e.target.value))}
+                        sx={{ minWidth: 230 }}
+                      >
+                        <MenuItem value={0}>No expiry</MenuItem>
+                        <MenuItem value={1}>Expires in 1 hour</MenuItem>
+                        <MenuItem value={24}>Expires in 24 hours</MenuItem>
+                        <MenuItem value={168}>Expires in 7 days</MenuItem>
+                      </Select>
+                      <Button
+                        variant="contained"
+                        size="medium"
+                        onClick={handleCreateShare}
+                        disabled={!onCreateShare}
+                        sx={{ whiteSpace: 'nowrap' }}
+                      >
+                        Create Share Link
+                      </Button>
+                    </Box>
+                  )}
+
+                  {shares.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">
+                      No share links created yet.
+                    </Typography>
+                  ) : (
+                    <TableContainer>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell sx={{ fontWeight: 600, width: '14%' }}>Status</TableCell>
+                            <TableCell sx={{ fontWeight: 600, width: '14%' }}>Permission</TableCell>
+                            <TableCell sx={{ fontWeight: 600 }}>Expires</TableCell>
+                            <TableCell sx={{ fontWeight: 600, width: '14%' }}>Views</TableCell>
+                            <TableCell sx={{ fontWeight: 600, width: '14%' }} align="right">
+                              Actions
+                            </TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {shares.map((sh) => (
+                            <TableRow key={sh.id}>
+                              <TableCell>
+                                <Chip
+                                  label={sh.active ? 'Active' : sh.revokedAt ? 'Revoked' : 'Expired'}
+                                  size="small"
+                                  color={sh.active ? 'success' : 'default'}
+                                />
+                              </TableCell>
+                              <TableCell sx={{ whiteSpace: 'nowrap' }}>{sh.permission}</TableCell>
+                              <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                                {sh.validUntil ? new Date(sh.validUntil).toLocaleString() : 'Never'}
+                              </TableCell>
+                              <TableCell>{sh.accessCount}</TableCell>
+                              <TableCell align="right">
+                                {onRevokeShare && sh.active && (
+                                  <Button
+                                    size="small"
+                                    variant="outlined"
+                                    color="error"
+                                    onClick={() => onRevokeShare(sh.id)}
+                                    sx={{ whiteSpace: 'nowrap' }}
+                                  >
+                                    Revoke
+                                  </Button>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  )}
                 </CardContent>
               </Card>
 
