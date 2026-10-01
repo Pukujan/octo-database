@@ -718,9 +718,12 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const downloadUrl = r2Provider
-        ? await r2Provider.generatePresignedDownloadUrl(file.storageKey, 3600)
-        : `/api/files/content?fileId=${fileId}&workspaceId=${workspaceId}`;
+      // An archived file has no R2 object to presign, so send the caller to the
+      // content endpoint, which restores the bytes on demand.
+      const downloadUrl =
+        r2Provider && file.archiveState !== 'archived_drive'
+          ? await r2Provider.generatePresignedDownloadUrl(file.storageKey, 3600)
+          : `/api/files/content?fileId=${fileId}&workspaceId=${workspaceId}`;
       sendJson(res, 200, { file, downloadUrl });
       return;
     }
@@ -967,9 +970,12 @@ export const server = createServer(async (req, res) => {
 
         // The full view uses the original (presigned R2 URL when available, else the
         // signed content route). The grid always uses the small cached derivative.
-        const fullUrl = r2Provider
-          ? await r2Provider.generatePresignedDownloadUrl(f.storageKey, 3600)
-          : signMediaUrl('/api/files/content', claims);
+        // An archived file has no R2 object to presign, so it goes through the
+        // content route, which restores the bytes on demand.
+        const fullUrl =
+          r2Provider && f.archiveState !== 'archived_drive'
+            ? await r2Provider.generatePresignedDownloadUrl(f.storageKey, 3600)
+            : signMediaUrl('/api/files/content', claims);
 
         const thumbnailUrl = signMediaUrl('/api/files/thumbnail', claims);
 

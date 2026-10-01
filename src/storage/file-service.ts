@@ -139,7 +139,12 @@ export async function getWorkspaceFile(
   }
 
   const file = mapFileRowToRecord(data);
-  const downloadUrl = await r2.generatePresignedDownloadUrl(file.storageKey, 3600);
+  // An archived file has no R2 object to presign; the content endpoint restores
+  // it from the cold tier on demand instead.
+  const downloadUrl =
+    (data as { archive_state?: string }).archive_state === 'archived_drive'
+      ? `/api/files/content?fileId=${fileId}&workspaceId=${workspaceId}`
+      : await r2.generatePresignedDownloadUrl(file.storageKey, 3600);
 
   return { file, downloadUrl };
 }
