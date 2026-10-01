@@ -24,4 +24,25 @@ Then begin #3; #15/#18 do not block product work.
 
 ## Checkpoint log
 
-The continuation audit aligned policy, handoff, task, and issue scope with the owner instructions. Local Ruff lint/format, strict mypy, 18 JSON contracts, and four integrity tests pass. Pinned helper validation is being checked; remote runner execution and repository auto-merge remain unresolved.
+### 2026-09-30 21:44:00 UTC — Pukujan
+
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":["contracts","CI configuration"],"completed":["Bootstrap repository contract and CI gates"],"decisions":["Follow owner authority and minimum sufficient change"],"evidence":["PR #17 merged with green gates"],"next_action":"Begin Slice 1","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-0001","timestamp":"2026-09-30T21:44:00Z"} -->
+
+Completed:
+- Bootstrap repository contract and CI gates
+
+Evidence:
+- PR #17 merged with green gates
+
+Decisions:
+- Follow owner authority and minimum sufficient change
+
+Changed:
+- contracts
+- CI configuration
+
+Blocked/uncertain:
+- none
+
+Next:
+- Begin Slice 1

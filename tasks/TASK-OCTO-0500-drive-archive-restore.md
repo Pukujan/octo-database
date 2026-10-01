@@ -22,8 +22,26 @@ Connect Google Drive OAuth 2.0 and Cloudflare R2 active storage to provide verif
 
 ## Checkpoint log
 
-Verified live Cloudflare R2 access across 8 buckets including dedicated `octo` bucket.
-Verified live Google Drive v3 API connection under personal account with 5.00 TB total quota.
-Verified 3 separate guest accounts performing end-to-end storage lifecycle: active R2 upload, SHA-256 hash validation, archival to Google Drive, R2 active deletion, and byte-perfect restoration from Google Drive back to R2.
-Verified cross-workspace storage path isolation preventing guest accounts from reading or overwriting other workspaces' files.
-All repository gates pass cleanly: Python unittests, Vitest tests, TypeScript type checking, Ruff lint/format, Mypy, and 18 JSON contracts.
+### 2026-10-01 02:00:00 UTC — Pukujan
+
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":["scripts/","docs/assets/","README.md"],"completed":["Google Drive 5TB cold storage archive lifecycle and 3-guest workspace verification"],"decisions":["Use OAuth 2.0 refresh token with drive.file scope and PNG hero banner per CGM"],"evidence":["PR #24 merged with green gates"],"next_action":"Begin Slice 3 gallery","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-0500","timestamp":"2026-10-01T02:00:00Z"} -->
+
+Completed:
+- Google Drive 5TB cold storage archive lifecycle and 3-guest workspace verification
+
+Evidence:
+- PR #24 merged with green gates
+
+Decisions:
+- Use OAuth 2.0 refresh token with drive.file scope and PNG hero banner per CGM
+
+Changed:
+- scripts/
+- docs/assets/
+- README.md
+
+Blocked/uncertain:
+- none
+
+Next:
+- Begin Slice 3 gallery

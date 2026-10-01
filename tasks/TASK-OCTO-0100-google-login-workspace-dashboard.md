@@ -22,6 +22,26 @@ Deliver the first real product path: Google sign-in → Octo identity → author
 
 ## Checkpoint log
 
-Implemented canonical tables (`octo.principals`, `octo.workspaces`, `octo.workspace_memberships`) with PostgreSQL Row-Level Security policies.
-Verified in real PostgreSQL 16 that creator bootstrap membership succeeds, non-member workspace list returns 0 rows, direct ID guessing is blocked, and client self-promotion to platform owner is rejected by RLS.
-Unit, integration, and security-negative TypeScript test suites pass cleanly with strict types (`tsc --noEmit`) and vitest.
+### 2026-09-30 23:00:00 UTC — Pukujan
+
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":["supabase/migrations","src/auth","src/ui"],"completed":["Implement Google login, principals, workspaces, RLS, and React MUI dashboard"],"decisions":["Use PostgreSQL RLS for multi-workspace isolation"],"evidence":["PR #20 merged with green gates"],"next_action":"Begin Slice 2","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-0100","timestamp":"2026-09-30T23:00:00Z"} -->
+
+Completed:
+- Implement Google login, principals, workspaces, RLS, and React MUI dashboard
+
+Evidence:
+- PR #20 merged with green gates
+
+Decisions:
+- Use PostgreSQL RLS for multi-workspace isolation
+
+Changed:
+- supabase/migrations
+- src/auth
+- src/ui
+
+Blocked/uncertain:
+- none
+
+Next:
+- Begin Slice 2

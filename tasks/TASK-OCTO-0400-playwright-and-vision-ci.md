@@ -21,7 +21,26 @@ Setup Playwright E2E testing and automated multimodal vision verification using 
 
 ## Checkpoint log
 
-Verified locally that Qwen 3.8 Flash audits rendered screenshots of the Login Screen (score: 86/100) and Authenticated Dashboard (score: 88/100).
-Interactive E2E flow (Guest entry, R2 file upload, API key minting, and sign out) passes 100% cleanly.
-Repository secret `INFERHUB_API_KEY` configured on `Pukujan/octo-database`.
-All local checks (typecheck, tests, ruff, mypy, PCM, CGM, ACS) pass.
+### 2026-10-01 01:00:00 UTC — Pukujan
+
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":["tests/e2e","src/qa/vision-verifier.ts","playwright.config.ts"],"completed":["Playwright E2E and Alibaba Qwen 3.8 Flash multimodal vision audit in CI"],"decisions":["Incorporate vision model visual audit directly into gates job"],"evidence":["PR #23 merged with green gates"],"next_action":"Deliver Slice 5 storage archival","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-0400","timestamp":"2026-10-01T01:00:00Z"} -->
+
+Completed:
+- Playwright E2E and Alibaba Qwen 3.8 Flash multimodal vision audit in CI
+
+Evidence:
+- PR #23 merged with green gates
+
+Decisions:
+- Incorporate vision model visual audit directly into gates job
+
+Changed:
+- tests/e2e
+- src/qa/vision-verifier.ts
+- playwright.config.ts
+
+Blocked/uncertain:
+- none
+
+Next:
+- Deliver Slice 5 storage archival
