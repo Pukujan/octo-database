@@ -1,12 +1,11 @@
 # Current repository checkpoint
 
-<!-- continuity:current {"active_task":"OCTO-0001","active_task_file":"tasks/TASK-OCTO-0001-bootstrap-platform-contract.md","protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
+<!-- continuity:current {"active_task":"OCTO-0100","active_task_file":"tasks/TASK-OCTO-0100-google-login-workspace-dashboard.md","protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
 
 ## Current state
 
-Main contains the initial README. PR #17 holds the PCM, CGM, and ACS bootstrap contracts.
-The owner directed making the repository public and using GitHub-hosted ubuntu-latest for CI and auto-merge.
-Run 36783305776 was queued at this audit; it has no successful validator evidence yet.
+Bootstrap completed: PR #17 merged to main as `6d08b91` with green GitHub-hosted gates (run 36798811524).
+Slice 1 (Issue #3 / OCTO-0100) implemented: canonical schema/RLS, Supabase auth/authorization, React MUI dashboard, and full test suite.
 
 ## Owner corrections
 
@@ -17,5 +16,5 @@ Auto-merge and proper CI (integrity/integration validation, type checking, lint,
 
 ## Next action
 
-Run genuine gates for PR #17 on GitHub-hosted ubuntu-latest, verify checks pass, and merge after green checks. Begin #3 next.
+Push PR for Slice 1, verify gates on GitHub-hosted runner, merge via auto-merge, and begin Slice 2 (#4).
 Use planning/OWNER_INSTRUCTIONS.md for the owner-message list and implementation record.

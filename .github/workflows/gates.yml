@@ -48,6 +48,21 @@ jobs:
       - name: Integrity integration tests
         run: '"$VALIDATION_ROOT/venv/bin/python" -m unittest discover -s tests -v'
 
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npm run typecheck
+
+      - name: Frontend and authorization tests
+        run: npm test
       - name: Validate pinned PCM adopter state
         shell: bash
         run: |
