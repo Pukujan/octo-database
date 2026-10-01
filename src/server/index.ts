@@ -16,6 +16,14 @@ import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { randomBytes, randomUUID } from 'crypto';
 import { loadR2ConfigFromEnv, R2StorageProvider } from '../storage/r2-client';
 import { LocalObjectStore, ObjectStore, R2ObjectStore } from '../storage/object-store';
+import { GoogleDriveProvider, loadGoogleDriveConfigFromEnv } from '../storage/google-drive-provider';
+import {
+  ArchiveDeps,
+  ArchiveFileRecord,
+  ArchiveState,
+  archiveFile,
+  restoreFile,
+} from '../storage/archive-service';
 import { ensureThumbnail } from '../media/thumbnail-service';
 import { signMediaUrl, verifyMediaToken } from '../media/media-token';
 import { hashShareToken } from '../media/share-service';
@@ -26,6 +34,7 @@ import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { hashApiKeySecret } from '../api/keys';
 import {
   dbDeleteFile,
+  dbGetArchiveRecord,
   dbGetAuthorizedWorkspaces,
   dbGetFile,
   dbGetWorkspaceMembership,
@@ -52,6 +61,7 @@ import {
   dbResolveShareByTokenHash,
   dbRevokeShare,
   dbInsertShare,
+  dbUpdateArchiveState,
   dbVerifyApiKey,
   query,
   testDbConnection,
@@ -87,6 +97,83 @@ const objectStore: ObjectStore | null = r2Provider
   : useLocalStorage
     ? new LocalObjectStore(LOCAL_STORAGE_ROOT)
     : null;
+
+// Cold/archival tier (Slice 5). Optional: archival is simply unavailable when
+// Drive credentials are absent, rather than half-configured.
+let driveProvider: GoogleDriveProvider | null = null;
+try {
+  driveProvider = new GoogleDriveProvider(loadGoogleDriveConfigFromEnv());
+} catch (e) {
+  console.warn('Google Drive archival disabled:', (e as Error).message);
+}
+
+/**
+ * Archive lifecycle wiring for the worker and the on-demand restore path. Null
+ * when either tier is unavailable, so callers fail closed instead of guessing.
+ */
+const archiveDeps: ArchiveDeps | null =
+  objectStore && driveProvider
+    ? {
+        active: objectStore,
+        archive: driveProvider,
+        updateFile: (fileId, patch) =>
+          dbUpdateArchiveState(fileId, {
+            archiveState: patch.archiveState,
+            ...(patch.archiveProvider !== undefined ? { archiveProvider: patch.archiveProvider } : {}),
+            ...(patch.archiveLocator !== undefined ? { archiveLocator: patch.archiveLocator } : {}),
+            ...(patch.archiveHash !== undefined ? { archiveHash: patch.archiveHash } : {}),
+            ...(patch.archivedAt !== undefined ? { archivedAt: patch.archivedAt } : {}),
+            ...(patch.lastVerifiedAt !== undefined ? { lastVerifiedAt: patch.lastVerifiedAt } : {}),
+          }),
+      }
+    : null;
+
+async function loadArchiveRecord(
+  workspaceId: string,
+  fileId: string
+): Promise<ArchiveFileRecord | null> {
+  const row = await dbGetArchiveRecord(workspaceId, fileId);
+  if (!row) return null;
+  return {
+    fileId: row.fileId,
+    workspaceId: row.workspaceId,
+    name: row.name,
+    mimeType: row.mimeType,
+    storageKey: row.storageKey,
+    archiveState: row.archiveState as ArchiveState,
+    archiveLocator: row.archiveLocator,
+    archiveHash: row.archiveHash,
+  };
+}
+
+/**
+ * Ensures a file's bytes are present in the active tier, restoring them from the
+ * cold tier first when the file has been archived. Returns the bytes, or null
+ * when they are unavailable. This is what lets an archived image still open
+ * through its unchanged logical file id.
+ */
+async function ensureActiveBytes(
+  workspaceId: string,
+  file: { id: string; storageKey: string; archiveState: string }
+): Promise<Buffer | null> {
+  if (!objectStore) return null;
+
+  const direct = await objectStore.get(file.storageKey);
+  if (direct) return direct;
+
+  if (file.archiveState !== 'archived_drive' || !archiveDeps) return null;
+
+  const record = await loadArchiveRecord(workspaceId, file.id);
+  if (!record) return null;
+
+  const result = await restoreFile(archiveDeps, record);
+  if (!result.ok) {
+    console.warn(`On-demand restore failed for ${file.id}: ${result.summary}`);
+    return null;
+  }
+
+  return objectStore.get(file.storageKey);
+}
 
 // Helper: send JSON response
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
@@ -292,6 +379,8 @@ async function drainQueueOnce(maxJobs = 10): Promise<JobOutcome[]> {
       activity: async (claimed, summary) => {
         await dbRecordActivity(claimed.workspaceId, 'job.transition', summary, claimed.jobId);
       },
+      archive: archiveDeps ?? undefined,
+      loadArchiveTarget: archiveDeps ? loadArchiveRecord : undefined,
     });
 
     outcomes.push(outcome);
@@ -658,7 +747,7 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const bytes = await objectStore.get(file.storageKey);
+      const bytes = await ensureActiveBytes(workspaceId, file);
       if (!bytes) {
         sendJson(res, 404, { error: 'OBJECT_MISSING: Stored bytes not found for this record.' });
         return;
@@ -692,6 +781,13 @@ export const server = createServer(async (req, res) => {
 
       if (!objectStore) {
         sendJson(res, 503, { error: 'STORAGE_UNAVAILABLE: no storage backend configured.' });
+        return;
+      }
+
+      // A thumbnail needs the original bytes; pull them back from the cold tier
+      // first when the file has been archived.
+      if (file.archiveState === 'archived_drive' && !(await ensureActiveBytes(workspaceId, file))) {
+        sendJson(res, 404, { error: 'OBJECT_MISSING: Archived bytes could not be restored.' });
         return;
       }
 
@@ -760,6 +856,74 @@ export const server = createServer(async (req, res) => {
 
       await attributeAgentAction(auth, workspaceId, 'file.deleted', `File ${fileId} deleted by agent principal`);
       sendJson(res, 200, { success: true, fileId });
+      return;
+    }
+
+    // 7b. Archive / Restore: POST /api/files/:id/archive | /restore
+    // Both are queued as jobs rather than executed inline, so the copy-verify-
+    // delete ordering runs under the worker's lease and retry accounting.
+    if (
+      pathname.startsWith('/api/files/') &&
+      (pathname.endsWith('/archive') || pathname.endsWith('/restore')) &&
+      req.method === 'POST'
+    ) {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const direction = pathname.endsWith('/archive') ? 'archive' : 'restore';
+      const suffix = `/${direction}`;
+      const fileId = pathname.slice('/api/files/'.length, -suffix.length);
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!fileId || !workspaceId) {
+        sendJson(res, 400, { error: 'fileId and workspaceId required' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin' && mem.role !== 'operator')) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Operator role or higher required' });
+        return;
+      }
+
+      if (!archiveDeps) {
+        sendJson(res, 503, {
+          error: 'ARCHIVE_UNAVAILABLE: Google Drive archival is not configured on this server.',
+        });
+        return;
+      }
+
+      const file = await dbGetFile(workspaceId, fileId);
+      if (!file) {
+        sendJson(res, 404, { error: 'FILE_NOT_FOUND' });
+        return;
+      }
+
+      const jobType = direction === 'archive' ? 'archive_file' : 'restore_file';
+      // One in-flight request per (file, direction): a repeat returns the
+      // original job instead of queueing a second copy of the same transition.
+      const { job, created } = await dbEnqueueJob(
+        randomUUID(),
+        workspaceId,
+        jobType,
+        `${direction}:${fileId}`,
+        { fileId, storageKey: file.storageKey, mimeType: file.mimeType },
+        auth.principal.id
+      );
+
+      if (created) {
+        await dbRecordActivity(
+          workspaceId,
+          'file.archive_requested',
+          `File ${fileId} ${direction} queued`,
+          job.id,
+          auth.principal.id
+        );
+      }
+
+      sendJson(res, 202, { job, created });
       return;
     }
 
