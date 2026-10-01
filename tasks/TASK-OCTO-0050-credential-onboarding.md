@@ -20,5 +20,25 @@ Define and verify the runtime secret boundary for Google Drive and Cloudflare R2
 
 ## Checkpoint log
 
-Verified live S3 API connectivity against Cloudflare R2 dedicated `octo` bucket.
-Confirmed zero credential values in Git history or client bundles.
+### 2026-09-30 22:30:00 UTC — Pukujan
+
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":[".env.example","docs/security/RUNTIME_SECRETS.md"],"completed":["Define runtime secret contract without storing values in Git"],"decisions":["Keep credentials in .env strictly gitignored"],"evidence":["PR #19 merged with green gates"],"next_action":"Begin Slice 1","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-0050","timestamp":"2026-09-30T22:30:00Z"} -->
+
+Completed:
+- Define runtime secret contract without storing values in Git
+
+Evidence:
+- PR #19 merged with green gates
+
+Decisions:
+- Keep credentials in .env strictly gitignored
+
+Changed:
+- .env.example
+- docs/security/RUNTIME_SECRETS.md
+
+Blocked/uncertain:
+- none
+
+Next:
+- Begin Slice 1

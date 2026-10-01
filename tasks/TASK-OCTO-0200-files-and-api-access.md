@@ -23,6 +23,26 @@ Connect the database to Cloudflare R2 active object storage, provide guest login
 
 ## Checkpoint log
 
-Verified live Cloudflare R2 bucket connection, putObject, getObject, presigned download URLs, and deleteObject.
-Verified in real PostgreSQL 16 that files RLS isolates cross-workspace reads, and API key scoping prevents malicious cross-workspace binding.
-TypeScript type checking and Vitest test suites pass with 100% green status.
+### 2026-10-01 00:00:00 UTC — Pukujan
+
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":["src/storage","src/api","src/server"],"completed":["Connect Cloudflare R2 active storage, file catalog, guest login, and API keys"],"decisions":["Provide guest login and workspace-scoped machine API tokens"],"evidence":["PR #21 and PR #22 merged with green gates"],"next_action":"Begin QA and vision setup","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-0200","timestamp":"2026-10-01T00:00:00Z"} -->
+
+Completed:
+- Connect Cloudflare R2 active storage, file catalog, guest login, and API keys
+
+Evidence:
+- PR #21 and PR #22 merged with green gates
+
+Decisions:
+- Provide guest login and workspace-scoped machine API tokens
+
+Changed:
+- src/storage
+- src/api
+- src/server
+
+Blocked/uncertain:
+- none
+
+Next:
+- Begin QA and vision setup
