@@ -38,6 +38,7 @@ import { WorkspaceContext } from '../auth/workspace-service';
 import { FileRecord } from '../storage/file-service';
 import { ApiKey } from '../api/keys';
 import { ShareSummary } from '../media/share-service';
+import { OperationsActivity, OperationsJob, OperationsPage } from './OperationsPage';
 import { GalleryItem } from '../media/gallery-service';
 import { Gallery } from './Gallery';
 import { octoTheme } from './theme';
@@ -59,6 +60,10 @@ export interface DashboardProps {
   onDeleteFile?: (fileId: string) => Promise<void>;
   onCreateApiKey?: (name: string, isAccountWide: boolean) => Promise<{ rawSecret: string }>;
   shares?: ShareSummary[];
+  jobs?: OperationsJob[];
+  activity?: OperationsActivity[];
+  onRetryJob?: (jobId: string) => void;
+  onRunWorker?: () => void;
   onCreateShare?: (expiresInHours: number | null) => Promise<{ rawToken: string }>;
   onRevokeShare?: (shareId: string) => Promise<void>;
   isLoading?: boolean;
@@ -128,6 +133,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onDeleteFile,
   onCreateApiKey,
   shares = [],
+  jobs = [],
+  activity = [],
+  onRetryJob,
+  onRunWorker,
   onCreateShare,
   onRevokeShare,
   isLoading = false,
@@ -572,6 +581,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <Gallery
                     items={galleryItems}
                     workspaceName={activeContext.workspace.name}
+                  />
+                </CardContent>
+              </Card>
+
+              {/* Operations (Slice 6) */}
+              <Card sx={{ mb: 4, borderRadius: 2 }}>
+                <CardContent>
+                  <OperationsPage
+                    jobs={jobs}
+                    activity={activity}
+                    onRetryJob={onRetryJob}
+                    onRunWorker={onRunWorker}
                   />
                 </CardContent>
               </Card>

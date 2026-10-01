@@ -1,6 +1,6 @@
 # Current repository checkpoint
 
-<!-- continuity:current {"active_task":null,"active_task_file":null,"protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
+<!-- continuity:current {"active_task":"OCTO-0600","active_task_file":"tasks/TASK-OCTO-0600-operations-page.md","protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
 
 ## Current state
 
@@ -13,6 +13,7 @@
 - **Slice 3 (Issue #5 / OCTO-0300)**: Merged (`PR #27`) — media classifier, idempotent thumbnail derivatives, backend-agnostic object store, signed media URLs, gallery service and routes, React MUI gallery grid with modal lightbox.
 - **Slice 4 (Issue #6 / OCTO-0400)**: Merged (`PR #29`) — scoped read-only share links with token-hash storage, revocation, expiry, and share-scoped media signing.
 - **Fork-safe vision audit (OCTO-0401)**: Merged (`PR #28`) — the Playwright multimodal audit skips with a logged reason where `INFERHUB_API_KEY` cannot exist, so fork pull requests are no longer blocked by a secret they can never receive, while same-repo runs still assert the real score.
+- **Slice 6 (Issue #8 / OCTO-0600)**: In review — durable Postgres job queue with lease-based recovery, retry accounting, idempotent enqueue, activity feed, and an operations page.
 - **Schema hardening**: Grants narrowed to DML (TRUNCATE is not subject to RLS), anon-reachable principal lookup removed, and API-key roles capped at the creator's live role.
 - **Live Verification**: 3 guest workspaces verified live across active R2 and Google Drive archival tiers (`scripts/verify_live_guest_storage.py`).
 - **CGM Visual Direction**: Pinned editorial hero PNG (`docs/assets/octo-hero-banner.png`) registered in asset manifest and embedded in README.
@@ -25,4 +26,4 @@
 
 ## Next action
 
-No task is active. Slice 3 (`PR #27`), Slice 4 (`PR #29`), and the fork-safe vision audit (`PR #28`) are merged and closed out. Pick the next accepted slice from the open issues and open its task file before implementing.
+Merge Slice 6 after green gates, then continue with the next accepted slice.

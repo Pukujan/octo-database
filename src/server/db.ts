@@ -387,3 +387,197 @@ export async function dbRevokeShare(shareId: string): Promise<{ workspaceId: str
   const rows = await query<{ workspaceId: string }>(sql, [shareId]);
   return rows[0] ?? null;
 }
+
+// 5. Job Operations (Slice 6)
+export interface DbJobRow {
+  id: string;
+  workspaceId: string;
+  jobType: string;
+  state: string;
+  idempotencyKey: string;
+  attempt: number;
+  maxAttempts: number;
+  availableAt: string;
+  leaseExpiresAt: string | null;
+  payload: Record<string, unknown>;
+  result: Record<string, unknown> | null;
+  errorCode: string | null;
+  errorSummary: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const JOB_COLUMNS = `
+  id, workspace_id AS "workspaceId", job_type AS "jobType", state,
+  idempotency_key AS "idempotencyKey", attempt, max_attempts AS "maxAttempts",
+  available_at AS "availableAt", lease_expires_at AS "leaseExpiresAt",
+  payload, result, error_code AS "errorCode", error_summary AS "errorSummary",
+  completed_at AS "completedAt", created_at AS "createdAt", updated_at AS "updatedAt"
+`;
+
+/**
+ * Enqueues a job. A repeat with the same workspace, type, and idempotency key
+ * returns the existing job rather than creating a second logical unit.
+ */
+export async function dbEnqueueJob(
+  id: string,
+  workspaceId: string,
+  jobType: string,
+  idempotencyKey: string,
+  payload: Record<string, unknown>,
+  createdBy: string,
+  maxAttempts = 3
+): Promise<{ job: DbJobRow; created: boolean }> {
+  const insertSql = `
+    INSERT INTO octo.jobs
+      (id, workspace_id, job_type, idempotency_key, payload, created_by, max_attempts)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    ON CONFLICT (workspace_id, job_type, idempotency_key) DO NOTHING
+    RETURNING ${JOB_COLUMNS};
+  `;
+  const inserted = await query<DbJobRow>(insertSql, [
+    id,
+    workspaceId,
+    jobType,
+    idempotencyKey,
+    JSON.stringify(payload),
+    createdBy,
+    maxAttempts,
+  ]);
+
+  if (inserted[0]) {
+    return { job: inserted[0], created: true };
+  }
+
+  const existing = await query<DbJobRow>(
+    `SELECT ${JOB_COLUMNS} FROM octo.jobs
+     WHERE workspace_id = $1 AND job_type = $2 AND idempotency_key = $3`,
+    [workspaceId, jobType, idempotencyKey]
+  );
+  return { job: existing[0]!, created: false };
+}
+
+export async function dbListJobs(workspaceId: string, limit = 50): Promise<DbJobRow[]> {
+  return query<DbJobRow>(
+    `SELECT ${JOB_COLUMNS} FROM octo.jobs
+     WHERE workspace_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [workspaceId, limit]
+  );
+}
+
+export async function dbClaimJob(
+  worker: string,
+  leaseSeconds = 60
+): Promise<{
+  jobId: string;
+  workspaceId: string;
+  jobType: string;
+  attempt: number;
+  payload: Record<string, unknown>;
+} | null> {
+  const rows = await query<{
+    job_id: string;
+    workspace_id: string;
+    job_type: string;
+    attempt: number;
+    payload: Record<string, unknown>;
+  }>('SELECT * FROM octo.claim_job($1, $2)', [worker, leaseSeconds]);
+
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    jobId: row.job_id,
+    workspaceId: row.workspace_id,
+    jobType: row.job_type,
+    attempt: Number(row.attempt),
+    payload: row.payload ?? {},
+  };
+}
+
+export async function dbCompleteJob(
+  jobId: string,
+  result: Record<string, unknown>
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE octo.jobs
+     SET state = 'completed', result = $2, completed_at = now(),
+         lease_expires_at = NULL, lease_owner = NULL, updated_at = now()
+     WHERE id = $1 AND state = 'running'
+     RETURNING id`,
+    [jobId, JSON.stringify(result)]
+  );
+  return rows.length > 0;
+}
+
+export async function dbFailJob(
+  jobId: string,
+  attempt: number,
+  maxAttempts: number,
+  errorCode: string,
+  errorSummary: string,
+  retryable: boolean
+): Promise<{ state: string }> {
+  const exhausted = attempt >= maxAttempts;
+
+  if (!retryable || exhausted) {
+    await query(
+      `UPDATE octo.jobs
+       SET state = 'failed', error_code = $2, error_summary = $3, completed_at = now(),
+           lease_expires_at = NULL, lease_owner = NULL, updated_at = now()
+       WHERE id = $1`,
+      [jobId, errorCode, errorSummary]
+    );
+    return { state: 'failed' };
+  }
+
+  const backoffSeconds = Math.min(2 ** attempt, 300);
+  await query(
+    `UPDATE octo.jobs
+     SET state = 'queued', error_code = $2, error_summary = $3,
+         available_at = now() + make_interval(secs => $4),
+         lease_expires_at = NULL, lease_owner = NULL, updated_at = now()
+     WHERE id = $1`,
+    [jobId, errorCode, errorSummary, backoffSeconds]
+  );
+  return { state: 'queued' };
+}
+
+export async function dbRecordActivity(
+  workspaceId: string,
+  eventType: string,
+  summary: string,
+  jobId: string | null = null,
+  actorPrincipalId: string | null = null,
+  detail: Record<string, unknown> = {}
+): Promise<void> {
+  await query(
+    `INSERT INTO octo.activity (workspace_id, job_id, actor_principal_id, event_type, summary, detail)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [workspaceId, jobId, actorPrincipalId, eventType, summary, JSON.stringify(detail)]
+  );
+}
+
+export async function dbListActivity(
+  workspaceId: string,
+  limit = 50
+): Promise<
+  {
+    id: string;
+    eventType: string;
+    summary: string;
+    jobId: string | null;
+    createdAt: string;
+  }[]
+> {
+  return query(
+    `SELECT id, event_type AS "eventType", summary, job_id AS "jobId", created_at AS "createdAt"
+     FROM octo.activity
+     WHERE workspace_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [workspaceId, limit]
+  );
+}

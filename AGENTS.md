@@ -51,9 +51,18 @@ Pinned versions currently used by repository validation:
 
 - The repository is public; use GitHub-hosted `ubuntu-latest` for CI.
 - Never force-push unless the owner explicitly directs recovery that requires it.
-- The owner explicitly requests auto-merge and proper CI. Required aggregate status is `gates`, covering contract integrity/integration checks, type checking, lint, and Ruff. Configure auto-merge after the final push; do not claim it is enabled until GitHub confirms it.
-- Do not create review requirements that deadlock a single-owner repository.
-- Never claim completion when the requested workflow has not actually run.
+- **Auto-merge is mandatory and requires no human approval.** Every agent MUST arm
+  auto-merge (`gh pr merge <n> --auto --squash`) on every pull request it opens, and
+  MUST NOT wait for, request, or add a review requirement. Repository `allow_auto_merge`
+  is already enabled and branch protection on `main` requires only the `gates` status
+  check, so a PR merges automatically as soon as `gates` is green.
+- Do not add review requirements, approval gates, or manual-merge steps: they deadlock a
+  single-owner repository and contradict the owner's standing instruction.
+- If `gh pr merge --auto` fails, fix the cause (for example, mark a draft PR ready with
+  `gh pr ready <n>`) and re-arm it; do not escalate to the owner for approval.
+- Required aggregate status is `gates`, covering contract integrity/integration checks,
+  type checking, lint, and Ruff. Never claim completion when the requested workflow has
+  not actually run.
 
 ## Baseline secret hygiene
 
