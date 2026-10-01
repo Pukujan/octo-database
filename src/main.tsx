@@ -147,26 +147,35 @@ export const App: React.FC = () => {
   }, [sessionToken, principal?.id]);
 
   // Sync activeContext when principal loads
+  // Sync activeContext when principal loads or updates
   useEffect(() => {
-    if (principal && activeContext && (!activeContext.principal.email || activeContext.principal.id !== principal.id)) {
-      setActiveContext((prev) => (prev ? { ...prev, principal } : null));
+    if (principal && activeContext) {
+      if (
+        activeContext.principal.id !== principal.id ||
+        activeContext.principal.email !== principal.email ||
+        activeContext.principal.isPlatformOwner !== principal.isPlatformOwner
+      ) {
+        setActiveContext((prev) => (prev ? { ...prev, principal } : null));
+      }
     }
   }, [principal]);
 
   // Load files and keys for active workspace
   /** Reloads gallery media for a workspace. */
-  const refreshGallery = async (workspaceId: string) => {
-    if (!sessionToken) return;
+  const refreshGallery = async (workspaceId: string, tokenOverride?: string) => {
+    const token = tokenOverride ?? sessionToken;
+    if (!token) return;
     const res = await fetch(`${API_BASE}/api/gallery?workspaceId=${workspaceId}`, {
-      headers: { Authorization: `Bearer ${sessionToken}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) setGalleryItems(await res.json());
   };
 
   /** Reloads job and activity state for a workspace. */
-  const refreshOperations = async (workspaceId: string) => {
-    if (!sessionToken) return;
-    const headers = { Authorization: `Bearer ${sessionToken}` };
+  const refreshOperations = async (workspaceId: string, tokenOverride?: string) => {
+    const token = tokenOverride ?? sessionToken;
+    if (!token) return;
+    const headers = { Authorization: `Bearer ${token}` };
     const [jobsRes, activityRes] = await Promise.all([
       fetch(`${API_BASE}/api/jobs?workspaceId=${workspaceId}`, { headers }),
       fetch(`${API_BASE}/api/activity?workspaceId=${workspaceId}`, { headers }),
@@ -194,10 +203,11 @@ export const App: React.FC = () => {
   };
 
   /** Reloads scoped share links for a workspace. */
-  const refreshShares = async (workspaceId: string) => {
-    if (!sessionToken) return;
+  const refreshShares = async (workspaceId: string, tokenOverride?: string) => {
+    const token = tokenOverride ?? sessionToken;
+    if (!token) return;
     const res = await fetch(`${API_BASE}/api/workspaces/shares?workspaceId=${workspaceId}`, {
-      headers: { Authorization: `Bearer ${sessionToken}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) {
       const rows: ShareSummary[] = await res.json();
@@ -244,9 +254,12 @@ export const App: React.FC = () => {
   const handleSelectWorkspace = async (
     workspaceIdOrObj: string | WorkspaceSummary,
     roleHint?: string,
-    wsList?: WorkspaceSummary[]
+    wsList?: WorkspaceSummary[],
+    tokenOverride?: string,
+    principalOverride?: Principal
   ) => {
-    if (!sessionToken) return;
+    const token = tokenOverride ?? sessionToken;
+    if (!token) return;
 
     try {
       const workspaceId = typeof workspaceIdOrObj === 'string' ? workspaceIdOrObj : workspaceIdOrObj.id;
@@ -254,6 +267,7 @@ export const App: React.FC = () => {
       const list = wsList ?? workspaces;
       const ws = typeof workspaceIdOrObj === 'object' ? workspaceIdOrObj : list.find((w) => w.id === workspaceId);
       const role = (roleHint ?? ws?.role ?? 'member') as WorkspaceRole;
+      const activePrincipal = principalOverride ?? principal;
 
       if (ws) {
         setActiveContext({
@@ -262,12 +276,12 @@ export const App: React.FC = () => {
             slug: ws.slug,
             name: ws.name,
             description: ws.description,
-            createdBy: principal?.id ?? ws.id,
+            createdBy: activePrincipal?.id ?? ws.id,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           },
           role,
-          principal: principal ?? {
+          principal: activePrincipal ?? {
             id: ws.id,
             authUserId: ws.id,
             email: '',
@@ -279,17 +293,17 @@ export const App: React.FC = () => {
             updatedAt: new Date().toISOString(),
           },
           capabilities: {
-            canManageMembers: role === 'owner' || role === 'admin',
-            canUploadFiles: role === 'owner' || role === 'admin' || role === 'operator',
-            canDeleteWorkspace: role === 'owner',
-            canManageSettings: role === 'owner' || role === 'admin',
+            canManageMembers: role === 'owner' || role === 'admin' || Boolean(activePrincipal?.isPlatformOwner),
+            canUploadFiles: role === 'owner' || role === 'admin' || role === 'operator' || Boolean(activePrincipal?.isPlatformOwner),
+            canDeleteWorkspace: role === 'owner' || Boolean(activePrincipal?.isPlatformOwner),
+            canManageSettings: role === 'owner' || role === 'admin' || Boolean(activePrincipal?.isPlatformOwner),
           },
         });
       }
 
       // Fetch files
       const fRes = await fetch(`${API_BASE}/api/files?workspaceId=${workspaceId}`, {
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (fRes.ok) {
         setFiles(await fRes.json());
@@ -297,7 +311,7 @@ export const App: React.FC = () => {
 
       // Fetch API keys
       const kRes = await fetch(`${API_BASE}/api/keys`, {
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (kRes.ok) {
         setApiKeys(await kRes.json());
@@ -305,14 +319,14 @@ export const App: React.FC = () => {
 
       // Fetch gallery items
       const gRes = await fetch(`${API_BASE}/api/gallery?workspaceId=${workspaceId}`, {
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (gRes.ok) {
         setGalleryItems(await gRes.json());
       }
 
-      await refreshShares(workspaceId);
-      await refreshOperations(workspaceId);
+      await refreshShares(workspaceId, token);
+      await refreshOperations(workspaceId, token);
     } catch (e) {
       console.error('Failed to load workspace details:', e);
     }
@@ -353,7 +367,7 @@ export const App: React.FC = () => {
       };
 
       setWorkspaces([wsSummary]);
-      handleSelectWorkspace(wsSummary.id, 'owner');
+      handleSelectWorkspace(wsSummary, 'owner', [wsSummary], data.sessionToken, data.principal);
     } catch (err) {
       console.error('Guest login error:', err);
     } finally {

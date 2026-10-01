@@ -232,10 +232,11 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
       auth_user_id: string;
       email: string;
       display_name: string | null;
+      avatar_url: string | null;
       is_guest: boolean;
       is_platform_owner: boolean;
     }>(
-      'SELECT id, auth_user_id, email, display_name, is_guest, is_platform_owner FROM octo.principals WHERE id = $1',
+      'SELECT id, auth_user_id, email, display_name, avatar_url, is_guest, is_platform_owner FROM octo.principals WHERE id = $1',
       [verified.principalId]
     );
 
@@ -247,7 +248,7 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
       authUserId: pRow.auth_user_id,
       email: pRow.email,
       displayName: pRow.display_name,
-      avatarUrl: null,
+      avatarUrl: pRow.avatar_url ?? null,
       isPlatformOwner: pRow.is_platform_owner,
       isGuest: pRow.is_guest,
       createdAt: new Date().toISOString(),
@@ -280,10 +281,11 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
     auth_user_id: string;
     email: string;
     display_name: string | null;
+    avatar_url: string | null;
     is_guest: boolean;
     is_platform_owner: boolean;
   }>(
-    'SELECT id, auth_user_id, email, display_name, is_guest, is_platform_owner FROM octo.principals WHERE id = $1',
+    'SELECT id, auth_user_id, email, display_name, avatar_url, is_guest, is_platform_owner FROM octo.principals WHERE id = $1',
     [token]
   );
 
@@ -296,7 +298,7 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
       authUserId: pRow.auth_user_id,
       email: pRow.email,
       displayName: pRow.display_name,
-      avatarUrl: null,
+      avatarUrl: pRow.avatar_url ?? null,
       isPlatformOwner: pRow.is_platform_owner,
       isGuest: pRow.is_guest,
       createdAt: new Date().toISOString(),
