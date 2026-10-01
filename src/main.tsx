@@ -68,7 +68,16 @@ export const App: React.FC = () => {
         fetch(`${API_BASE}/api/me`, {
           headers: { Authorization: `Bearer ${token}` },
         })
-          .then((res) => (res.ok ? res.json() : null))
+          .then((res) => {
+            if (res.ok) return res.json();
+            if (res.status === 401) {
+              setSessionToken(null);
+              setPrincipal(null);
+              localStorage.removeItem('octo_token');
+              localStorage.removeItem('octo_principal');
+            }
+            return null;
+          })
           .then((data) => {
             if (data?.principal) {
               setPrincipal(data.principal);
@@ -90,7 +99,16 @@ export const App: React.FC = () => {
       fetch(`${API_BASE}/api/me`, {
         headers: { Authorization: `Bearer ${sessionToken}` },
       })
-        .then((res) => (res.ok ? res.json() : null))
+        .then((res) => {
+          if (res.ok) return res.json();
+          if (res.status === 401) {
+            setSessionToken(null);
+            setPrincipal(null);
+            localStorage.removeItem('octo_token');
+            localStorage.removeItem('octo_principal');
+          }
+          return null;
+        })
         .then((data) => {
           if (data?.principal) {
             setPrincipal(data.principal);

@@ -431,18 +431,14 @@ export function getPublicOrigin(req: IncomingMessage, url: URL): string {
   if (publicBase) {
     return publicBase.replace(/\/+$/, '');
   }
-  const forwardedProto = req.headers['x-forwarded-proto'];
-  const forwardedHost = req.headers['x-forwarded-host'];
-  if (forwardedProto && forwardedHost) {
-    const proto = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto).split(',')[0]!.trim();
-    const host = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost).split(',')[0]!.trim();
-    return `${proto}://${host}`;
-  }
-  if (req.headers.host) {
-    const proto = req.headers['x-forwarded-proto']
-      ? (Array.isArray(req.headers['x-forwarded-proto']) ? req.headers['x-forwarded-proto'][0] : req.headers['x-forwarded-proto']).split(',')[0]!.trim()
+  const hostHeader = req.headers['x-forwarded-host'] ?? req.headers.host;
+  if (hostHeader) {
+    const host = (Array.isArray(hostHeader) ? hostHeader[0] : hostHeader).split(',')[0]!.trim();
+    const protoHeader = req.headers['x-forwarded-proto'];
+    const proto = protoHeader
+      ? (Array.isArray(protoHeader) ? protoHeader[0] : protoHeader).split(',')[0]!.trim()
       : 'http';
-    return `${proto}://${req.headers.host}`;
+    return `${proto}://${host}`;
   }
   return url.origin;
 }
@@ -1867,8 +1863,9 @@ export const server = createServer(async (req, res) => {
     if (fs.existsSync(distPath) && req.method === 'GET') {
       const relPath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
       const filePath = path.join(distPath, relPath);
+      const normalizedDist = distPath.endsWith(path.sep) ? distPath : distPath + path.sep;
       // Prevent path traversal
-      if (filePath.startsWith(distPath) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      if ((filePath === distPath || filePath.startsWith(normalizedDist)) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
         const ext = path.extname(filePath).toLowerCase();
         const contentTypes: Record<string, string> = {
           '.html': 'text/html; charset=utf-8',
@@ -1891,9 +1888,9 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      // SPA fallback for HTML navigation requests
+      // SPA fallback for HTML navigation requests (excluding /api routes)
       const indexPath = path.join(distPath, 'index.html');
-      if (fs.existsSync(indexPath) && (!path.extname(pathname) || req.headers.accept?.includes('text/html'))) {
+      if (!pathname.startsWith('/api/') && fs.existsSync(indexPath) && (!path.extname(pathname) || req.headers.accept?.includes('text/html'))) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         fs.createReadStream(indexPath).pipe(res);
         return;

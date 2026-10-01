@@ -5,7 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=gravebuster
 WorkingDirectory=%h/apps/octo
 ExecStart=%h/apps/octo/deploy/gravebuster/autodeploy.sh
 TimeoutStartSec=1800
