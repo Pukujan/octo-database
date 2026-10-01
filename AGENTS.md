@@ -49,7 +49,7 @@ Pinned versions currently used by repository validation:
 
 ## Git and delivery
 
-- Use the owner-approved existing home runner for CI; do not invent runner isolation/provisioning work unless the owner requests it.
+- The repository is public; use GitHub-hosted `ubuntu-latest` for CI.
 - Never force-push unless the owner explicitly directs recovery that requires it.
 - The owner explicitly requests auto-merge and proper CI. Required aggregate status is `gates`, covering contract integrity/integration checks, type checking, lint, and Ruff. Configure auto-merge after the final push; do not claim it is enabled until GitHub confirms it.
 - Do not create review requirements that deadlock a single-owner repository.

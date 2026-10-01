@@ -5,7 +5,7 @@
 ## Current state
 
 Main contains the initial README. PR #17 holds the PCM, CGM, and ACS bootstrap contracts.
-The prior continuation changed CI to the existing `[self-hosted, gravebuster]` runner.
+The owner directed making the repository public and using GitHub-hosted ubuntu-latest for CI and auto-merge.
 Run 36783305776 was queued at this audit; it has no successful validator evidence yet.
 
 ## Owner corrections
@@ -17,5 +17,5 @@ Auto-merge and proper CI (integrity/integration validation, type checking, lint,
 
 ## Next action
 
-Run genuine gates for PR #17 on the existing home runner, resolve concrete failures, and merge after green checks. Begin #3 next.
+Run genuine gates for PR #17 on GitHub-hosted ubuntu-latest, verify checks pass, and merge after green checks. Begin #3 next.
 Use planning/OWNER_INSTRUCTIONS.md for the owner-message list and implementation record.

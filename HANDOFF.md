@@ -5,12 +5,12 @@ Read AGENTS.md and PROJECT.md, then the live issue and current branch/check stat
 ## Current work
 
 PR #17 contains the bootstrap contracts. They are not installed on main until merged.
-Finish real PCM, CGM, and ACS validation through the existing home-runner workflow.
+Finish real PCM, CGM, and ACS validation through the public GitHub-hosted workflow.
 Then begin #3: Google login, workspace entry, and a simple aesthetic control dashboard built from templates or MUI components.
 
 ## Delivery
 
-Use PRs and genuine `gates` results. Reuse `[self-hosted, gravebuster]`.
+Use PRs and genuine `gates` results on `ubuntu-latest`.
 Auto-merge and genuine CI checks are explicitly owner-requested. CI must include contract integrity/integration checks, type checking, lint, and Ruff. Configure auto-merge without adding unrelated review requirements. New runner isolation and extra secret scanners are not prerequisites.
 Do not claim a queued job executed or a branch-only file is installed.
 

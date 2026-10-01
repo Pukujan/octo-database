@@ -13,7 +13,7 @@ permissions:
 jobs:
   gates:
     name: gates
-    runs-on: [self-hosted, gravebuster]
+    runs-on: ubuntu-latest
     steps:
       - name: Check out Octo
         uses: actions/checkout@v4

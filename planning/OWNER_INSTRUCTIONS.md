@@ -48,7 +48,7 @@ i do want auto merge and proper ci with integretity, type chechker lint and ruff
 | Instruction | Current implementation |
 | --- | --- |
 | Main agent plans; multiple Luna agents handle independent tasks | Three Luna agents audited CI, bootstrap, and UI; main agent integrates and verifies |
-| Use the existing home runner | Workflow keeps `[self-hosted, gravebuster]`; queued execution must be reported honestly |
+| CI and runner | The repository is public; workflow uses GitHub-hosted ubuntu-latest with full integrity, type, lint, and Ruff checks |
 | Verify PROJECT.md goals, success, scope | Contract exists on PR #17; retain and align it with current owner direction |
 | Check PCM, CGM, ACS hot loader | Pinned contracts present on PR #17; all three validators remain in gates |
 | Owner controls scope; no unsolicited overengineering | AGENTS.md and project/handoff/task/issue requirements aligned |
@@ -71,4 +71,4 @@ Ruff lint and format pass. Strict mypy passes for both Python source files. All 
 
 The original branch had a missing PCM checkpoint-log section and an empty CGM asset manifest. Both are fixed: the task now has a checkpoint log, and the manifest references a real draft UI-layout SVG. The SVG is a design reference for the requested dashboard, not implementation evidence.
 
-Repository-level auto-merge is disabled. The available PR auto-merge operation was attempted and rejected for that reason. The existing-runner workflow remains queued without executed steps, so remote CI and auto-merge are still pending administration/runner access.
+Repository-level auto-merge is enabled (allow_auto_merge: true). Workflow targets GitHub-hosted ubuntu-latest on public repository.

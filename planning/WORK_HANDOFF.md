@@ -2,7 +2,7 @@
 
 Read AGENTS.md, PROJECT.md, and the live task issue. The owner directs scope.
 
-1. Finish #2 through PR #17. Run pinned PCM, CGM, and ACS validation on the existing home runner. Record the actual check result.
+1. Finish #2 through PR #17. Run pinned PCM, CGM, and ACS validation on GitHub-hosted ubuntu-latest. Record the actual check result.
 2. Begin #3: Google login, authorized workspace entry, and a simple aesthetic control dashboard. Use a maintained template or MUI components with minimal customization.
 3. Continue #4–#8 as usable vertical slices, preserving the gallery and operations page. Use normal provider configuration for R2/Drive when required.
 4. Keep #15 transcript capture and #18 design projections as supporting work. Neither blocks product implementation.
