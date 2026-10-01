@@ -1,8 +1,8 @@
 # OCTO-1000 Host Octo on gravebuster with a production branch and gated CI/CD
 
-<!-- continuity:task {"acceptance":["octodb.design-bakery.com serves the Octo UI over HTTPS","Google sign-in completes and lands on an authenticated dashboard","guest login still works","a merge to main does not deploy; a merge to production deploys within 5 minutes","a failing smoke test rolls back to the previous image automatically","gates runs on pull requests into both main and production","no secret is committed to the repository"],"depends_on":["OCTO-0100"],"goal":"Host Octo's frontend and backend as containers on gravebuster with a gated promotion path to production","id":"OCTO-1000","issue_url":"https://github.com/Pukujan/octo-database/issues/43","next_action":"Owner reviews the design spec in PR #44; then write the implementation plan.","owner":"Pukujan; main agent coordinates implementation","priority":"P1","protocol_version":"0.1.0-draft","schema":"project-continuity.task.v1","status":"design","why":"Octo has no hosted instance and no delivery path from a merged commit to a running service."} -->
+<!-- continuity:task {"acceptance":["octodb.design-bakery.com serves the Octo UI over HTTPS","Google sign-in completes and lands on an authenticated dashboard","guest login still works","a merge to main does not deploy; a merge to production deploys within 5 minutes","a failing smoke test rolls back to the previous image automatically","gates runs on pull requests into both main and production","no secret is committed to the repository"],"depends_on":["OCTO-0100"],"goal":"Host Octo's frontend and backend as containers on gravebuster with a gated promotion path to production","id":"OCTO-1000","issue_url":"https://github.com/Pukujan/octo-database/issues/43","next_action":"Owner reviews the design spec in PR #44; then write the implementation plan.","owner":"Pukujan; main agent coordinates implementation","priority":"P1","protocol_version":"0.1.0-draft","schema":"project-continuity.task.v1","status":"active","why":"Octo has no hosted instance and no delivery path from a merged commit to a running service."} -->
 
-- Status: design
+- Status: active
 - Priority: P1
 - Branch: `task/OCTO-1000-gravebuster-deployment` (design spec merged in PR #44; an implementation branch follows once the design is approved)
 - GitHub issue: https://github.com/Pukujan/octo-database/issues/43
@@ -42,3 +42,30 @@ client and implement the missing callback.
 
 Schema-migration tooling for a live database, scale-out (Issue #14), rotating the
 expired Cloudflare tokens.
+
+## Checkpoint log
+
+### 2026-10-01 08:00:00 UTC — Pukujan
+
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":["docs/superpowers/specs/2026-10-01-octo-gravebuster-deployment-design.md"],"completed":["Design spec for hosting Octo on gravebuster with gated CI/CD"],"decisions":["Dedicated Postgres container on gravebuster","Keep main, add production branch promoted by owner PR","Pull-based systemd deploy timer polling origin/production"],"evidence":["PR #44 merged with green gates"],"next_action":"Owner reviews deployment design spec and begins implementation","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-1000","timestamp":"2026-10-01T08:00:00Z"} -->
+
+Completed:
+- Design spec for hosting Octo on gravebuster with gated CI/CD
+
+Evidence:
+- PR #44 merged with green gates
+
+Decisions:
+- Dedicated Postgres container on gravebuster
+- Keep main, add production branch promoted by owner PR
+- Pull-based systemd deploy timer polling origin/production
+
+Changed:
+- docs/superpowers/specs/2026-10-01-octo-gravebuster-deployment-design.md
+
+Blocked/uncertain:
+- none
+
+Next:
+- Owner reviews deployment design spec and begins implementation
+

@@ -68,6 +68,9 @@ Evidence:
 - `git log` shows `544f85f Slice 5 — R2-to-Google-Drive archive lifecycle with verified restore (#7) (#39)`.
 - `gh pr list --state merged` lists PR #39 with that title; PR #24's title is "Slice 5 — Google Drive Archival & Restore, CGM narrative hero, and PCM checkpoint synchronization".
 
+Decisions:
+- Slice 5 was delivered by PR #39, not PR #24
+
 Changed:
 - checkpoints/CURRENT.md
 - tasks/TASK-OCTO-0500-drive-archive-restore.md

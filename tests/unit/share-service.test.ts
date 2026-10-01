@@ -79,7 +79,10 @@ describe('Share activity evaluation', () => {
 
   it('expires exactly at valid_until and stays expired after', () => {
     const at = new Date('2026-10-01T12:00:00Z');
-    const share = makeShare({ validUntil: at.toISOString() });
+    const share = makeShare({
+      validFrom: new Date(at.getTime() - 3600_000).toISOString(),
+      validUntil: at.toISOString(),
+    });
 
     // One second before the boundary the link still works.
     expect(isShareActive(share, new Date(at.getTime() - 1000))).toBe(true);
