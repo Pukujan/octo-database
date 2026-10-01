@@ -5,6 +5,12 @@
  * Executes all data mutations directly in PostgreSQL and Cloudflare R2.
  */
 
+import * as fs from 'fs';
+
+// Conditionally load .env if present (local dev) without failing in CI
+if (fs.existsSync('.env') && typeof process.loadEnvFile === 'function') {
+  process.loadEnvFile('.env');
+}
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
 import { loadR2ConfigFromEnv, R2StorageProvider } from '../storage/r2-client';
