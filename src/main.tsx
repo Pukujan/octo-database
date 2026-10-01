@@ -355,6 +355,38 @@ export const App: React.FC = () => {
     }
   };
 
+  const refreshFiles = async (workspaceId: string) => {
+    if (!sessionToken) return;
+    const res = await fetch(`${API_BASE}/api/files?workspaceId=${workspaceId}`, {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
+    if (res.ok) {
+      setFiles(await res.json());
+    }
+  };
+
+  const handleArchiveFile = async (fileId: string) => {
+    if (!sessionToken || !activeContext) return;
+    const res = await fetch(`${API_BASE}/api/files/${fileId}/archive?workspaceId=${activeContext.workspace.id}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
+    if (res.ok) {
+      await refreshFiles(activeContext.workspace.id);
+    }
+  };
+
+  const handleRestoreFile = async (fileId: string) => {
+    if (!sessionToken || !activeContext) return;
+    const res = await fetch(`${API_BASE}/api/files/${fileId}/restore?workspaceId=${activeContext.workspace.id}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
+    if (res.ok) {
+      await refreshFiles(activeContext.workspace.id);
+    }
+  };
+
   const handleCreateApiKey = async (name: string, isAccountWide: boolean) => {
     if (!sessionToken) throw new Error('Unauthenticated');
     const res = await fetch(`${API_BASE}/api/keys`, {
@@ -391,6 +423,8 @@ export const App: React.FC = () => {
       onUploadFile={handleUploadFile}
       onUploadBinaryFile={handleUploadBinaryFile}
       onDeleteFile={handleDeleteFile}
+      onArchiveFile={handleArchiveFile}
+      onRestoreFile={handleRestoreFile}
       onCreateApiKey={handleCreateApiKey}
       shares={shares}
       onCreateShare={handleCreateShare}

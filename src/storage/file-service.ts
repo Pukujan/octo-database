@@ -21,6 +21,7 @@ export interface FileRecord {
   storageKey: string;
   status: 'pending' | 'active' | 'deleted';
   contentHash: string | null;
+  archiveState?: 'active_r2' | 'archiving' | 'archived_drive' | 'restoring' | 'reconciliation_required' | string;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
