@@ -1,8 +1,8 @@
 # OCTO-0600 Operations page, jobs, and activity
 
-<!-- continuity:task {"acceptance":["Postgres-backed job table with an explicit monotonic state machine","duplicate idempotency key returns the original job instead of creating a second","a worker that dies mid-job leaves a lease that expires, and the job converges on restart","no duplicate side effect when a worker crashes after the side effect but before completion","retry exhaustion terminates the job with an inspectable error summary","operations page shows job state, attempt count, error summary, and recent activity","unauthorized workspace job access is denied"],"depends_on":["OCTO-0300","OCTO-0400"],"goal":"Give background work durable job identity, retry semantics, and an operations page","id":"OCTO-0600","issue_url":"https://github.com/Pukujan/octo-database/issues/8","next_action":"Push PR for Slice 6, verify green CI gates, and auto-merge.","owner":"Pukujan; main agent coordinates implementation","priority":"P1","protocol_version":"0.1.0-draft","schema":"project-continuity.task.v1","status":"active","why":"Make thumbnails and later archive/agent jobs observable and retryable without ad-hoc process logs."} -->
+<!-- continuity:task {"acceptance":["Postgres-backed job table with an explicit monotonic state machine","duplicate idempotency key returns the original job instead of creating a second","a worker that dies mid-job leaves a lease that expires, and the job converges on restart","no duplicate side effect when a worker crashes after the side effect but before completion","retry exhaustion terminates the job with an inspectable error summary","operations page shows job state, attempt count, error summary, and recent activity","unauthorized workspace job access is denied"],"depends_on":["OCTO-0300","OCTO-0400"],"goal":"Give background work durable job identity, retry semantics, and an operations page","id":"OCTO-0600","issue_url":"https://github.com/Pukujan/octo-database/issues/8","next_action":"Merged in PR #31 with green gates.","owner":"Pukujan; main agent coordinates implementation","priority":"P1","protocol_version":"0.1.0-draft","schema":"project-continuity.task.v1","status":"completed","why":"Make thumbnails and later archive/agent jobs observable and retryable without ad-hoc process logs."} -->
 
-- Status: active
+- Status: completed
 - Priority: P1
 - Branch: `task/OCTO-0600-operations-page`
 - GitHub issue: https://github.com/Pukujan/octo-database/issues/8
@@ -68,3 +68,26 @@ Blocked/uncertain:
 
 Next:
 - Merge PR after green gates, then continue with the next accepted slice
+
+### 2026-10-01 05:12:47 UTC — Pukujan
+
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":["tasks/TASK-OCTO-0600-operations-page.md","checkpoints/CURRENT.md"],"completed":["Slice 6 operations page closed out after merge"],"decisions":["Record the merge and advance the current projection rather than leaving Slice 6 marked in review"],"evidence":["PR #31 merged into main as 4a553d6 with green gates (run 36818517356)"],"next_action":"Pick the next accepted slice from the open issues and open its task file.","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-0600","timestamp":"2026-10-01T05:12:47Z"} -->
+
+Completed:
+- Slice 6 operations page closed out after merge
+
+Evidence:
+- PR #31 merged into main as 4a553d6 with green gates (run 36818517356)
+
+Decisions:
+- Record the merge and advance the current projection rather than leaving Slice 6 marked in review
+
+Changed:
+- tasks/TASK-OCTO-0600-operations-page.md
+- checkpoints/CURRENT.md
+
+Blocked/uncertain:
+- none
+
+Next:
+- Pick the next accepted slice from the open issues and open its task file.
