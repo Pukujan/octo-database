@@ -1,0 +1,25 @@
+{
+  "schema_version": "observational-issue-ops.stack-manifest.v1",
+  "adopter": "octo-database",
+  "release_train": "2026-10-01",
+  "source": "https://github.com/Pukujan/observational-issue-ops/blob/main/stack-releases.json",
+  "pins": {
+    "observational-issue-ops": {
+      "version": "0.1.0"
+    },
+    "project-continuity-modules": {
+      "version": "0.6.0",
+      "commit": "4e2385474b4af9249ca009cbdcb38c4498932475",
+      "cli": "0.6.0"
+    },
+    "content-generation-modules": {
+      "version": "0.5.7",
+      "commit": "c069613ca8b3e02bcf5aba1960160583537f8a3a",
+      "modules": 8
+    },
+    "agent-custom-setup": {
+      "module": "multi-agent-hotload",
+      "version": "0.1.0"
+    }
+  }
+}
