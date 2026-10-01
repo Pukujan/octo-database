@@ -1,11 +1,11 @@
 # Current repository checkpoint
 
-<!-- continuity:current {"active_task":"OCTO-0100","active_task_file":"tasks/TASK-OCTO-0100-google-login-workspace-dashboard.md","protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
+<!-- continuity:current {"active_task":"OCTO-0200","active_task_file":"tasks/TASK-OCTO-0200-files-and-api-access.md","protocol_version":"0.1.0-draft","schema":"project-continuity.current.v1"} -->
 
 ## Current state
 
-Bootstrap completed: PR #17 merged to main as `6d08b91` with green GitHub-hosted gates (run 36798811524).
-Slice 1 (Issue #3 / OCTO-0100) implemented: canonical schema/RLS, Supabase auth/authorization, React MUI dashboard, and full test suite.
+Slice 1 merged to main as `18d66e8` with green GitHub-hosted gates (run 36799342512).
+Slice 2 (Issue #4) and API Access (Issue #9) implemented: R2 bucket active storage, logical file catalog, guest login, and workspace-scoped / account-wide API gateway.
 
 ## Owner corrections
 
@@ -16,5 +16,5 @@ Auto-merge and proper CI (integrity/integration validation, type checking, lint,
 
 ## Next action
 
-Push PR for Slice 1, verify gates on GitHub-hosted runner, merge via auto-merge, and begin Slice 2 (#4).
+Push PR for Slice 2, verify gates on GitHub-hosted runner, merge via auto-merge, and begin downstream slices.
 Use planning/OWNER_INSTRUCTIONS.md for the owner-message list and implementation record.
