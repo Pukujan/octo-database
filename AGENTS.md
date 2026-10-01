@@ -54,8 +54,10 @@ Pinned versions currently used by repository validation:
 - **Auto-merge is mandatory and requires no human approval.** Every agent MUST arm
   auto-merge (`gh pr merge <n> --auto --squash`) on every pull request it opens, and
   MUST NOT wait for, request, or add a review requirement. Repository `allow_auto_merge`
-  is already enabled and branch protection on `main` requires only the `gates` status
-  check, so a PR merges automatically as soon as `gates` is green.
+  is enabled, branch protection on `main` requires only the `gates` status check, and
+  the "require branches to be up to date" setting is OFF, so a PR merges automatically
+  as soon as `gates` is green without anyone rebasing it. `.github/workflows/auto-merge.yml`
+  also arms auto-merge on every same-repo PR as a backstop.
 - Do not add review requirements, approval gates, or manual-merge steps: they deadlock a
   single-owner repository and contradict the owner's standing instruction.
 - If `gh pr merge --auto` fails, fix the cause (for example, mark a draft PR ready with
