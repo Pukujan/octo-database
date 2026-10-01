@@ -74,4 +74,40 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     await page.click('button:has-text("Sign out")');
     await expect(page.locator('text=Welcome to Octo')).toBeVisible();
   });
+
+  test('discards a dead persisted session instead of showing an empty workspace shell', async ({
+    page,
+  }) => {
+    // Reproduces the reported state: a token in localStorage that the server no
+    // longer honours, alongside a persisted principal. Before revalidation the
+    // app kept the stale principal and rendered the authenticated shell with
+    // "No Authorized Workspaces"; the server is the authority, so an expired
+    // token must return the caller to the login screen.
+    await page.goto('/');
+    await page.evaluate(() => {
+      localStorage.setItem('octo_token', '00000000-0000-0000-0000-000000000000');
+      localStorage.setItem(
+        'octo_principal',
+        JSON.stringify({
+          id: '00000000-0000-0000-0000-000000000000',
+          authUserId: '00000000-0000-0000-0000-000000000000',
+          email: 'stale@example.com',
+          displayName: 'Stale User',
+          avatarUrl: null,
+          isPlatformOwner: false,
+          isGuest: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+      );
+    });
+    await page.reload();
+
+    await expect(page.locator('text=Welcome to Octo')).toBeVisible();
+    await expect(page.locator('text=No Authorized Workspaces')).toHaveCount(0);
+
+    // The dead credential is cleared, not left behind to fail every later call.
+    const token = await page.evaluate(() => localStorage.getItem('octo_token'));
+    expect(token).toBeNull();
+  });
 });
