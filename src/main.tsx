@@ -13,6 +13,7 @@ import { FileRecord } from './storage/file-service';
 import { ApiKey } from './api/keys';
 import { GalleryItem } from './media/gallery-service';
 import { ShareSummary } from './media/share-service';
+import { OperationsActivity, OperationsJob } from './ui/OperationsPage';
 import { PublicShareView } from './ui/PublicShareView';
 
 const API_BASE = ''; // Uses Vite proxy to http://localhost:3001
@@ -32,6 +33,8 @@ export const App: React.FC = () => {
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [galleryItems, setGalleryItems] = useState<GalleryItem[]>([]);
   const [shares, setShares] = useState<ShareSummary[]>([]);
+  const [jobs, setJobs] = useState<OperationsJob[]>([]);
+  const [activity, setActivity] = useState<OperationsActivity[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [googleAuthEnabled, setGoogleAuthEnabled] = useState(false);
 
@@ -86,6 +89,36 @@ export const App: React.FC = () => {
       headers: { Authorization: `Bearer ${sessionToken}` },
     });
     if (res.ok) setGalleryItems(await res.json());
+  };
+
+  /** Reloads job and activity state for a workspace. */
+  const refreshOperations = async (workspaceId: string) => {
+    if (!sessionToken) return;
+    const headers = { Authorization: `Bearer ${sessionToken}` };
+    const [jobsRes, activityRes] = await Promise.all([
+      fetch(`${API_BASE}/api/jobs?workspaceId=${workspaceId}`, { headers }),
+      fetch(`${API_BASE}/api/activity?workspaceId=${workspaceId}`, { headers }),
+    ]);
+    if (jobsRes.ok) setJobs(await jobsRes.json());
+    if (activityRes.ok) setActivity(await activityRes.json());
+  };
+
+  const handleRetryJob = async (jobId: string) => {
+    if (!sessionToken || !activeContext) return;
+    const res = await fetch(
+      `${API_BASE}/api/jobs/${jobId}/retry?workspaceId=${activeContext.workspace.id}`,
+      { method: 'POST', headers: { Authorization: `Bearer ${sessionToken}` } }
+    );
+    if (res.ok) await refreshOperations(activeContext.workspace.id);
+  };
+
+  const handleRunWorker = async () => {
+    if (!sessionToken || !activeContext) return;
+    const res = await fetch(
+      `${API_BASE}/api/jobs/run?workspaceId=${activeContext.workspace.id}`,
+      { method: 'POST', headers: { Authorization: `Bearer ${sessionToken}` } }
+    );
+    if (res.ok) await refreshOperations(activeContext.workspace.id);
   };
 
   /** Reloads scoped share links for a workspace. */
@@ -191,6 +224,7 @@ export const App: React.FC = () => {
       }
 
       await refreshShares(workspaceId);
+      await refreshOperations(workspaceId);
     } catch (e) {
       console.error('Failed to load workspace details:', e);
     }
@@ -248,6 +282,8 @@ export const App: React.FC = () => {
     setFiles([]);
     setGalleryItems([]);
     setShares([]);
+    setJobs([]);
+    setActivity([]);
     setApiKeys([]);
   };
 
@@ -359,6 +395,10 @@ export const App: React.FC = () => {
       shares={shares}
       onCreateShare={handleCreateShare}
       onRevokeShare={handleRevokeShare}
+      jobs={jobs}
+      activity={activity}
+      onRetryJob={handleRetryJob}
+      onRunWorker={handleRunWorker}
       isLoading={isLoading}
     />
   );

@@ -19,6 +19,7 @@ import { LocalObjectStore, ObjectStore, R2ObjectStore } from '../storage/object-
 import { ensureThumbnail } from '../media/thumbnail-service';
 import { signMediaUrl, verifyMediaToken } from '../media/media-token';
 import { hashShareToken } from '../media/share-service';
+import { JobOutcome, processJob } from '../jobs/worker';
 import { hashApiKeySecret } from '../api/keys';
 import {
   dbDeleteFile,
@@ -31,8 +32,15 @@ import {
   dbInsertMembership,
   dbInsertWorkspace,
   dbListApiKeys,
+  dbClaimJob,
+  dbCompleteJob,
+  dbEnqueueJob,
+  dbFailJob,
+  dbListActivity,
+  dbListJobs,
   dbListShares,
   dbListWorkspaceFiles,
+  dbRecordActivity,
   dbResolveShareById,
   dbResolveShareByTokenHash,
   dbRevokeShare,
@@ -251,6 +259,38 @@ async function authorizeMediaRequest(
     workspaceId: claims.workspaceId,
     fileId: claims.fileId,
   };
+}
+
+/**
+ * Runs one drain pass of the job queue against the server's storage backend.
+ * The worker uses the same lease-based claim as a standalone process, so a crash
+ * between claim and completion leaves the job claimable again after the lease.
+ */
+async function drainQueueOnce(maxJobs = 10): Promise<JobOutcome[]> {
+  const outcomes: JobOutcome[] = [];
+
+  for (let i = 0; i < maxJobs; i += 1) {
+    const job = await dbClaimJob('octo-server-worker', 60);
+    if (!job) break;
+
+    const outcome = await processJob(job, {
+      claim: async () => null,
+      store: objectStore!,
+      complete: async (jobId, result) => {
+        await dbCompleteJob(jobId, result);
+      },
+      fail: async (claimed, code, summary, retryable) => {
+        await dbFailJob(claimed.jobId, claimed.attempt, 3, code, summary, retryable);
+      },
+      activity: async (claimed, summary) => {
+        await dbRecordActivity(claimed.workspaceId, 'job.transition', summary, claimed.jobId);
+      },
+    });
+
+    outcomes.push(outcome);
+  }
+
+  return outcomes;
 }
 
 export const server = createServer(async (req, res) => {
@@ -1001,6 +1041,170 @@ export const server = createServer(async (req, res) => {
         },
         items,
       });
+      return;
+    }
+
+    // 10. Operations: jobs and activity (Slice 6)
+    // Enqueue: POST /api/jobs
+    if (pathname === '/api/jobs' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const bodyStr = await readBody(req);
+      const parsed = JSON.parse(bodyStr);
+      const { workspaceId, jobType, idempotencyKey, payload } = parsed;
+
+      if (!workspaceId || !jobType || !idempotencyKey) {
+        sendJson(res, 400, { error: 'workspaceId, jobType, and idempotencyKey are required' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin' && mem.role !== 'operator')) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Operator role or higher required to enqueue jobs' });
+        return;
+      }
+
+      // A repeat with the same idempotency key returns the original job.
+      const { job, created } = await dbEnqueueJob(
+        randomUUID(),
+        workspaceId,
+        jobType,
+        idempotencyKey,
+        payload ?? {},
+        auth.principal.id
+      );
+
+      if (created) {
+        await dbRecordActivity(
+          workspaceId,
+          'job.enqueued',
+          `Job ${jobType} queued`,
+          job.id,
+          auth.principal.id
+        );
+      }
+
+      sendJson(res, created ? 201 : 200, { job, created });
+      return;
+    }
+
+    // List: GET /api/jobs?workspaceId=...
+    if (pathname === '/api/jobs' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      sendJson(res, 200, await dbListJobs(workspaceId));
+      return;
+    }
+
+    // Activity feed: GET /api/activity?workspaceId=...
+    if (pathname === '/api/activity' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      sendJson(res, 200, await dbListActivity(workspaceId));
+      return;
+    }
+
+    // Manual retry: POST /api/jobs/:id/retry?workspaceId=...
+    // Recovery path for a job stuck after retry exhaustion.
+    if (pathname.startsWith('/api/jobs/') && pathname.endsWith('/retry') && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const jobId = pathname.slice('/api/jobs/'.length, -'/retry'.length);
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!jobId || !workspaceId) {
+        sendJson(res, 400, { error: 'jobId and workspaceId are required' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to retry jobs' });
+        return;
+      }
+
+      const rows = await query<{ id: string }>(
+        `UPDATE octo.jobs
+         SET state = 'queued', attempt = 0, available_at = now(),
+             error_code = NULL, error_summary = NULL, completed_at = NULL, updated_at = now()
+         WHERE id = $1 AND workspace_id = $2 AND state = 'failed'
+         RETURNING id`,
+        [jobId, workspaceId]
+      );
+
+      if (rows.length === 0) {
+        sendJson(res, 404, { error: 'JOB_NOT_RETRYABLE: no failed job with that id in this workspace' });
+        return;
+      }
+
+      await dbRecordActivity(workspaceId, 'job.requeued', 'Job manually requeued', jobId, auth.principal.id);
+      sendJson(res, 200, { success: true, jobId });
+      return;
+    }
+
+    // Worker tick: POST /api/jobs/run?workspaceId=...
+    // Runs one drain pass so the operations page can demonstrate real progress
+    // without requiring a separately supervised worker process.
+    if (pathname === '/api/jobs/run' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin' && mem.role !== 'operator')) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Operator role or higher required to run jobs' });
+        return;
+      }
+
+      const outcomes = await drainQueueOnce();
+      sendJson(res, 200, { outcomes });
       return;
     }
 
