@@ -9,7 +9,7 @@ MIGRATION_PATH = (
     Path(__file__).parent.parent
     / "supabase"
     / "migrations"
-    / "20261001050000_slice5_archive_lifecycle.sql"
+    / "20261001060000_slice5_archive_lifecycle.sql"
 )
 
 LIFECYCLE_STATES = (
