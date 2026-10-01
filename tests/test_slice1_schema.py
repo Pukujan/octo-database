@@ -73,8 +73,8 @@ class Slice1SchemaTests(unittest.TestCase):
     def test_schema_and_table_grants_exist(self) -> None:
         required_grants = [
             "GRANT USAGE ON SCHEMA octo TO anon, authenticated;",
-            "GRANT ALL ON ALL TABLES IN SCHEMA octo TO authenticated;",
-            "GRANT ALL ON ALL SEQUENCES IN SCHEMA octo TO authenticated;",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA octo TO authenticated;",
+            "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA octo TO authenticated;",
         ]
         for grant in required_grants:
             self.assertIn(grant, self.sql_content, f"Missing grant: {grant}")

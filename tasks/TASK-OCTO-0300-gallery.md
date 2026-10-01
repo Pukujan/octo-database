@@ -20,3 +20,43 @@ Build the first polished user-facing application: a private image/video gallery 
 
 Task initialized following successful merge of Slice 5 (PR #24: Google Drive archival, R2 guest storage verification, and CGM hero asset).
 Next step is to create the gallery UI component, media query routes, and thumbnail generator.
+
+### 2026-10-01 03:45:00 UTC — Pukujan
+
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":["src/media","src/storage/object-store.ts","src/ui/Gallery.tsx","src/server/index.ts","tests/e2e/gallery.spec.ts","tests/integration/gallery.test.ts","tests/unit/media-classifier.test.ts","tests/unit/thumbnail-service.test.ts"],"completed":["Private workspace gallery with derivative thumbnails, signed media URLs, and modal lightbox"],"decisions":["Derive thumbnails at a stable key so regeneration is idempotent","Sign media URLs because img/video tags cannot send Authorization headers","Require explicit OCTO_STORAGE_BACKEND=local so production still fails closed without R2"],"evidence":["Browser run: grid loaded a 400x300 WebP derivative while the lightbox loaded the 1000x700 original with zero failed requests","Thumbnail service tests: one derivative written across repeated calls","Gallery integration test: unauthorized principal receives FORBIDDEN","Playwright gallery spec passes; vision audit scored login 90/100 and dashboard 90/100"],"next_action":"Merge PR #27 after green gates, then begin scoped share links (#6)","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-0300","timestamp":"2026-10-01T03:45:00Z"} -->
+
+Completed:
+- Private workspace gallery with derivative thumbnails, signed media URLs, and modal lightbox
+
+Evidence:
+- Browser run: grid loaded a 400x300 WebP derivative while the lightbox loaded the 1000x700 original with zero failed requests
+- Thumbnail service tests: one derivative written across repeated calls
+- Gallery integration test: unauthorized principal receives FORBIDDEN
+- Playwright gallery spec passes; vision audit scored login 90/100 and dashboard 90/100
+
+Decisions:
+- Derive thumbnails at a stable key so regeneration is idempotent
+- Sign media URLs because img/video tags cannot send Authorization headers
+- Require explicit OCTO_STORAGE_BACKEND=local so production still fails closed without R2
+
+Changed:
+- src/media
+- src/storage/object-store.ts
+- src/ui/Gallery.tsx
+- src/server/index.ts
+- tests/e2e/gallery.spec.ts
+- tests/integration/gallery.test.ts
+- tests/unit/media-classifier.test.ts
+- tests/unit/thumbnail-service.test.ts
+
+Blocked/uncertain:
+- none
+
+Next:
+- Merge PR #27 after green gates, then begin scoped share links (#6)
+
+Completed (defects found and fixed while verifying):
+- Base64 upload payloads were stored as text rather than decoded bytes, corrupting every uploaded image.
+- The local download fallback returned its own endpoint; replaced with a real `/api/files/content` route.
+- The implicit local storage fallback was replaced with an explicit opt-in so production fails closed.
+- The Google sign-in button linked to a nonexistent route; it now reports an honest not-configured state.

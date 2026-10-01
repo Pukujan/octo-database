@@ -15,7 +15,15 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     // 1. Navigate to application
     await page.goto('/');
     await expect(page.locator('text=Welcome to Octo')).toBeVisible();
-    await expect(page.locator('text=Sign in with Google')).toBeVisible();
+
+    // Google sign-in is only offered when an OAuth client is provisioned; otherwise
+    // the control must report that state instead of linking to a dead route.
+    const googleConfigured = Boolean(process.env['GOOGLE_OAUTH_CLIENT_ID']);
+    if (googleConfigured) {
+      await expect(page.getByRole('button', { name: 'Sign in with Google' })).toBeEnabled();
+    } else {
+      await expect(page.getByRole('button', { name: 'Google sign-in not configured' })).toBeDisabled();
+    }
     await expect(page.locator('text=Continue as Guest')).toBeVisible();
 
     // 2. Capture screenshot of unauthenticated login hero
@@ -38,10 +46,11 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
 
     // 5. Verify Workspace Control Dashboard renders
     await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Personal (Guest)' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Personal (Guest)', exact: true })).toBeVisible();
     await expect(page.locator('text=Guest Sandbox')).toBeVisible();
     await expect(page.locator('text=File Catalog (Cloudflare R2)')).toBeVisible();
     await expect(page.locator('text=API Keys (Account-Wide & Workspace-Scoped)')).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Gallery$/ })).toBeVisible();
 
     // 6. Capture screenshot of authenticated workspace dashboard
     const dashboardScreenshot = await page.screenshot({ fullPage: true });
@@ -61,7 +70,7 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     // 8. Test File Upload via UI
     await page.fill('input[placeholder="notes.txt"]', 'qa_report.txt');
     await page.fill('input[placeholder="File body content..."]', 'Live visual QA report verification text.');
-    await page.click('button:has-text("Upload to R2")');
+    await page.click('button:has-text("Upload Text to R2")');
 
     // Verify file appears in table
     await expect(page.getByRole('cell', { name: 'qa_report.txt', exact: true })).toBeVisible();

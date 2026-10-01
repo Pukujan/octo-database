@@ -97,6 +97,11 @@ jobs:
       - name: Playwright E2E and Multimodal Vision QA
         env:
           INFERHUB_API_KEY: ${{ secrets.INFERHUB_API_KEY }}
+          # CI has no R2 credentials; opt into the local backend explicitly so the
+          # e2e upload path works without weakening the production default.
+          OCTO_STORAGE_BACKEND: local
+          OCTO_MEDIA_SECRET: ci-media-secret
+          DATABASE_URL: postgresql://postgres:postgres@localhost:54329/postgres
         run: npx playwright test
       - name: Validate pinned PCM adopter state
         shell: bash

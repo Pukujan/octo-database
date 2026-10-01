@@ -157,23 +157,16 @@ export async function verifyApiKey(
     }
   }
 
-  // 2. Resolve parent principal via SECURITY DEFINER RPC
+  // 2. Resolve parent principal. The server queries PostgreSQL directly as a
+  // trusted backend; no anon-reachable principal lookup is exposed.
   let principalRow: RawPrincipalRow | null = null;
-  const { data: pRpcData } = await supabase
+  const { data: directPrincipal } = await supabase
     .schema('octo')
-    .rpc('resolve_principal_by_id', { target_id: keyRow.principal_id });
-
-  if (pRpcData) {
-    principalRow = Array.isArray(pRpcData) ? pRpcData[0] : pRpcData;
-  } else {
-    const { data: directPrincipal } = await supabase
-      .schema('octo')
-      .from('principals')
-      .select('*')
-      .eq('id', keyRow.principal_id)
-      .maybeSingle();
-    principalRow = directPrincipal;
-  }
+    .from('principals')
+    .select('*')
+    .eq('id', keyRow.principal_id)
+    .maybeSingle();
+  principalRow = directPrincipal;
 
   if (!principalRow) {
     return null;

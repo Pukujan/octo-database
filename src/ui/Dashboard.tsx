@@ -37,6 +37,8 @@ import { Principal, WorkspaceRole, WorkspaceSummary } from '../types/auth';
 import { WorkspaceContext } from '../auth/workspace-service';
 import { FileRecord } from '../storage/file-service';
 import { ApiKey } from '../api/keys';
+import { GalleryItem } from '../media/gallery-service';
+import { Gallery } from './Gallery';
 import { octoTheme } from './theme';
 
 export interface DashboardProps {
@@ -44,12 +46,15 @@ export interface DashboardProps {
   workspaces: WorkspaceSummary[];
   activeContext: WorkspaceContext | null;
   files?: FileRecord[];
+  galleryItems?: GalleryItem[];
   apiKeys?: ApiKey[];
   onSignInWithGoogle: () => void;
   onSignInAsGuest?: () => void;
+  googleAuthEnabled?: boolean;
   onSignOut: () => void;
   onSelectWorkspace: (workspaceId: string) => void;
   onUploadFile?: (name: string, mimeType: string, content: string) => Promise<void>;
+  onUploadBinaryFile?: (file: File) => Promise<void>;
   onDeleteFile?: (fileId: string) => Promise<void>;
   onCreateApiKey?: (name: string, isAccountWide: boolean) => Promise<{ rawSecret: string }>;
   isLoading?: boolean;
@@ -96,7 +101,7 @@ const LoginHeroIllustration: React.FC = () => (
     <path d="M200 43V52" stroke="#93c5fd" strokeWidth="2" />
 
     {/* Bottom Label */}
-    <text x="200" y="142" textAnchor="middle" fill="#334155" fontSize="12" fontWeight="600">
+    <text x="200" y="142" textAnchor="middle" fill="#1e293b" fontSize="13" fontWeight="700">
       Personal Control Plane • Workspaces • R2 Storage • Machine APIs
     </text>
   </svg>
@@ -107,12 +112,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
   workspaces,
   activeContext,
   files = [],
+  galleryItems = [],
   apiKeys = [],
   onSignInWithGoogle,
   onSignInAsGuest,
+  googleAuthEnabled = false,
   onSignOut,
   onSelectWorkspace,
   onUploadFile,
+  onUploadBinaryFile,
   onDeleteFile,
   onCreateApiKey,
   isLoading = false,
@@ -189,11 +197,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   size="large"
                   fullWidth
                   onClick={onSignInWithGoogle}
-                  disabled={isLoading}
+                  disabled={isLoading || !googleAuthEnabled}
+                  aria-label={
+                    googleAuthEnabled
+                      ? 'Sign in with Google'
+                      : 'Google sign-in not configured'
+                  }
                   sx={{ py: 1.5, fontSize: '0.95rem' }}
                 >
-                  Sign in with Google
+                  {googleAuthEnabled ? 'Sign in with Google' : 'Google sign-in not configured'}
                 </Button>
+                {!googleAuthEnabled && (
+                  <Typography variant="caption" color="text.secondary" align="center">
+                    Set GOOGLE_OAUTH_CLIENT_ID to enable Google sign-in. Guest access works now.
+                  </Typography>
+                )}
 
                 {onSignInAsGuest && (
                   <Button
@@ -360,7 +378,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
                     Workspace Capabilities:
                   </Typography>
-                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
                     <Chip
                       label="Upload Files (R2)"
                       size="small"
@@ -379,11 +397,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       variant={activeContext.capabilities.canManageSettings ? 'filled' : 'outlined'}
                       color={activeContext.capabilities.canManageSettings ? 'success' : 'default'}
                     />
+                    <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
                     <Chip
                       label="Delete Workspace"
                       size="small"
-                      variant={activeContext.capabilities.canDeleteWorkspace ? 'filled' : 'outlined'}
-                      color={activeContext.capabilities.canDeleteWorkspace ? 'error' : 'default'}
+                      variant={activeContext.capabilities.canDeleteWorkspace ? 'outlined' : 'outlined'}
+                      color="error"
                     />
                   </Box>
                 </CardContent>
@@ -405,14 +424,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                   {/* Upload Form */}
                   {onUploadFile && activeContext.capabilities.canUploadFiles && (
-                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 3, flexWrap: 'wrap' }}>
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        gap: 1.5,
+                        alignItems: 'center',
+                        mb: 3,
+                        flexWrap: 'wrap',
+                      }}
+                    >
                       <TextField
                         size="small"
                         label="File Name"
                         placeholder="notes.txt"
                         value={uploadFileName}
                         onChange={(e) => setUploadFileName(e.target.value)}
-                        sx={{ minWidth: 200 }}
+                        sx={{ width: 200 }}
                       />
                       <TextField
                         size="small"
@@ -420,16 +447,46 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         placeholder="File body content..."
                         value={uploadFileContent}
                         onChange={(e) => setUploadFileContent(e.target.value)}
-                        sx={{ flexGrow: 1, minWidth: 220 }}
+                        sx={{ flex: '1 1 260px', minWidth: 220 }}
                       />
                       <Button
                         variant="contained"
                         size="medium"
                         onClick={handleUpload}
                         disabled={isUploading || !uploadFileName.trim()}
+                        sx={{ whiteSpace: 'nowrap' }}
                       >
-                        Upload to R2
+                        Upload Text to R2
                       </Button>
+
+                      {onUploadBinaryFile && (
+                        <Button
+                          variant="outlined"
+                          size="medium"
+                          component="label"
+                          sx={{ whiteSpace: 'nowrap' }}
+                        >
+                          Upload Image/Video
+                          <input
+                            type="file"
+                            hidden
+                            accept="image/*,video/*"
+                            aria-label="Upload image or video file"
+                            onChange={async (e) => {
+                              const chosen = e.target.files?.[0];
+                              if (chosen) {
+                                setIsUploading(true);
+                                try {
+                                  await onUploadBinaryFile(chosen);
+                                } finally {
+                                  setIsUploading(false);
+                                  e.target.value = '';
+                                }
+                              }
+                            }}
+                          />
+                        </Button>
+                      )}
                     </Box>
                   )}
 
@@ -442,26 +499,40 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       <Table size="small">
                         <TableHead>
                           <TableRow>
-                            <TableCell sx={{ fontWeight: 600 }}>Name</TableCell>
-                            <TableCell sx={{ fontWeight: 600 }}>Size</TableCell>
-                            <TableCell sx={{ fontWeight: 600 }}>MIME Type</TableCell>
+                            <TableCell sx={{ fontWeight: 600, width: '28%' }}>Name</TableCell>
+                            <TableCell sx={{ fontWeight: 600, width: '12%' }}>Size</TableCell>
+                            <TableCell sx={{ fontWeight: 600, width: '16%' }}>MIME Type</TableCell>
                             <TableCell sx={{ fontWeight: 600 }}>Storage Key</TableCell>
-                            <TableCell sx={{ fontWeight: 600 }}>Actions</TableCell>
+                            <TableCell sx={{ fontWeight: 600, width: '12%' }} align="right">
+                              Actions
+                            </TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
                           {files.map((f) => (
                             <TableRow key={f.id}>
                               <TableCell sx={{ fontWeight: 500 }}>{f.name}</TableCell>
-                              <TableCell>{f.sizeBytes} B</TableCell>
-                              <TableCell>{f.mimeType}</TableCell>
-                              <TableCell><code>{f.storageKey}</code></TableCell>
-                              <TableCell>
+                              <TableCell sx={{ whiteSpace: 'nowrap' }}>{f.sizeBytes} B</TableCell>
+                              <TableCell sx={{ whiteSpace: 'nowrap' }}>{f.mimeType}</TableCell>
+                              <TableCell
+                                sx={{
+                                  maxWidth: 260,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                                title={f.storageKey}
+                              >
+                                <code>{f.storageKey}</code>
+                              </TableCell>
+                              <TableCell align="right">
                                 {onDeleteFile && activeContext.capabilities.canDeleteWorkspace && (
                                   <Button
                                     size="small"
+                                    variant="outlined"
                                     color="error"
                                     onClick={() => onDeleteFile(f.id)}
+                                    sx={{ whiteSpace: 'nowrap' }}
                                   >
                                     Delete
                                   </Button>
@@ -473,6 +544,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       </Table>
                     </TableContainer>
                   )}
+                </CardContent>
+              </Card>
+
+              {/* Workspace Gallery (Slice 3) */}
+              <Card sx={{ mb: 4, borderRadius: 2 }}>
+                <CardContent sx={{ pb: 1 }}>
+                  <Gallery
+                    items={galleryItems}
+                    workspaceName={activeContext.workspace.name}
+                  />
                 </CardContent>
               </Card>
 
@@ -504,20 +585,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                   {/* Create Key Form */}
                   {onCreateApiKey && (
-                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 3, flexWrap: 'wrap' }}>
+                    <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', mb: 3, flexWrap: 'wrap' }}>
                       <TextField
                         size="small"
                         label="Key Name"
                         placeholder="e.g. Ingest Agent"
                         value={newKeyName}
                         onChange={(e) => setNewKeyName(e.target.value)}
-                        sx={{ minWidth: 220 }}
+                        sx={{ width: 220 }}
                       />
                       <Select
                         size="small"
                         value={newKeyIsAccountWide ? 'account' : 'workspace'}
                         onChange={(e) => setNewKeyIsAccountWide(e.target.value === 'account')}
-                        sx={{ minWidth: 180 }}
+                        sx={{ width: 190 }}
                       >
                         <MenuItem value="workspace">Workspace-Scoped</MenuItem>
                         <MenuItem value="account">Account-Wide</MenuItem>
@@ -527,6 +608,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         size="medium"
                         onClick={handleCreateKey}
                         disabled={!newKeyName.trim()}
+                        sx={{ whiteSpace: 'nowrap' }}
                       >
                         Generate API Key
                       </Button>
@@ -554,16 +636,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           {apiKeys.map((k) => (
                             <TableRow key={k.id}>
                               <TableCell sx={{ fontWeight: 500 }}>{k.name}</TableCell>
-                              <TableCell><code>{k.prefix}...</code></TableCell>
-                              <TableCell>
+                              <TableCell sx={{ whiteSpace: 'nowrap' }}><code>{k.prefix}...</code></TableCell>
+                              <TableCell sx={{ whiteSpace: 'nowrap' }}>
                                 <Chip
                                   label={k.isAccountWide ? 'Account-Wide' : 'Workspace-Scoped'}
                                   size="small"
                                   color={k.isAccountWide ? 'primary' : 'default'}
                                 />
                               </TableCell>
-                              <TableCell>{k.scopes.join(', ')}</TableCell>
-                              <TableCell>{k.lastUsedAt ?? 'Never'}</TableCell>
+                              <TableCell sx={{ whiteSpace: 'nowrap' }}>{k.scopes.join(', ')}</TableCell>
+                              <TableCell sx={{ whiteSpace: 'nowrap' }}>{k.lastUsedAt ?? 'Never'}</TableCell>
                             </TableRow>
                           ))}
                         </TableBody>

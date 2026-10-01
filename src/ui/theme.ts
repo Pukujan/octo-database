@@ -67,6 +67,17 @@ export const octoTheme = createTheme({
           '&:hover': {
             boxShadow: 'none',
           },
+          // Raise disabled text contrast above the MUI default so labels stay legible.
+          '&.Mui-disabled': {
+            color: '#475569',
+            backgroundColor: '#cbd5e1',
+            opacity: 1,
+          },
+          '&.Mui-disabled.MuiButton-outlined': {
+            color: '#475569',
+            borderColor: '#94a3b8',
+            backgroundColor: 'transparent',
+          },
         },
       },
     },

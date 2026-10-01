@@ -74,20 +74,42 @@ CREATE POLICY files_delete_owner_admin ON octo.files
     FOR DELETE
     USING (octo.get_workspace_role(workspace_id) IN ('owner', 'admin'));
 
+-- Role ranking helper so a key's role can never exceed the creator's live role.
+CREATE OR REPLACE FUNCTION octo.role_rank(target_role TEXT)
+RETURNS INT AS $$
+    SELECT CASE target_role
+        WHEN 'owner' THEN 4
+        WHEN 'admin' THEN 3
+        WHEN 'operator' THEN 2
+        WHEN 'member' THEN 1
+        ELSE 0
+    END;
+$$ LANGUAGE sql IMMUTABLE;
+
 -- RLS Policies: API Keys
 -- Users can only view their own API keys
 CREATE POLICY api_keys_select_own ON octo.api_keys
     FOR SELECT
     USING (principal_id = octo.current_principal_id());
 
--- Users can create API keys for themselves (account-wide or for authorized workspaces)
+-- Users can create API keys for themselves, but a key can never carry more
+-- authority than the creator actually holds:
+--   * account-wide keys must leave `role` NULL, so authority is derived from the
+--     principal's live memberships at call time rather than asserted by the key;
+--   * workspace-scoped keys may set a role only up to the creator's role there.
 CREATE POLICY api_keys_insert_own ON octo.api_keys
     FOR INSERT
     WITH CHECK (
         principal_id = octo.current_principal_id()
         AND (
-            workspace_id IS NULL -- Account-wide key
-            OR octo.is_workspace_member(workspace_id) = true -- Workspace-scoped key
+            (workspace_id IS NULL AND role IS NULL)
+            OR (
+                octo.is_workspace_member(workspace_id) = true
+                AND (
+                    role IS NULL
+                    OR octo.role_rank(role) <= octo.role_rank(octo.get_workspace_role(workspace_id))
+                )
+            )
         )
     );
 
@@ -97,8 +119,10 @@ CREATE POLICY api_keys_delete_own ON octo.api_keys
     USING (principal_id = octo.current_principal_id());
 
 -- Grants
-GRANT ALL ON octo.files TO authenticated;
-GRANT ALL ON octo.api_keys TO authenticated;
+-- DML only. TRUNCATE and REFERENCES are NOT subject to row security, so granting
+-- ALL would let any authenticated caller wipe every row with RLS still "enabled".
+GRANT SELECT, INSERT, UPDATE, DELETE ON octo.files TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON octo.api_keys TO authenticated;
 
 -- Helper functions for API Key authentication
 -- SECURITY DEFINER allows callers without a pre-existing session to verify bearer keys
@@ -138,23 +162,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-CREATE OR REPLACE FUNCTION octo.resolve_principal_by_id(target_id UUID)
-RETURNS TABLE (
-    id UUID,
-    auth_user_id UUID,
-    email TEXT,
-    display_name TEXT,
-    avatar_url TEXT,
-    is_platform_owner BOOLEAN,
-    is_guest BOOLEAN,
-    created_at TIMESTAMPTZ,
-    updated_at TIMESTAMPTZ
-) AS $$
-    SELECT p.id, p.auth_user_id, p.email, p.display_name, p.avatar_url, p.is_platform_owner, p.is_guest, p.created_at, p.updated_at
-    FROM octo.principals p
-    WHERE p.id = target_id
-    LIMIT 1;
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
-
+-- Principal fields are deliberately NOT exposed through a separate function: an
+-- anon-grantable lookup by UUID would let anyone with the public anon key read any
+-- principal's email, avatar, and platform-owner flag. Key holders get the principal
+-- id from verify_api_key and resolve it server-side instead.
 GRANT EXECUTE ON FUNCTION octo.verify_api_key(TEXT) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION octo.resolve_principal_by_id(UUID) TO anon, authenticated;

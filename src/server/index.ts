@@ -15,6 +15,9 @@ if (fs.existsSync('.env') && typeof process.loadEnvFile === 'function') {
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
 import { loadR2ConfigFromEnv, R2StorageProvider } from '../storage/r2-client';
+import { LocalObjectStore, ObjectStore, R2ObjectStore } from '../storage/object-store';
+import { ensureThumbnail } from '../media/thumbnail-service';
+import { signMediaUrl, verifyMediaToken } from '../media/media-token';
 import { hashApiKeySecret } from '../api/keys';
 import {
   dbDeleteFile,
@@ -36,14 +39,31 @@ import { Principal, WorkspaceRole } from '../types/auth';
 
 const PORT = parseInt(process.env['PORT'] ?? '3001', 10);
 
+// Explicit opt-in local storage backend for CI/dev only. Production default is R2
+// and fails closed when credentials are absent, so uploads can never silently land
+// outside R2 and leave octo.files rows pointing at objects that do not exist.
+const LOCAL_STORAGE_ROOT = path.join('/tmp', 'octo-storage');
+const useLocalStorage = process.env['OCTO_STORAGE_BACKEND'] === 'local';
+
 // Initialize R2 Active Storage Provider
 let r2Provider: R2StorageProvider | null = null;
 try {
   const r2Config = loadR2ConfigFromEnv();
   r2Provider = new R2StorageProvider(r2Config);
 } catch (e) {
-  console.warn('R2 storage initialization note:', (e as Error).message);
+  if (useLocalStorage) {
+    console.warn('Local storage backend active; R2 disabled:', (e as Error).message);
+  } else {
+    console.warn('R2 storage initialization note:', (e as Error).message);
+  }
 }
+
+// Backend-agnostic store used by uploads and derived thumbnail artifacts.
+const objectStore: ObjectStore | null = r2Provider
+  ? new R2ObjectStore(r2Provider)
+  : useLocalStorage
+    ? new LocalObjectStore(LOCAL_STORAGE_ROOT)
+    : null;
 
 // Helper: send JSON response
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
@@ -168,6 +188,51 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
   };
 }
 
+interface MediaAuthorization {
+  principalId: string;
+  workspaceId: string;
+  fileId: string;
+}
+
+/**
+ * Authorizes a media request either by bearer credential or by a signed media URL
+ * token (image/video tags cannot send Authorization headers). The signature is
+ * scoped to one file + workspace + principal, so it cannot be replayed elsewhere.
+ */
+async function authorizeMediaRequest(
+  req: IncomingMessage,
+  url: URL
+): Promise<MediaAuthorization | null> {
+  const bearer = await authenticateRequest(req);
+  if (bearer) {
+    const workspaceId = url.searchParams.get('workspaceId');
+    const fileId = url.searchParams.get('fileId');
+    if (!workspaceId || !fileId) return null;
+    const mem = await dbGetWorkspaceMembership(workspaceId, bearer.principal.id);
+    if (!mem) return null;
+    return { principalId: bearer.principal.id, workspaceId, fileId };
+  }
+
+  const claims = verifyMediaToken(
+    url.searchParams.get('fileId'),
+    url.searchParams.get('workspaceId'),
+    url.searchParams.get('principalId'),
+    url.searchParams.get('exp'),
+    url.searchParams.get('sig')
+  );
+  if (!claims) return null;
+
+  // Membership is still re-checked, so revoking access invalidates live tokens.
+  const mem = await dbGetWorkspaceMembership(claims.workspaceId, claims.principalId);
+  if (!mem) return null;
+
+  return {
+    principalId: claims.principalId,
+    workspaceId: claims.workspaceId,
+    fileId: claims.fileId,
+  };
+}
+
 export const server = createServer(async (req, res) => {
   // Handle CORS Preflight
   if (req.method === 'OPTIONS') {
@@ -193,7 +258,32 @@ export const server = createServer(async (req, res) => {
         version: '0.1.0',
         database: dbStatus,
         r2: r2Status,
+        googleAuthEnabled: Boolean(process.env['GOOGLE_OAUTH_CLIENT_ID']),
       });
+      return;
+    }
+
+    // 1b. Google OAuth start. Reports a clear state instead of a dead 404 when the
+    // OAuth client has not been provisioned yet.
+    if (pathname === '/api/auth/google' && req.method === 'GET') {
+      const clientId = process.env['GOOGLE_OAUTH_CLIENT_ID'];
+      if (!clientId) {
+        sendJson(res, 501, {
+          error:
+            'GOOGLE_AUTH_NOT_CONFIGURED: Set GOOGLE_OAUTH_CLIENT_ID/GOOGLE_OAUTH_CLIENT_SECRET, or use Guest access.',
+        });
+        return;
+      }
+      const redirectUri = `${url.origin}/api/auth/google/callback`;
+      const authorizeUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+      authorizeUrl.searchParams.set('client_id', clientId);
+      authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+      authorizeUrl.searchParams.set('response_type', 'code');
+      authorizeUrl.searchParams.set('scope', 'openid email profile');
+      authorizeUrl.searchParams.set('access_type', 'offline');
+      authorizeUrl.searchParams.set('prompt', 'consent');
+      res.writeHead(302, { Location: authorizeUrl.toString() });
+      res.end();
       return;
     }
 
@@ -327,7 +417,7 @@ export const server = createServer(async (req, res) => {
 
       const bodyStr = await readBody(req);
       const parsed = JSON.parse(bodyStr);
-      const { workspaceId, name, mimeType, data } = parsed;
+      const { workspaceId, name, mimeType, data, dataEncoding } = parsed;
 
       if (!workspaceId || !name || data === undefined) {
         sendJson(res, 400, { error: 'workspaceId, name, and data are required' });
@@ -349,20 +439,39 @@ export const server = createServer(async (req, res) => {
       const fileId = randomUUID();
       const storageKey = `workspaces/${workspaceId}/${fileId}/${name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
 
-      // Upload bytes to Cloudflare R2 bucket (with local fallback if cloud credentials absent)
-      let sizeBytes = Buffer.byteLength(data);
-      let etag: string | null = null;
-
-      if (r2Provider) {
-        const putResult = await r2Provider.putObject(storageKey, data, mimeType ?? 'application/octet-stream');
-        sizeBytes = putResult.sizeBytes;
-        etag = putResult.etag?.replace(/"/g, '') ?? null;
-      } else {
-        const localPath = path.join('/tmp', 'octo-storage', storageKey);
-        fs.mkdirSync(path.dirname(localPath), { recursive: true });
-        fs.writeFileSync(localPath, data);
-        etag = `local-${Date.now()}`;
+      // Upload bytes to Cloudflare R2 (or the explicit local CI/dev backend)
+      if (!objectStore) {
+        sendJson(res, 503, {
+          error:
+            'STORAGE_UNAVAILABLE: R2 credentials missing. Set OCTO_STORAGE_BACKEND=local for CI/dev only.',
+        });
+        return;
       }
+
+      // Binary payloads must declare base64; otherwise the body is treated as
+      // UTF-8 text. Storing base64 text as an object body would corrupt every
+      // uploaded image and silently break thumbnail generation.
+      if (dataEncoding !== undefined && dataEncoding !== 'base64' && dataEncoding !== 'utf8') {
+        sendJson(res, 400, { error: "BAD_REQUEST: dataEncoding must be 'base64' or 'utf8'" });
+        return;
+      }
+
+      const payload =
+        dataEncoding === 'base64'
+          ? Buffer.from(String(data), 'base64')
+          : Buffer.isBuffer(data)
+            ? data
+            : Buffer.from(String(data), 'utf-8');
+
+      if (payload.byteLength === 0) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: decoded payload is empty' });
+        return;
+      }
+
+      const contentType = mimeType ?? 'application/octet-stream';
+      await objectStore.put(storageKey, payload, contentType);
+      const sizeBytes = payload.byteLength;
+      const etag: string | null = `stored-${payload.byteLength}`;
       // Commit record into PostgreSQL octo.files
       const fileRecord = await dbInsertFile(
         fileId,
@@ -408,8 +517,90 @@ export const server = createServer(async (req, res) => {
 
       const downloadUrl = r2Provider
         ? await r2Provider.generatePresignedDownloadUrl(file.storageKey, 3600)
-        : `http://localhost:${PORT}/api/files/download?fileId=${fileId}&workspaceId=${workspaceId}`;
+        : `/api/files/content?fileId=${fileId}&workspaceId=${workspaceId}`;
       sendJson(res, 200, { file, downloadUrl });
+      return;
+    }
+    // 6b. File Content: GET /api/files/content?workspaceId=...&fileId=...
+    // Streams bytes for the explicit local storage backend. R2 callers use the
+    // presigned URL from /api/files/download instead.
+    if (pathname === '/api/files/content' && req.method === 'GET') {
+      const auth = await authorizeMediaRequest(req, url);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const { fileId, workspaceId } = auth;
+
+      const file = await dbGetFile(workspaceId, fileId);
+      if (!file) {
+        sendJson(res, 404, { error: 'FILE_NOT_FOUND' });
+        return;
+      }
+
+      if (!objectStore) {
+        sendJson(res, 503, { error: 'STORAGE_UNAVAILABLE: no storage backend configured.' });
+        return;
+      }
+
+      const bytes = await objectStore.get(file.storageKey);
+      if (!bytes) {
+        sendJson(res, 404, { error: 'OBJECT_MISSING: Stored bytes not found for this record.' });
+        return;
+      }
+
+      res.writeHead(200, {
+        'Content-Type': file.mimeType || 'application/octet-stream',
+        'Content-Length': String(bytes.byteLength),
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(bytes);
+      return;
+    }
+
+    // 6c. Thumbnail: GET /api/files/thumbnail?workspaceId=...&fileId=...
+    // Serves a cached small WebP derivative so grids never fetch full originals.
+    if (pathname === '/api/files/thumbnail' && req.method === 'GET') {
+      const auth = await authorizeMediaRequest(req, url);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const { fileId, workspaceId, principalId } = auth;
+
+      const file = await dbGetFile(workspaceId, fileId);
+      if (!file) {
+        sendJson(res, 404, { error: 'FILE_NOT_FOUND' });
+        return;
+      }
+
+      if (!objectStore) {
+        sendJson(res, 503, { error: 'STORAGE_UNAVAILABLE: no storage backend configured.' });
+        return;
+      }
+
+      const thumb = await ensureThumbnail(objectStore, fileId, file.storageKey, file.mimeType);
+
+      if (!thumb) {
+        // Not an image (or original missing/corrupt): send the caller to the full
+        // object instead of inventing a derivative.
+        res.writeHead(302, {
+          Location: signMediaUrl('/api/files/content', { fileId, workspaceId, principalId }),
+        });
+        res.end();
+        return;
+      }
+
+      res.writeHead(200, {
+        'Content-Type': thumb.contentType,
+        'Content-Length': String(thumb.bytes.byteLength),
+        'Cache-Control': 'private, max-age=3600',
+        'X-Octo-Thumbnail-Cache': thumb.cached ? 'hit' : 'miss',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(thumb.bytes);
       return;
     }
 
@@ -440,11 +631,64 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      if (r2Provider) {
-        await r2Provider.deleteObject(deleted.storageKey);
+      if (objectStore) {
+        await objectStore.delete(deleted.storageKey);
       }
 
       sendJson(res, 200, { success: true, fileId });
+      return;
+    }
+
+    // 8. Gallery Media: GET /api/gallery?workspaceId=...
+    if (pathname === '/api/gallery' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId required' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      const allFiles = await dbListWorkspaceFiles(workspaceId);
+      const mediaFiles = allFiles.filter(
+        (f) => f.mimeType.startsWith('image/') || f.mimeType.startsWith('video/')
+      );
+
+      const items = [];
+      for (const f of mediaFiles) {
+        const claims = { fileId: f.id, workspaceId, principalId: auth.principal.id };
+
+        // The full view uses the original (presigned R2 URL when available, else the
+        // signed content route). The grid always uses the small cached derivative.
+        const fullUrl = r2Provider
+          ? await r2Provider.generatePresignedDownloadUrl(f.storageKey, 3600)
+          : signMediaUrl('/api/files/content', claims);
+
+        const thumbnailUrl = signMediaUrl('/api/files/thumbnail', claims);
+
+        items.push({
+          id: f.id,
+          name: f.name,
+          mimeType: f.mimeType,
+          sizeBytes: f.sizeBytes,
+          kind: f.mimeType.startsWith('video/') ? 'video' : 'image',
+          thumbnailUrl,
+          fullUrl,
+          createdAt: f.createdAt,
+        });
+      }
+
+      sendJson(res, 200, items);
       return;
     }
 
@@ -499,6 +743,16 @@ export const server = createServer(async (req, res) => {
       const rawSecret = `${prefix}_${secretBytes}`;
       const keyHash = hashApiKeySecret(rawSecret);
 
+      // Authority is never asserted by the key:
+      //   * account-wide keys carry role NULL, so each call is authorized against
+      //     the principal's live memberships;
+      //   * workspace-scoped keys are capped at the creator's current role there.
+      let keyRole: string | null = null;
+      if (workspaceId) {
+        const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+        keyRole = mem?.role ?? 'member';
+      }
+
       const keyId = randomUUID();
       await dbInsertApiKey(
         keyId,
@@ -507,7 +761,7 @@ export const server = createServer(async (req, res) => {
         name,
         auth.principal.id,
         workspaceId ?? null,
-        isAccountWide ? 'owner' : 'member',
+        keyRole,
         ['read', 'write', 'files']
       );
 
