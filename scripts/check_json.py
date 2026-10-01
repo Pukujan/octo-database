@@ -29,7 +29,7 @@ def check_contracts(root: Path) -> int:
         try:
             json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_keys)
         except (ValueError, OSError) as error:
-            raise ValueError(f"{path.relative_to(root)}: {error}") from error
+            raise ValueError(f"{path.relative_to(root).as_posix()}: {error}") from error
     return len(paths)
 
 

@@ -3,6 +3,24 @@
   "system_version": "0.5.7",
   "assets": [
     {
+      "path": "docs/assets/octo-hero-banner.png",
+      "role": "hero",
+      "orientation": "wide",
+      "dimensions": "1264x848",
+      "text_policy": "Exact title and subtitle only; no extra labels or fabricated metrics.",
+      "exact_title": "Octo Database",
+      "exact_subtitle": "Multi-workspace personal control plane with active and archival storage",
+      "prompt_recipe": "Editorial illustration with warm cream paper, deep navy typography, muted slate blue, and restrained gold accents. A central control dashboard connects distinct workspaces, an active cloud object vault, and an archival storage tier. Exact title 'Octo Database' and exact subtitle 'Multi-workspace personal control plane with active and archival storage' in clean typography. No fake metrics, dense UI, decorative pseudo-text, or suggestion that the software has already automated this whole scene.",
+      "alt_text": "Octo control plane unifying isolated workspaces, active cloud object storage, and cold archival tiers.",
+      "usage": "README lead visual; placed after the repository headline and description.",
+      "crop_behavior": "Full wide frame without cropping typography or core elements.",
+      "rejection_conditions": "Reject if title is misspelled, layout is cluttered, or text includes fabricated metrics.",
+      "review_decision": "accepted after visual review at repository image size",
+      "provider": "built-in image_gen",
+      "prompt_record": "docs/assets/prompts/octo-hero-banner.md",
+      "hash": "b528cf5c3b8c7339d2b251d38af993aaa1c5d4355be4ef4bc11f8276924db169"
+    },
+    {
       "path": "docs/assets/workspace-dashboard.svg",
       "role": "ui-reference",
       "orientation": "svg",

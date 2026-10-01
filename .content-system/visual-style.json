@@ -1,6 +1,6 @@
 {
   "schema_version": "content-generation.visual-style.v1",
-  "reference_asset": "docs/assets/workspace-dashboard.svg",
+  "reference_asset": "docs/assets/octo-hero-banner.png",
   "generation_workflow": "built-in image_gen",
   "narrative_roles": [
     "hero",
@@ -13,7 +13,7 @@
   },
   "roles": {
     "hero": {
-      "purpose": "show one control plane connecting workspaces and storage"
+      "purpose": "show one control plane connecting workspaces, active cloud storage, and cold archival storage"
     },
     "ui-reference": {
       "purpose": "Simple template/component workspace dashboard layout; implementation uses MUI or a maintained template."
