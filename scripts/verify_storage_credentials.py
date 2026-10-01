@@ -38,7 +38,9 @@ def verify_r2(env: dict[str, str]) -> bool:
         return False
 
     try:
-        import boto3  # type: ignore[import-untyped]
+        import importlib
+
+        boto3 = importlib.import_module("boto3")
 
         s3 = boto3.client(
             "s3",

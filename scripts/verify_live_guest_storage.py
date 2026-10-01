@@ -112,7 +112,13 @@ def main() -> int:
     print("=== OCTO LIVE VERIFICATION: 3 Guest Workspaces, R2 & Drive Archival ===")
 
     # 1. R2 Client setup
-    import boto3  # type: ignore[import-untyped]
+    import importlib
+
+    try:
+        boto3 = importlib.import_module("boto3")
+    except ImportError:
+        print("Error: boto3 is required for live storage verification")
+        return 1
 
     endpoint = env.get("R2_ENDPOINT") or env.get("CLOUDFLARE_R2_ENDPOINT")
     access_key = env.get("R2_ACCESS_KEY_ID") or env.get("CLOUDFLARE_R2_ACCESS_KEY_ID")
