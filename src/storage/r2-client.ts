@@ -50,7 +50,7 @@ export function loadR2ConfigFromEnv(): R2StorageConfig {
   const endpoint = process.env['S3_API_ENDPOINT'];
   const accessKeyId = process.env['ACCESS_KEY_ID'];
   const secretAccessKey = process.env['CLOUDFLARE_SECRET_ACCESS_KEY'];
-  const bucket = process.env['OCTO_R2_BUCKET'] ?? 'vastai-gpu-broker';
+  const bucket = process.env['OCTO_R2_BUCKET'] ?? 'octo';
 
   if (!endpoint || !accessKeyId || !secretAccessKey) {
     throw new Error(
