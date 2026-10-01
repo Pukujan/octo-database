@@ -38,9 +38,11 @@ MAX_WAIT=90
 WAITED=0
 HEALTHY=false
 
+WEB_HOST_PORT="${WEB_HOST_PORT:-8091}"
+
 while [ "$WAITED" -lt "$MAX_WAIT" ]; do
-  if curl -fsS "http://127.0.0.1:8090/healthz" >/dev/null 2>&1; then
-    HEALTH_STATUS=$(curl -fsS "http://127.0.0.1:8090/health" 2>/dev/null || echo "{}")
+  if curl -fsS "http://127.0.0.1:${WEB_HOST_PORT}/healthz" >/dev/null 2>&1; then
+    HEALTH_STATUS=$(curl -fsS "http://127.0.0.1:${WEB_HOST_PORT}/health" 2>/dev/null || echo "{}")
     DB_CONNECTED=$(echo "$HEALTH_STATUS" | grep -o '"connected":true' || true)
     if [ -n "$DB_CONNECTED" ]; then
       HEALTHY=true
@@ -61,7 +63,7 @@ fi
 
 echo "4. Running smoke tests..."
 # Smoke test A: Root UI returns 200
-HTTP_INDEX=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8090/")
+HTTP_INDEX=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${WEB_HOST_PORT}/")
 if [ "$HTTP_INDEX" != "200" ]; then
   echo "ERROR: Smoke test failed: GET / returned HTTP ${HTTP_INDEX} (expected 200)"
   ./rollback.sh
@@ -69,7 +71,7 @@ if [ "$HTTP_INDEX" != "200" ]; then
 fi
 
 # Smoke test B: Unauthenticated API access returns 401
-HTTP_WORKSPACES=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8090/api/workspaces")
+HTTP_WORKSPACES=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${WEB_HOST_PORT}/api/workspaces")
 if [ "$HTTP_WORKSPACES" != "401" ]; then
   echo "ERROR: Smoke test failed: GET /api/workspaces returned HTTP ${HTTP_WORKSPACES} (expected 401)"
   ./rollback.sh
@@ -84,4 +86,4 @@ PREVIOUS_IMAGE="${PREVIOUS_IMAGE}"
 DEPLOYED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 EOF
 
-echo "=== Deployment successful: Octo @ ${IMAGE_TAG} is live on http://127.0.0.1:8090 ==="
+echo "=== Deployment successful: Octo @ ${IMAGE_TAG} is live on http://127.0.0.1:${WEB_HOST_PORT} ==="

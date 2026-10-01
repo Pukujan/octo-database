@@ -13,7 +13,7 @@ Octo runs as a three-container Docker Compose project on gravebuster:
                                       │  study-os_edge
                                       ▼
                           ┌───────────────────────┐
-   octodb.design-bakery ─▶│  octo-web  (Caddy 2)  │  127.0.0.1:8090
+   octodb.design-bakery ─▶│  octo-web  (Caddy 2)  │  127.0.0.1:8091
    .com                   │  static dist + proxy  │
                           └───────────┬───────────┘
                                       │ /api/*, /health
@@ -47,9 +47,9 @@ Before running on gravebuster, ensure:
    Map `octodb.design-bakery.com` to `http://octo-web:80` inside the Cloudflare Zero Trust tunnel dashboard (using the existing `study-os-cloudflared-1` tunnel on the `study-os_edge` Docker network).
 
 3. **Port Check**:
-   Confirm port `8090` is open on gravebuster:
+   Confirm port `8091` is open on gravebuster (port 8090 is in use by groktocrawl):
    ```bash
-   ss -ltn | grep ':8090 '
+   ss -ltn | grep ':8091 '
    ```
 
 ---
