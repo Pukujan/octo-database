@@ -273,7 +273,7 @@ async function authorizeMediaRequest(
  * The worker uses the same lease-based claim as a standalone process, so a crash
  * between claim and completion leaves the job claimable again after the lease.
  */
-async function drainQueueOnce(maxJobs = 10): Promise<JobOutcome[]> {
+async function drainQueueOnce(targetWorkspaceId?: string, maxJobs = 10): Promise<JobOutcome[]> {
   const outcomes: JobOutcome[] = [];
 
   for (let i = 0; i < maxJobs; i += 1) {
@@ -294,7 +294,10 @@ async function drainQueueOnce(maxJobs = 10): Promise<JobOutcome[]> {
       },
     });
 
-    outcomes.push(outcome);
+    // Only return outcomes belonging to the caller's workspace to prevent cross-workspace data leakage
+    if (!targetWorkspaceId || job.workspaceId === targetWorkspaceId) {
+      outcomes.push(outcome);
+    }
   }
 
   return outcomes;
@@ -939,8 +942,8 @@ export const server = createServer(async (req, res) => {
       }
 
       const keyId = pathname.slice('/api/keys/'.length);
-      if (!keyId) {
-        sendJson(res, 400, { error: 'keyId is required' });
+      if (!keyId || !UUID_PATTERN.test(keyId)) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: keyId must be a valid UUID' });
         return;
       }
 
@@ -980,6 +983,11 @@ export const server = createServer(async (req, res) => {
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
       if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to create share links' });
+        return;
+      }
+
+      if (resourceType && resourceType !== 'gallery') {
+        sendJson(res, 400, { error: "BAD_REQUEST: Only resourceType 'gallery' is supported currently" });
         return;
       }
 
@@ -1355,7 +1363,7 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const outcomes = await drainQueueOnce();
+      const outcomes = await drainQueueOnce(workspaceId);
       sendJson(res, 200, { outcomes });
       return;
     }
@@ -1376,7 +1384,7 @@ export const server = createServer(async (req, res) => {
       const embeddingConfig = loadEmbeddingConfigFromEnv();
       if (!embeddingConfig) {
         sendJson(res, 503, {
-          error: 'EMBEDDING_PROVIDER_NOT_CONFIGURED: set INFERHUB_API_KEY to ingest documents',
+          error: 'EMBEDDING_PROVIDER_NOT_CONFIGURED: set OCTO_EMBEDDING_API_KEY to ingest documents',
         });
         return;
       }
@@ -1485,7 +1493,7 @@ export const server = createServer(async (req, res) => {
       const embeddingConfig = loadEmbeddingConfigFromEnv();
       if (!embeddingConfig) {
         sendJson(res, 503, {
-          error: 'EMBEDDING_PROVIDER_NOT_CONFIGURED: set INFERHUB_API_KEY to query documents',
+          error: 'EMBEDDING_PROVIDER_NOT_CONFIGURED: set OCTO_EMBEDDING_API_KEY to query documents',
         });
         return;
       }

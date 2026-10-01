@@ -107,4 +107,3 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- DML only: TRUNCATE and REFERENCES are not subject to row security.
 GRANT SELECT, INSERT, UPDATE, DELETE ON octo.jobs TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON octo.activity TO authenticated;
-GRANT EXECUTE ON FUNCTION octo.claim_job(TEXT, INT) TO authenticated;
