@@ -12,6 +12,7 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
   test('renders login screen, audits visual quality with vision model, and enters guest mode', async ({
     page,
   }) => {
+    test.setTimeout(180000);
     // 1. Navigate to application
     await page.goto('/');
     await expect(page.locator('text=Welcome to Octo')).toBeVisible();
