@@ -28,7 +28,7 @@ fi
 
 echo "Autodeploy: New commit detected on origin/production: ${REMOTE_SHA:0:12} (current: ${CURRENT_SHA:0:12})"
 git checkout --quiet production
-git merge --ff-only --quiet "origin/production"
+git reset --hard --quiet "origin/production"
 
 cd "$DEPLOY_DIR"
 ./deploy.sh "$REMOTE_SHA"

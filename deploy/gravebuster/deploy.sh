@@ -38,6 +38,12 @@ MAX_WAIT=90
 WAITED=0
 HEALTHY=false
 
+if [ -z "${WEB_HOST_PORT:-}" ] && [ -f ".env" ]; then
+  ENV_PORT=$(grep -E '^WEB_HOST_PORT=' .env | cut -d= -f2 | tr -d ' "\r' || true)
+  if [ -n "$ENV_PORT" ]; then
+    WEB_HOST_PORT="$ENV_PORT"
+  fi
+fi
 WEB_HOST_PORT="${WEB_HOST_PORT:-8091}"
 
 while [ "$WAITED" -lt "$MAX_WAIT" ]; do
