@@ -93,31 +93,54 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // Restore principal if token exists in storage but principal is missing
+  /** Drops every trace of the current session: storage plus in-memory state. */
+  const clearSession = () => {
+    localStorage.removeItem('octo_principal');
+    localStorage.removeItem('octo_token');
+    setPrincipal(null);
+    setSessionToken(null);
+    setWorkspaces([]);
+    setActiveContext(null);
+    setFiles([]);
+    setGalleryItems([]);
+    setShares([]);
+    setJobs([]);
+    setActivity([]);
+    setApiKeys([]);
+  };
+
+  // The server is the authority on who the caller is. A persisted principal can
+  // be stale (for example saved before the platform-owner flag existed) and a
+  // persisted token can be expired, so re-validate on every load rather than
+  // trusting localStorage. This is the same path the OAuth callback uses, so a
+  // restored session and a fresh login cannot diverge; a 401 clears the dead
+  // session instead of leaving a signed-in shell with no workspaces.
   useEffect(() => {
-    if (sessionToken && !principal) {
-      fetch(`${API_BASE}/api/me`, {
-        headers: { Authorization: `Bearer ${sessionToken}` },
+    if (!sessionToken) return;
+    let cancelled = false;
+    fetch(`${API_BASE}/api/me`, {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    })
+      .then((res) => {
+        if (res.status === 401) return null;
+        return res.ok ? res.json() : undefined;
       })
-        .then((res) => {
-          if (res.ok) return res.json();
-          if (res.status === 401) {
-            setSessionToken(null);
-            setPrincipal(null);
-            localStorage.removeItem('octo_token');
-            localStorage.removeItem('octo_principal');
-          }
-          return null;
-        })
-        .then((data) => {
-          if (data?.principal) {
-            setPrincipal(data.principal);
-            localStorage.setItem('octo_principal', JSON.stringify(data.principal));
-          }
-        })
-        .catch((err) => console.error('Failed to restore principal:', err));
-    }
-  }, [sessionToken, principal]);
+      .then((data) => {
+        if (cancelled) return;
+        if (data === null) {
+          clearSession();
+          return;
+        }
+        if (data?.principal) {
+          setPrincipal(data.principal);
+          localStorage.setItem('octo_principal', JSON.stringify(data.principal));
+        }
+      })
+      .catch((err) => console.error('Failed to restore principal:', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionToken]);
 
   // Load workspaces when authenticated
   useEffect(() => {
@@ -376,17 +399,7 @@ export const App: React.FC = () => {
   };
 
   const handleSignOut = () => {
-    localStorage.removeItem('octo_principal');
-    localStorage.removeItem('octo_token');
-    setPrincipal(null);
-    setSessionToken(null);
-    setWorkspaces([]);
-    setFiles([]);
-    setGalleryItems([]);
-    setShares([]);
-    setJobs([]);
-    setActivity([]);
-    setApiKeys([]);
+    clearSession();
   };
 
   const handleUploadFile = async (name: string, mimeType: string, content: string) => {
