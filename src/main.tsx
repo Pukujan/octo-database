@@ -12,6 +12,8 @@ import { WorkspaceContext } from './auth/workspace-service';
 import { FileRecord } from './storage/file-service';
 import { ApiKey } from './api/keys';
 import { GalleryItem } from './media/gallery-service';
+import { ShareSummary } from './media/share-service';
+import { PublicShareView } from './ui/PublicShareView';
 
 const API_BASE = ''; // Uses Vite proxy to http://localhost:3001
 
@@ -29,6 +31,7 @@ export const App: React.FC = () => {
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [galleryItems, setGalleryItems] = useState<GalleryItem[]>([]);
+  const [shares, setShares] = useState<ShareSummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [googleAuthEnabled, setGoogleAuthEnabled] = useState(false);
 
@@ -85,6 +88,54 @@ export const App: React.FC = () => {
     if (res.ok) setGalleryItems(await res.json());
   };
 
+  /** Reloads scoped share links for a workspace. */
+  const refreshShares = async (workspaceId: string) => {
+    if (!sessionToken) return;
+    const res = await fetch(`${API_BASE}/api/workspaces/shares?workspaceId=${workspaceId}`, {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
+    if (res.ok) {
+      const rows: ShareSummary[] = await res.json();
+      const now = Date.now();
+      setShares(
+        rows.map((r) => ({
+          ...r,
+          active: !r.revokedAt && (!r.validUntil || new Date(r.validUntil).getTime() > now),
+        }))
+      );
+    }
+  };
+
+  const handleCreateShare = async (expiresInHours: number | null) => {
+    if (!sessionToken || !activeContext) throw new Error('Unauthenticated');
+    const res = await fetch(`${API_BASE}/api/workspaces/shares`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({
+        workspaceId: activeContext.workspace.id,
+        resourceType: 'gallery',
+        permission: 'read',
+        expiresInHours,
+      }),
+    });
+    if (!res.ok) throw new Error('Failed to create share link');
+    const data = await res.json();
+    await refreshShares(activeContext.workspace.id);
+    return { rawToken: data.rawToken as string };
+  };
+
+  const handleRevokeShare = async (shareId: string) => {
+    if (!sessionToken || !activeContext) return;
+    const res = await fetch(
+      `${API_BASE}/api/shares/${shareId}?workspaceId=${activeContext.workspace.id}`,
+      { method: 'DELETE', headers: { Authorization: `Bearer ${sessionToken}` } }
+    );
+    if (res.ok) await refreshShares(activeContext.workspace.id);
+  };
+
   const handleSelectWorkspace = async (workspaceId: string, roleHint?: string) => {
     if (!sessionToken || !principal) return;
 
@@ -138,6 +189,8 @@ export const App: React.FC = () => {
       if (gRes.ok) {
         setGalleryItems(await gRes.json());
       }
+
+      await refreshShares(workspaceId);
     } catch (e) {
       console.error('Failed to load workspace details:', e);
     }
@@ -194,6 +247,7 @@ export const App: React.FC = () => {
     setWorkspaces([]);
     setFiles([]);
     setGalleryItems([]);
+    setShares([]);
     setApiKeys([]);
   };
 
@@ -302,12 +356,29 @@ export const App: React.FC = () => {
       onUploadBinaryFile={handleUploadBinaryFile}
       onDeleteFile={handleDeleteFile}
       onCreateApiKey={handleCreateApiKey}
+      shares={shares}
+      onCreateShare={handleCreateShare}
+      onRevokeShare={handleRevokeShare}
       isLoading={isLoading}
     />
   );
 };
 
 const rootEl = document.getElementById('root');
+
+/**
+ * A `/share/<token>` path renders the standalone public viewer, which has no
+ * session, no workspace switcher, and no admin surface. Every other path renders
+ * the authenticated application.
+ */
+function Root() {
+  const shareMatch = window.location.pathname.match(/^\/share\/(.+)$/);
+  if (shareMatch && shareMatch[1]) {
+    return <PublicShareView token={decodeURIComponent(shareMatch[1])} />;
+  }
+  return <App />;
+}
+
 if (rootEl) {
-  ReactDOM.createRoot(rootEl).render(<App />);
+  ReactDOM.createRoot(rootEl).render(<Root />);
 }
