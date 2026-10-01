@@ -20,7 +20,7 @@ jobs:
             const body = issue.body || '';
 
             // Check if this is an observational issue
-            const isObservational = 
+            const isObservational =
               issue.labels.some(l => l.name === 'observational-issue') ||
               body.includes('Contributor Plane') ||
               body.includes('Observational Plane');
