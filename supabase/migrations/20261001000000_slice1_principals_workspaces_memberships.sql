@@ -154,7 +154,9 @@ CREATE POLICY memberships_delete_owner_admin ON octo.workspace_memberships
 -- Grants USAGE on schema octo and table permissions to authenticated role.
 -- Row-Level Security remains active and enforces authorization per row.
 GRANT USAGE ON SCHEMA octo TO anon, authenticated;
-GRANT ALL ON ALL TABLES IN SCHEMA octo TO authenticated;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA octo TO authenticated;
-ALTER DEFAULT PRIVILEGES IN SCHEMA octo GRANT ALL ON TABLES TO authenticated;
-ALTER DEFAULT PRIVILEGES IN SCHEMA octo GRANT ALL ON SEQUENCES TO authenticated;
+-- DML only: TRUNCATE and REFERENCES are not subject to row security, so an
+-- `ALL` grant would let any authenticated caller wipe every row despite RLS.
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA octo TO authenticated;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA octo TO authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA octo GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA octo GRANT USAGE, SELECT ON SEQUENCES TO authenticated;

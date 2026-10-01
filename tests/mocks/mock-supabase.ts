@@ -150,11 +150,6 @@ export function createMockSupabaseClient(
             }
             return Promise.resolve({ data: null, error: null });
           }
-          if (fnName === 'resolve_principal_by_id') {
-            const id = params['target_id'] as string;
-            const p = db.principals.find((pr) => pr.id === id);
-            return Promise.resolve({ data: p ? [p] : null, error: null });
-          }
           return Promise.resolve({ data: null, error: new Error(`Unknown RPC: ${fnName}`) });
         },
       };

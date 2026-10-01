@@ -21,24 +21,42 @@ Build the first polished user-facing application: a private image/video gallery 
 Task initialized following successful merge of Slice 5 (PR #24: Google Drive archival, R2 guest storage verification, and CGM hero asset).
 Next step is to create the gallery UI component, media query routes, and thumbnail generator.
 
-### Slice 3 implementation (PR #27)
+### 2026-10-01 03:45:00 UTC — Pukujan
 
-Implemented and verified locally against a live PostgreSQL 16 instance and the browser:
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":["src/media","src/storage/object-store.ts","src/ui/Gallery.tsx","src/server/index.ts","tests/e2e/gallery.spec.ts","tests/integration/gallery.test.ts","tests/unit/media-classifier.test.ts","tests/unit/thumbnail-service.test.ts"],"completed":["Private workspace gallery with derivative thumbnails, signed media URLs, and modal lightbox"],"decisions":["Derive thumbnails at a stable key so regeneration is idempotent","Sign media URLs because img/video tags cannot send Authorization headers","Require explicit OCTO_STORAGE_BACKEND=local so production still fails closed without R2"],"evidence":["Browser run: grid loaded a 400x300 WebP derivative while the lightbox loaded the 1000x700 original with zero failed requests","Thumbnail service tests: one derivative written across repeated calls","Gallery integration test: unauthorized principal receives FORBIDDEN","Playwright gallery spec passes; vision audit scored login 90/100 and dashboard 90/100"],"next_action":"Merge PR #27 after green gates, then begin scoped share links (#6)","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-0300","timestamp":"2026-10-01T03:45:00Z"} -->
 
-- Media classifier for image and browser-playable video MIME types (`src/media/classifier.ts`).
-- Idempotent thumbnail derivatives at the stable key `derived/{file_id}/thumb.webp`; a retry reuses the
-  existing object instead of writing a duplicate (`src/media/thumbnail-service.ts`).
-- Backend-agnostic `ObjectStore` with R2 and local implementations (`src/storage/object-store.ts`).
-- Signed short-lived media URLs, because `img`/`video` elements cannot send `Authorization` headers;
-  the signature is scoped to one file + workspace + principal and membership is re-checked on every use.
-- Routes: `GET /api/gallery`, `GET /api/files/thumbnail`, `GET /api/files/content`.
-- React MUI gallery grid with modal lightbox and image/video playback (`src/ui/Gallery.tsx`).
+Completed:
+- Private workspace gallery with derivative thumbnails, signed media URLs, and modal lightbox
 
-Verified evidence: grid loads a 400x300 WebP derivative while the lightbox loads the 1000x700 original,
-with zero failed requests; exactly one derivative object exists on disk after repeated requests;
-unsigned and forged media requests return 401; an unauthorized principal receives FORBIDDEN.
+Evidence:
+- Browser run: grid loaded a 400x300 WebP derivative while the lightbox loaded the 1000x700 original with zero failed requests
+- Thumbnail service tests: one derivative written across repeated calls
+- Gallery integration test: unauthorized principal receives FORBIDDEN
+- Playwright gallery spec passes; vision audit scored login 90/100 and dashboard 90/100
 
-Defects found and fixed during this work: base64 upload payloads were stored as text rather than decoded
-bytes (corrupting every uploaded image); the local download fallback returned its own endpoint; the
-implicit local storage fallback was replaced with an explicit `OCTO_STORAGE_BACKEND=local` opt-in so
-production still fails closed without R2; the Google sign-in button linked to a nonexistent route.
+Decisions:
+- Derive thumbnails at a stable key so regeneration is idempotent
+- Sign media URLs because img/video tags cannot send Authorization headers
+- Require explicit OCTO_STORAGE_BACKEND=local so production still fails closed without R2
+
+Changed:
+- src/media
+- src/storage/object-store.ts
+- src/ui/Gallery.tsx
+- src/server/index.ts
+- tests/e2e/gallery.spec.ts
+- tests/integration/gallery.test.ts
+- tests/unit/media-classifier.test.ts
+- tests/unit/thumbnail-service.test.ts
+
+Blocked/uncertain:
+- none
+
+Next:
+- Merge PR #27 after green gates, then begin scoped share links (#6)
+
+Completed (defects found and fixed while verifying):
+- Base64 upload payloads were stored as text rather than decoded bytes, corrupting every uploaded image.
+- The local download fallback returned its own endpoint; replaced with a real `/api/files/content` route.
+- The implicit local storage fallback was replaced with an explicit opt-in so production fails closed.
+- The Google sign-in button linked to a nonexistent route; it now reports an honest not-configured state.

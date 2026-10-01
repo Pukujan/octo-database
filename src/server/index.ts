@@ -743,6 +743,16 @@ export const server = createServer(async (req, res) => {
       const rawSecret = `${prefix}_${secretBytes}`;
       const keyHash = hashApiKeySecret(rawSecret);
 
+      // Authority is never asserted by the key:
+      //   * account-wide keys carry role NULL, so each call is authorized against
+      //     the principal's live memberships;
+      //   * workspace-scoped keys are capped at the creator's current role there.
+      let keyRole: string | null = null;
+      if (workspaceId) {
+        const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+        keyRole = mem?.role ?? 'member';
+      }
+
       const keyId = randomUUID();
       await dbInsertApiKey(
         keyId,
@@ -751,7 +761,7 @@ export const server = createServer(async (req, res) => {
         name,
         auth.principal.id,
         workspaceId ?? null,
-        isAccountWide ? 'owner' : 'member',
+        keyRole,
         ['read', 'write', 'files']
       );
 

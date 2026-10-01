@@ -56,11 +56,40 @@ class Slice2SchemaTests(unittest.TestCase):
     def test_security_definer_functions_exist(self) -> None:
         required_functions = [
             "CREATE OR REPLACE FUNCTION octo.verify_api_key(target_hash TEXT)",
-            "CREATE OR REPLACE FUNCTION octo.resolve_principal_by_id(target_id UUID)",
             "LANGUAGE plpgsql SECURITY DEFINER",
         ]
         for fn in required_functions:
             self.assertIn(fn, self.sql_content, f"Missing helper function: {fn}")
+
+    def test_no_anon_reachable_principal_lookup(self) -> None:
+        # An anon-grantable lookup by UUID would disclose any principal's email,
+        # avatar, and platform-owner flag to anyone holding the public anon key.
+        self.assertNotIn(
+            "octo.resolve_principal_by_id",
+            self.sql_content,
+            "Principal lookup must not be exposed as an anon-executable function",
+        )
+
+    def test_grants_exclude_truncate(self) -> None:
+        # TRUNCATE is not subject to row security, so an ALL grant would let any
+        # authenticated caller wipe every row with RLS still enabled.
+        self.assertNotIn("GRANT ALL ON octo.files", self.sql_content)
+        self.assertNotIn("GRANT ALL ON octo.api_keys", self.sql_content)
+        self.assertIn(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON octo.files TO authenticated;",
+            self.sql_content,
+        )
+        self.assertIn(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON octo.api_keys TO authenticated;",
+            self.sql_content,
+        )
+
+    def test_api_key_role_cannot_exceed_creator_role(self) -> None:
+        self.assertIn(
+            "octo.role_rank(role) <= octo.role_rank(octo.get_workspace_role(workspace_id))",
+            self.sql_content,
+        )
+        self.assertIn("(workspace_id IS NULL AND role IS NULL)", self.sql_content)
 
 
 if __name__ == "__main__":
