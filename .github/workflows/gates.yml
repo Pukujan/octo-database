@@ -63,6 +63,14 @@ jobs:
 
       - name: Frontend and authorization tests
         run: npm test
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright E2E and Multimodal Vision QA
+        env:
+          INFERHUB_API_KEY: ${{ secrets.INFERHUB_API_KEY }}
+        run: npx playwright test
       - name: Validate pinned PCM adopter state
         shell: bash
         run: |
