@@ -93,10 +93,10 @@ export function createMockSupabaseClient(
   initialUser: User | null
 ): SupabaseClient {
   let currentUser = initialUser;
-  const getCurrentPrincipal = () =>
-    currentUser
-      ? db.principals.find((p) => p.auth_user_id === currentUser.id)
-      : undefined;
+  const getCurrentPrincipal = () => {
+    const u = currentUser;
+    return u ? db.principals.find((p) => p.auth_user_id === u.id) : undefined;
+  };
 
   const client = {
     auth: {
