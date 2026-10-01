@@ -3,6 +3,7 @@
 **Status:** Draft for owner review
 **Date:** 2026-10-01
 **Task:** OCTO-1000-gravebuster-deployment
+**Issue:** #43
 **Related:** Issue #1 (control plane), `.github/workflows/gates.yml`, `deploy/gravebuster/*` in `design-bakery`
 
 ## 1. Problem
