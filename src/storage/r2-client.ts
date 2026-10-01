@@ -47,14 +47,14 @@ export interface ObjectSummary {
  * Fails closed if required credentials are not present.
  */
 export function loadR2ConfigFromEnv(): R2StorageConfig {
-  const endpoint = process.env['S3_API_ENDPOINT'];
-  const accessKeyId = process.env['ACCESS_KEY_ID'];
-  const secretAccessKey = process.env['CLOUDFLARE_SECRET_ACCESS_KEY'];
-  const bucket = process.env['OCTO_R2_BUCKET'] ?? 'octo';
+  const endpoint = process.env['S3_API_ENDPOINT'] ?? process.env['R2_ENDPOINT'];
+  const accessKeyId = process.env['ACCESS_KEY_ID'] ?? process.env['R2_ACCESS_KEY_ID'];
+  const secretAccessKey = process.env['CLOUDFLARE_SECRET_ACCESS_KEY'] ?? process.env['R2_SECRET_ACCESS_KEY'];
+  const bucket = process.env['OCTO_R2_BUCKET'] ?? process.env['R2_BUCKET'] ?? 'octo';
 
   if (!endpoint || !accessKeyId || !secretAccessKey) {
     throw new Error(
-      'MISSING_R2_CREDENTIALS: S3_API_ENDPOINT, ACCESS_KEY_ID, and CLOUDFLARE_SECRET_ACCESS_KEY are required'
+      'MISSING_R2_CREDENTIALS: S3_API_ENDPOINT or R2_ENDPOINT, ACCESS_KEY_ID or R2_ACCESS_KEY_ID, and CLOUDFLARE_SECRET_ACCESS_KEY or R2_SECRET_ACCESS_KEY are required'
     );
   }
 
