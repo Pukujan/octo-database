@@ -26,6 +26,15 @@ export default defineConfig({
       url: 'http://localhost:3001/health',
       reuseExistingServer: !process.env['CI'],
       timeout: 30000,
+      env: {
+        // CI/dev has no R2 credentials; the local backend must be opted into
+        // explicitly so production still fails closed without R2.
+        OCTO_STORAGE_BACKEND: process.env['OCTO_STORAGE_BACKEND'] ?? 'local',
+        OCTO_MEDIA_SECRET: process.env['OCTO_MEDIA_SECRET'] ?? 'e2e-media-secret',
+        DATABASE_URL:
+          process.env['DATABASE_URL'] ??
+          'postgresql://postgres:postgres@localhost:54329/postgres',
+      },
     },
     {
       command: 'npx vite --port 3000',

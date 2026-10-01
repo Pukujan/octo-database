@@ -11,6 +11,7 @@ import { Principal, WorkspaceRole, WorkspaceSummary } from './types/auth';
 import { WorkspaceContext } from './auth/workspace-service';
 import { FileRecord } from './storage/file-service';
 import { ApiKey } from './api/keys';
+import { GalleryItem } from './media/gallery-service';
 
 const API_BASE = ''; // Uses Vite proxy to http://localhost:3001
 
@@ -27,7 +28,25 @@ export const App: React.FC = () => {
   const [activeContext, setActiveContext] = useState<WorkspaceContext | null>(null);
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
+  const [galleryItems, setGalleryItems] = useState<GalleryItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [googleAuthEnabled, setGoogleAuthEnabled] = useState(false);
+
+  // Probe server capabilities so unimplemented controls are not shown as live.
+  useEffect(() => {
+    async function loadCapabilities() {
+      try {
+        const res = await fetch(`${API_BASE}/health`);
+        if (res.ok) {
+          const data = await res.json();
+          setGoogleAuthEnabled(Boolean(data.googleAuthEnabled));
+        }
+      } catch {
+        setGoogleAuthEnabled(false);
+      }
+    }
+    loadCapabilities();
+  }, []);
 
   // Load workspaces when authenticated
   useEffect(() => {
@@ -57,6 +76,15 @@ export const App: React.FC = () => {
   }, [sessionToken]);
 
   // Load files and keys for active workspace
+  /** Reloads gallery media for a workspace. */
+  const refreshGallery = async (workspaceId: string) => {
+    if (!sessionToken) return;
+    const res = await fetch(`${API_BASE}/api/gallery?workspaceId=${workspaceId}`, {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
+    if (res.ok) setGalleryItems(await res.json());
+  };
+
   const handleSelectWorkspace = async (workspaceId: string, roleHint?: string) => {
     if (!sessionToken || !principal) return;
 
@@ -101,6 +129,14 @@ export const App: React.FC = () => {
       });
       if (kRes.ok) {
         setApiKeys(await kRes.json());
+      }
+
+      // Fetch gallery items
+      const gRes = await fetch(`${API_BASE}/api/gallery?workspaceId=${workspaceId}`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      if (gRes.ok) {
+        setGalleryItems(await gRes.json());
       }
     } catch (e) {
       console.error('Failed to load workspace details:', e);
@@ -156,8 +192,8 @@ export const App: React.FC = () => {
     setPrincipal(null);
     setSessionToken(null);
     setWorkspaces([]);
-    setActiveContext(null);
     setFiles([]);
+    setGalleryItems([]);
     setApiKeys([]);
   };
 
@@ -174,12 +210,46 @@ export const App: React.FC = () => {
         name,
         mimeType,
         data: content,
+        dataEncoding: 'utf8',
       }),
     });
 
     if (res.ok) {
       const newFile = await res.json();
       setFiles((prev) => [newFile, ...prev]);
+    }
+  };
+
+  /** Uploads a real binary file (image/video) as base64 with its true MIME type. */
+  const handleUploadBinaryFile = async (file: File) => {
+    if (!sessionToken || !activeContext) return;
+    const buffer = await file.arrayBuffer();
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]!);
+    }
+    const base64 = btoa(binary);
+
+    const res = await fetch(`${API_BASE}/api/files/upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({
+        workspaceId: activeContext.workspace.id,
+        name: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        data: base64,
+        dataEncoding: 'base64',
+      }),
+    });
+
+    if (res.ok) {
+      const newFile = await res.json();
+      setFiles((prev) => [newFile, ...prev]);
+      await refreshGallery(activeContext.workspace.id);
     }
   };
 
@@ -221,12 +291,15 @@ export const App: React.FC = () => {
       workspaces={workspaces}
       activeContext={activeContext}
       files={files}
+      galleryItems={galleryItems}
       apiKeys={apiKeys}
+      googleAuthEnabled={googleAuthEnabled}
       onSignInWithGoogle={handleSignInWithGoogle}
       onSignInAsGuest={handleSignInAsGuest}
       onSignOut={handleSignOut}
       onSelectWorkspace={handleSelectWorkspace}
       onUploadFile={handleUploadFile}
+      onUploadBinaryFile={handleUploadBinaryFile}
       onDeleteFile={handleDeleteFile}
       onCreateApiKey={handleCreateApiKey}
       isLoading={isLoading}

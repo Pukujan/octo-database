@@ -20,3 +20,25 @@ Build the first polished user-facing application: a private image/video gallery 
 
 Task initialized following successful merge of Slice 5 (PR #24: Google Drive archival, R2 guest storage verification, and CGM hero asset).
 Next step is to create the gallery UI component, media query routes, and thumbnail generator.
+
+### Slice 3 implementation (PR #27)
+
+Implemented and verified locally against a live PostgreSQL 16 instance and the browser:
+
+- Media classifier for image and browser-playable video MIME types (`src/media/classifier.ts`).
+- Idempotent thumbnail derivatives at the stable key `derived/{file_id}/thumb.webp`; a retry reuses the
+  existing object instead of writing a duplicate (`src/media/thumbnail-service.ts`).
+- Backend-agnostic `ObjectStore` with R2 and local implementations (`src/storage/object-store.ts`).
+- Signed short-lived media URLs, because `img`/`video` elements cannot send `Authorization` headers;
+  the signature is scoped to one file + workspace + principal and membership is re-checked on every use.
+- Routes: `GET /api/gallery`, `GET /api/files/thumbnail`, `GET /api/files/content`.
+- React MUI gallery grid with modal lightbox and image/video playback (`src/ui/Gallery.tsx`).
+
+Verified evidence: grid loads a 400x300 WebP derivative while the lightbox loads the 1000x700 original,
+with zero failed requests; exactly one derivative object exists on disk after repeated requests;
+unsigned and forged media requests return 401; an unauthorized principal receives FORBIDDEN.
+
+Defects found and fixed during this work: base64 upload payloads were stored as text rather than decoded
+bytes (corrupting every uploaded image); the local download fallback returned its own endpoint; the
+implicit local storage fallback was replaced with an explicit `OCTO_STORAGE_BACKEND=local` opt-in so
+production still fails closed without R2; the Google sign-in button linked to a nonexistent route.
