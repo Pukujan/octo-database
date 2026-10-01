@@ -1,10 +1,10 @@
 # OCTO-1000 Host Octo on gravebuster with a production branch and gated CI/CD
 
-<!-- continuity:task {"acceptance":["octodb.design-bakery.com serves the Octo UI over HTTPS","Google sign-in completes and lands on an authenticated dashboard","guest login still works","a merge to main does not deploy; a merge to production deploys within 5 minutes","a failing smoke test rolls back to the previous image automatically","gates runs on pull requests into both main and production","no secret is committed to the repository"],"depends_on":["OCTO-0100"],"goal":"Host Octo's frontend and backend as containers on gravebuster with a gated promotion path to production","id":"OCTO-1000","issue_url":"https://github.com/Pukujan/octo-database/issues/43","next_action":"Owner reviews the design spec in PR #44; then write the implementation plan.","owner":"Pukujan; main agent coordinates implementation","priority":"P1","protocol_version":"0.1.0-draft","schema":"project-continuity.task.v1","status":"active","why":"Octo has no hosted instance and no delivery path from a merged commit to a running service."} -->
+<!-- continuity:task {"acceptance":["octodb.design-bakery.com serves the Octo UI over HTTPS","Google sign-in completes and lands on an authenticated dashboard","guest login still works","a merge to main does not deploy; a merge to production deploys within 5 minutes","a failing smoke test rolls back to the previous image automatically","gates runs on pull requests into both main and production","no secret is committed to the repository"],"depends_on":["OCTO-0100"],"goal":"Host Octo's frontend and backend as containers on gravebuster with a gated promotion path to production","id":"OCTO-1000","issue_url":"https://github.com/Pukujan/octo-database/issues/43","next_action":"Create pull request with auto-merge for OCTO-1000.","owner":"Pukujan; main agent coordinates implementation","priority":"P1","protocol_version":"0.1.0-draft","schema":"project-continuity.task.v1","status":"active","why":"Octo has no hosted instance and no delivery path from a merged commit to a running service."} -->
 
 - Status: active
 - Priority: P1
-- Branch: `task/OCTO-1000-gravebuster-deployment` (design spec merged in PR #44; an implementation branch follows once the design is approved)
+- Branch: `task/OCTO-1000-gravebuster-hosting`
 - GitHub issue: https://github.com/Pukujan/octo-database/issues/43
 - Design spec: `docs/superpowers/specs/2026-10-01-octo-gravebuster-deployment-design.md`
 
@@ -68,4 +68,41 @@ Blocked/uncertain:
 
 Next:
 - Owner reviews deployment design spec and begins implementation
+
+### 2026-10-01 19:40:00 UTC — Pukujan
+
+<!-- continuity:checkpoint {"agent":"Pukujan","blocked":[],"changed":["AGENTS.md",".github/workflows/gates.yml","deploy/gravebuster/","deploy/local/","docs/self-hosting.md","src/main.tsx","src/server/db.ts","src/server/index.ts","tests/unit/oauth-and-origin.test.ts"],"completed":["Implemented Google OAuth callback, /api/me endpoint, frontend fragment pickup, public origin resolution, static file serving, and gravebuster Docker Compose stack"],"decisions":["Use deterministic UUID derived from Google sub to satisfy Postgres UUID auth_user_id","Serve Vite dist as static fallback in Node server and via Caddy in gravebuster compose","Support both GOOGLE_OAUTH_CLIENT_ID and GOOGLE_CLIENT_ID seamlessly"],"evidence":["112 Vitest tests pass across 20 files","tsc --noEmit passes","JSON contract integrity passes (18 contracts)","55 python unit tests pass","PCM validate and CGM validate pass"],"next_action":"Create pull request with auto-merge for OCTO-1000","protocol_version":"0.1.0-draft","schema":"project-continuity.checkpoint.v1","task_id":"OCTO-1000","timestamp":"2026-10-01T19:40:00Z"} -->
+
+Completed:
+- Implemented Google OAuth callback, /api/me endpoint, frontend fragment pickup, public origin resolution, static file serving, and gravebuster Docker Compose stack
+
+Evidence:
+- 112 Vitest tests pass across 20 files
+- tsc --noEmit passes
+- JSON contract integrity passes (18 contracts)
+- 55 python unit tests pass
+- PCM validate and CGM validate pass
+
+Decisions:
+- Use deterministic UUID derived from Google sub to satisfy Postgres UUID auth_user_id
+- Serve Vite dist as static fallback in Node server and via Caddy in gravebuster compose
+- Support both GOOGLE_OAUTH_CLIENT_ID and GOOGLE_CLIENT_ID seamlessly
+
+Changed:
+- AGENTS.md
+- .github/workflows/gates.yml
+- deploy/gravebuster/
+- deploy/local/
+- docs/self-hosting.md
+- src/main.tsx
+- src/server/db.ts
+- src/server/index.ts
+- tests/unit/oauth-and-origin.test.ts
+
+Blocked/uncertain:
+- none
+
+Next:
+- Create pull request with auto-merge for OCTO-1000
+
 

@@ -54,6 +54,53 @@ export const App: React.FC = () => {
     loadCapabilities();
   }, []);
 
+  // Pickup OAuth token or error passed via URL fragment (#token=... or #auth_error=...)
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.startsWith('#')) {
+      const params = new URLSearchParams(hash.slice(1));
+      const token = params.get('token');
+      const authError = params.get('auth_error');
+
+      if (token) {
+        setSessionToken(token);
+        localStorage.setItem('octo_token', token);
+        fetch(`${API_BASE}/api/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (data?.principal) {
+              setPrincipal(data.principal);
+              localStorage.setItem('octo_principal', JSON.stringify(data.principal));
+            }
+          })
+          .catch((err) => console.error('Failed to resolve principal from token:', err));
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      } else if (authError) {
+        console.error('Authentication error from OAuth:', authError);
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    }
+  }, []);
+
+  // Restore principal if token exists in storage but principal is missing
+  useEffect(() => {
+    if (sessionToken && !principal) {
+      fetch(`${API_BASE}/api/me`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.principal) {
+            setPrincipal(data.principal);
+            localStorage.setItem('octo_principal', JSON.stringify(data.principal));
+          }
+        })
+        .catch((err) => console.error('Failed to restore principal:', err));
+    }
+  }, [sessionToken, principal]);
+
   // Load workspaces when authenticated
   useEffect(() => {
     if (!sessionToken || !principal) return;

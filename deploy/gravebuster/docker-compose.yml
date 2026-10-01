@@ -1,0 +1,75 @@
+name: octo
+
+services:
+  octo-web:
+    build:
+      context: ../..
+      dockerfile: deploy/gravebuster/Dockerfile.web
+    image: octo-web:${IMAGE_TAG:-latest}
+    container_name: octo-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8090:80"
+    depends_on:
+      octo-api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - octo-internal
+
+  octo-api:
+    build:
+      context: ../..
+      dockerfile: deploy/gravebuster/Dockerfile.api
+    image: octo-api:${IMAGE_TAG:-latest}
+    container_name: octo-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PORT=3001
+    depends_on:
+      octo-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e 'fetch(\"http://127.0.0.1:3001/health\").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - octo-internal
+
+  octo-db:
+    image: pgvector/pgvector:pg16
+    container_name: octo-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+    volumes:
+      - octo-db-data:/var/lib/postgresql/data
+      - ./initdb/00-supabase-auth-scaffold.sql:/docker-entrypoint-initdb.d/00-supabase-auth-scaffold.sql:ro
+      - ../../supabase/migrations:/docker-entrypoint-initdb.d/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - octo-internal
+
+networks:
+  octo-internal:
+    name: octo_internal
+    driver: bridge
+
+volumes:
+  octo-db-data:
+    name: octo-db-data

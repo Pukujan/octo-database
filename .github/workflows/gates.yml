@@ -2,9 +2,9 @@ name: validation
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, production]
   push:
-    branches: [main]
+    branches: [main, production]
   workflow_dispatch:
 
 permissions:

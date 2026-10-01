@@ -1,0 +1,15 @@
+[Unit]
+Description=Octo production autodeploy poller
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=gravebuster
+WorkingDirectory=%h/apps/octo
+ExecStart=%h/apps/octo/deploy/gravebuster/autodeploy.sh
+TimeoutStartSec=1800
+Nice=10
+CPUSchedulingPolicy=batch
+StandardOutput=journal
+StandardError=journal
