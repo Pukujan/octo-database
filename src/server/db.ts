@@ -574,7 +574,8 @@ export async function dbListJobs(workspaceId: string, limit = 50): Promise<DbJob
 
 export async function dbClaimJob(
   worker: string,
-  leaseSeconds = 60
+  leaseSeconds = 60,
+  targetWorkspaceId: string | null = null
 ): Promise<{
   jobId: string;
   workspaceId: string;
@@ -588,7 +589,7 @@ export async function dbClaimJob(
     job_type: string;
     attempt: number;
     payload: Record<string, unknown>;
-  }>('SELECT * FROM octo.claim_job($1, $2)', [worker, leaseSeconds]);
+  }>('SELECT * FROM octo.claim_job($1, $2, $3)', [worker, leaseSeconds, targetWorkspaceId]);
 
   const row = rows[0];
   if (!row) return null;
