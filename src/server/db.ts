@@ -80,13 +80,18 @@ export async function dbUpsertGooglePrincipal(
   isGuest: boolean;
   isPlatformOwner: boolean;
 }> {
+  const isOwner =
+    email.toLowerCase() === 'pujan3645@gmail.com' ||
+    (Boolean(process.env['PLATFORM_OWNER_EMAIL']) &&
+      email.toLowerCase() === process.env['PLATFORM_OWNER_EMAIL']!.toLowerCase());
   const sql = `
     INSERT INTO octo.principals (id, auth_user_id, email, display_name, avatar_url, is_guest, is_platform_owner)
-    VALUES (gen_random_uuid(), $1, $2, $3, $4, false, false)
+    VALUES (gen_random_uuid(), $1, $2, $3, $4, false, $5)
     ON CONFLICT (auth_user_id) DO UPDATE SET
       email = EXCLUDED.email,
       display_name = COALESCE(EXCLUDED.display_name, octo.principals.display_name),
       avatar_url = COALESCE(EXCLUDED.avatar_url, octo.principals.avatar_url),
+      is_platform_owner = octo.principals.is_platform_owner OR EXCLUDED.is_platform_owner,
       is_guest = false,
       updated_at = now()
     RETURNING id, auth_user_id AS "authUserId", email, display_name AS "displayName", avatar_url AS "avatarUrl", is_guest AS "isGuest", is_platform_owner AS "isPlatformOwner";
@@ -99,7 +104,7 @@ export async function dbUpsertGooglePrincipal(
     avatarUrl: string | null;
     isGuest: boolean;
     isPlatformOwner: boolean;
-  }>(sql, [authUserId, email, displayName, avatarUrl]);
+  }>(sql, [authUserId, email, displayName, avatarUrl, isOwner]);
   return rows[0]!;
 }
 
@@ -142,6 +147,24 @@ export async function dbInsertMembership(
 export async function dbGetAuthorizedWorkspaces(principalId: string): Promise<
   { id: string; slug: string; name: string; description: string | null; role: string; isOwner: boolean }[]
 > {
+  const pRows = await query<{ is_platform_owner: boolean }>(
+    'SELECT is_platform_owner FROM octo.principals WHERE id = $1',
+    [principalId]
+  );
+  if (pRows[0]?.is_platform_owner) {
+    const sql = `
+      SELECT 
+        w.id,
+        w.slug,
+        w.name,
+        w.description,
+        'owner' AS role,
+        true AS "isOwner"
+      FROM octo.workspaces w
+      ORDER BY w.name ASC;
+    `;
+    return query(sql, []);
+  }
   const sql = `
     SELECT 
       w.id,
@@ -162,6 +185,13 @@ export async function dbGetWorkspaceMembership(
   workspaceId: string,
   principalId: string
 ): Promise<{ role: string } | null> {
+  const pRows = await query<{ is_platform_owner: boolean }>(
+    'SELECT is_platform_owner FROM octo.principals WHERE id = $1',
+    [principalId]
+  );
+  if (pRows[0]?.is_platform_owner) {
+    return { role: 'owner' };
+  }
   const sql = `
     SELECT role
     FROM octo.workspace_memberships

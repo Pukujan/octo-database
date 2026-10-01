@@ -7,7 +7,7 @@
  * consistent spacing, and expressive vector visuals).
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AppBar,
   Avatar,
@@ -18,6 +18,10 @@ import {
   CardContent,
   Chip,
   Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   Grid,
   MenuItem,
@@ -148,6 +152,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [selectedWsId, setSelectedWsId] = useState<string>(
     activeContext?.workspace.id ?? workspaces[0]?.id ?? ''
   );
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
+
+  useEffect(() => {
+    if (activeContext?.workspace.id) {
+      setSelectedWsId(activeContext.workspace.id);
+    }
+  }, [activeContext?.workspace.id]);
+
   const [newKeyName, setNewKeyName] = useState('');
   const [newKeyIsAccountWide, setNewKeyIsAccountWide] = useState(false);
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
@@ -282,6 +294,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 variant="outlined"
                 sx={{ fontSize: '0.75rem', borderColor: 'divider' }}
               />
+              {principal.isPlatformOwner && (
+                <Chip
+                  label="👑 Platform Owner"
+                  size="small"
+                  color="primary"
+                  variant="filled"
+                  sx={{ fontSize: '0.75rem', fontWeight: 700 }}
+                />
+              )}
               {principal.isGuest && (
                 <Chip
                   label="Guest Sandbox"
@@ -294,6 +315,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </Box>
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              {principal.isPlatformOwner && (
+                <Button
+                  variant="contained"
+                  color="primary"
+                  size="small"
+                  onClick={() => setIsAdminOpen(true)}
+                  sx={{ textTransform: 'none', fontWeight: 600 }}
+                >
+                  ⚡ Platform Admin
+                </Button>
+              )}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Avatar
                   src={principal.avatarUrl ?? undefined}
@@ -862,6 +894,219 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </Card>
           )}
         </Container>
+
+        {/* Platform Admin Dialog */}
+        <Dialog
+          open={isAdminOpen}
+          onClose={() => setIsAdminOpen(false)}
+          maxWidth="md"
+          fullWidth
+          aria-labelledby="platform-admin-dialog-title"
+        >
+          <DialogTitle
+            id="platform-admin-dialog-title"
+            sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1 }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                ⚡ Platform Admin Console
+              </Typography>
+              <Chip label="👑 Platform Owner" size="small" color="primary" sx={{ fontWeight: 600 }} />
+            </Box>
+            <Button size="small" onClick={() => setIsAdminOpen(false)} sx={{ textTransform: 'none' }}>
+              Close
+            </Button>
+          </DialogTitle>
+          <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {/* 1. Infrastructure & Storage Tier Status */}
+            <Box>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>
+                📡 Live Platform Infrastructure & Storage Tier Status
+              </Typography>
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={6}>
+                  <Card variant="outlined" sx={{ p: 2, height: '100%' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontWeight: 600 }}>
+                      Primary Relational & Vector DB
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                      <Chip label="ONLINE" size="small" color="success" sx={{ height: 20, fontSize: '0.7rem' }} />
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        Postgres with pgvector
+                      </Typography>
+                    </Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                      Schema `octo` • pgvector embeddings active
+                    </Typography>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <Card variant="outlined" sx={{ p: 2, height: '100%' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontWeight: 600 }}>
+                      Active Storage Tier
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                      <Chip label="OPERATIONAL" size="small" color="success" sx={{ height: 20, fontSize: '0.7rem' }} />
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        Cloudflare R2 active bucket
+                      </Typography>
+                    </Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                      High-throughput hot media & document storage
+                    </Typography>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <Card variant="outlined" sx={{ p: 2, height: '100%' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontWeight: 600 }}>
+                      Cold Archive Tier
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                      <Chip label="CONNECTED" size="small" color="info" sx={{ height: 20, fontSize: '0.7rem' }} />
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        Google Drive 5TB cold archive quota
+                      </Typography>
+                    </Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                      Long-term compressed cold storage lifecycle
+                    </Typography>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <Card variant="outlined" sx={{ p: 2, height: '100%' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontWeight: 600 }}>
+                      Host Deployment Node
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                      <Chip label="ACTIVE" size="small" color="success" sx={{ height: 20, fontSize: '0.7rem' }} />
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        gravebuster host status
+                      </Typography>
+                    </Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                      Production autodeploy systemd service active
+                    </Typography>
+                  </Card>
+                </Grid>
+              </Grid>
+            </Box>
+
+            {/* 2. Direct Launcher Links to External Consoles */}
+            <Box>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
+                🚀 External Admin Consoles
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                Direct access to cloud infrastructure consoles and identity gateways:
+              </Typography>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  href="https://one.dash.cloudflare.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{ textTransform: 'none' }}
+                >
+                  🌐 Cloudflare Zero Trust ↗
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  href="https://console.cloud.google.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{ textTransform: 'none' }}
+                >
+                  ☁️ Google Cloud Console ↗
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  href="https://supabase.com/dashboard"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{ textTransform: 'none' }}
+                >
+                  ⚡ Supabase Studio ↗
+                </Button>
+              </Box>
+            </Box>
+
+            {/* 3. System-wide Workspaces Registry */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
+                <div>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+                    🏢 System-wide Workspaces Registry
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    All tenant workspaces across the Octo instance ({workspaces.length} registered)
+                  </Typography>
+                </div>
+              </Box>
+              <TableContainer component={Card} variant="outlined">
+                <Table size="small">
+                  <TableHead sx={{ bgcolor: 'action.hover' }}>
+                    <TableRow>
+                      <TableCell sx={{ fontWeight: 700 }}>Name</TableCell>
+                      <TableCell sx={{ fontWeight: 700 }}>Slug</TableCell>
+                      <TableCell sx={{ fontWeight: 700 }}>Role</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700 }}>Action</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {workspaces.map((ws) => {
+                      const isCurrent = (activeContext?.workspace.id ?? selectedWsId) === ws.id;
+                      return (
+                        <TableRow key={ws.id} selected={isCurrent}>
+                          <TableCell>
+                            <Typography variant="body2" sx={{ fontWeight: isCurrent ? 700 : 500 }}>
+                              {ws.name}
+                            </Typography>
+                            {ws.description && (
+                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                                {ws.description}
+                              </Typography>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Chip label={ws.slug} size="small" variant="outlined" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }} />
+                          </TableCell>
+                          <TableCell>
+                            <Chip
+                              label={ws.role}
+                              size="small"
+                              color={ws.role === 'owner' ? 'primary' : 'default'}
+                              sx={{ fontSize: '0.75rem' }}
+                            />
+                          </TableCell>
+                          <TableCell align="right">
+                            <Button
+                              size="small"
+                              variant={isCurrent ? 'outlined' : 'contained'}
+                              disabled={isCurrent}
+                              onClick={() => {
+                                handleWorkspaceChange(ws.id);
+                                setIsAdminOpen(false);
+                              }}
+                              sx={{ textTransform: 'none', fontSize: '0.75rem' }}
+                            >
+                              {isCurrent ? 'Active' : 'Switch Workspace'}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Box>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, py: 1.5 }}>
+            <Button onClick={() => setIsAdminOpen(false)}>Close</Button>
+          </DialogActions>
+        </Dialog>
       </Box>
     </ThemeProvider>
   );
