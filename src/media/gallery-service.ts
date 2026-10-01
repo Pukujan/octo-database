@@ -59,9 +59,12 @@ export async function getWorkspaceGallery(
 
   for (const f of mediaFiles) {
     const kind = getMediaKind(f.mime_type);
-    const fullUrl = r2
-      ? await r2.generatePresignedDownloadUrl(f.storage_key, 3600)
-      : `/api/files/content?fileId=${f.id}&workspaceId=${workspaceId}`;
+    // An archived file has no bytes in R2, so a presigned URL would 404. Route it
+    // through the content endpoint, which restores from the cold tier on demand.
+    const fullUrl =
+      r2 && f.archive_state !== 'archived_drive'
+        ? await r2.generatePresignedDownloadUrl(f.storage_key, 3600)
+        : `/api/files/content?fileId=${f.id}&workspaceId=${workspaceId}`;
 
     // Grid loads the cached derivative; only the full view uses the original.
     const thumbnailUrl = `/api/files/thumbnail?fileId=${f.id}&workspaceId=${workspaceId}`;

@@ -159,10 +159,20 @@ export async function dbInsertFile(
 }
 
 export async function dbListWorkspaceFiles(workspaceId: string): Promise<
-  { id: string; name: string; sizeBytes: number; mimeType: string; storageKey: string; createdAt: string }[]
+  {
+    id: string;
+    name: string;
+    sizeBytes: number;
+    mimeType: string;
+    storageKey: string;
+    createdAt: string;
+    archiveState: string;
+  }[]
 > {
   const sql = `
-    SELECT id, name, size_bytes AS "sizeBytes", mime_type AS "mimeType", storage_key AS "storageKey", created_at AS "createdAt"
+    SELECT id, name, size_bytes AS "sizeBytes", mime_type AS "mimeType",
+           storage_key AS "storageKey", created_at AS "createdAt",
+           archive_state AS "archiveState"
     FROM octo.files
     WHERE workspace_id = $1 AND status = 'active'
     ORDER BY created_at DESC;
@@ -173,18 +183,112 @@ export async function dbListWorkspaceFiles(workspaceId: string): Promise<
 export async function dbGetFile(
   workspaceId: string,
   fileId: string
-): Promise<{ id: string; name: string; storageKey: string; sizeBytes: number; mimeType: string } | null> {
+): Promise<{
+  id: string;
+  name: string;
+  storageKey: string;
+  sizeBytes: number;
+  mimeType: string;
+  archiveState: string;
+  archiveLocator: string | null;
+  archiveHash: string | null;
+} | null> {
   const sql = `
-    SELECT id, name, storage_key AS "storageKey", size_bytes AS "sizeBytes", mime_type AS "mimeType"
+    SELECT id, name, storage_key AS "storageKey", size_bytes AS "sizeBytes",
+           mime_type AS "mimeType", archive_state AS "archiveState",
+           archive_locator AS "archiveLocator", archive_hash AS "archiveHash"
     FROM octo.files
     WHERE id = $1 AND workspace_id = $2 AND status = 'active'
     LIMIT 1;
   `;
-  const rows = await query<{ id: string; name: string; storageKey: string; sizeBytes: number; mimeType: string }>(
-    sql,
-    [fileId, workspaceId]
-  );
+  const rows = await query<{
+    id: string;
+    name: string;
+    storageKey: string;
+    sizeBytes: number;
+    mimeType: string;
+    archiveState: string;
+    archiveLocator: string | null;
+    archiveHash: string | null;
+  }>(sql, [fileId, workspaceId]);
   return rows[0] ?? null;
+}
+
+/**
+ * Loads the record the archive/restore lifecycle needs. Distinct from dbGetFile
+ * because it also serves files whose active bytes were pruned after archiving.
+ */
+export async function dbGetArchiveRecord(
+  workspaceId: string,
+  fileId: string
+): Promise<{
+  fileId: string;
+  workspaceId: string;
+  name: string;
+  mimeType: string;
+  storageKey: string;
+  archiveState: string;
+  archiveLocator: string | null;
+  archiveHash: string | null;
+} | null> {
+  const sql = `
+    SELECT id AS "fileId", workspace_id AS "workspaceId", name,
+           mime_type AS "mimeType", storage_key AS "storageKey",
+           archive_state AS "archiveState", archive_locator AS "archiveLocator",
+           archive_hash AS "archiveHash"
+    FROM octo.files
+    WHERE id = $1 AND workspace_id = $2 AND status = 'active'
+    LIMIT 1;
+  `;
+  const rows = await query<{
+    fileId: string;
+    workspaceId: string;
+    name: string;
+    mimeType: string;
+    storageKey: string;
+    archiveState: string;
+    archiveLocator: string | null;
+    archiveHash: string | null;
+  }>(sql, [fileId, workspaceId]);
+  return rows[0] ?? null;
+}
+
+/** Persists a lifecycle transition. Only the supplied columns are written. */
+export async function dbUpdateArchiveState(
+  fileId: string,
+  patch: {
+    archiveState?: string;
+    archiveProvider?: string | null;
+    archiveLocator?: string | null;
+    archiveHash?: string | null;
+    archivedAt?: string | null;
+    lastVerifiedAt?: string | null;
+  }
+): Promise<void> {
+  const columns: Record<string, string> = {
+    archiveState: 'archive_state',
+    archiveProvider: 'archive_provider',
+    archiveLocator: 'archive_locator',
+    archiveHash: 'archive_hash',
+    archivedAt: 'archived_at',
+    lastVerifiedAt: 'last_verified_at',
+  };
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  for (const [key, column] of Object.entries(columns)) {
+    if (key in patch) {
+      params.push((patch as Record<string, unknown>)[key]);
+      sets.push(`${column} = $${params.length}`);
+    }
+  }
+
+  if (sets.length === 0) return;
+  params.push(fileId);
+  await query(
+    `UPDATE octo.files SET ${sets.join(', ')}, updated_at = now() WHERE id = $${params.length}`,
+    params
+  );
 }
 
 export async function dbDeleteFile(workspaceId: string, fileId: string): Promise<{ storageKey: string } | null> {

@@ -13,6 +13,7 @@
 
 import { ObjectStore } from '../storage/object-store';
 import { ensureThumbnail } from '../media/thumbnail-service';
+import { ArchiveDeps, ArchiveFileRecord, archiveFile, restoreFile } from '../storage/archive-service';
 import { ClaimedJob, completeJob, failJob, recordActivity } from './job-service';
 
 export interface WorkerDeps {
@@ -28,8 +29,16 @@ export interface WorkerDeps {
     retryable: boolean
   ) => Promise<void>;
   activity: (job: ClaimedJob, summary: string) => Promise<void>;
+  /** Archive lifecycle wiring. Absent when Drive is not configured. */
+  archive?: ArchiveDeps;
+  /** Loads the file record an archive/restore job targets. */
+  loadArchiveTarget?: (workspaceId: string, fileId: string) => Promise<ArchiveFileRecord | null>;
   log?: (message: string) => void;
 }
+
+/** Handler failure, optionally overriding whether a retry could succeed. */
+type HandlerFailure = { ok: false; code: string; summary: string; retryable?: boolean };
+type HandlerResult = { ok: true; detail: string } | HandlerFailure;
 
 export interface JobOutcome {
   jobId: string;
@@ -63,15 +72,64 @@ export async function handleThumbnailJob(
   return { ok: true, detail: `thumbnail ${thumb.cached ? 'reused' : 'generated'} (${thumb.bytes.byteLength} bytes)` };
 }
 
+/**
+ * Handles an archive job: move the file's bytes R2 -> cold tier. The archive
+ * service owns the verify-before-delete ordering, so this only adapts the job
+ * payload and reports a retryable/permanent outcome.
+ */
+export async function handleArchiveJob(
+  job: ClaimedJob,
+  deps: WorkerDeps,
+  direction: 'archive' | 'restore'
+): Promise<HandlerResult> {
+  const fileId = job.payload['fileId'];
+  if (typeof fileId !== 'string') {
+    return { ok: false, code: 'INVALID_PAYLOAD', summary: 'Archive job payload is missing fileId', retryable: false };
+  }
+
+  if (!deps.archive || !deps.loadArchiveTarget) {
+    return {
+      ok: false,
+      code: 'ARCHIVE_UNAVAILABLE',
+      summary: 'Google Drive archival is not configured on this server',
+      retryable: false,
+    };
+  }
+
+  const target = await deps.loadArchiveTarget(job.workspaceId, fileId);
+  if (!target) {
+    return { ok: false, code: 'FILE_NOT_FOUND', summary: `No file ${fileId} in workspace ${job.workspaceId}`, retryable: false };
+  }
+
+  const outcome = direction === 'archive'
+    ? await archiveFile(deps.archive, target)
+    : await restoreFile(deps.archive, target);
+
+  if (outcome.ok) return { ok: true, detail: outcome.detail };
+
+  // A state that needs reconciliation is not a clean retry: the bytes are safe
+  // in both tiers, so retrying immediately would not help. Surface it plainly.
+  return {
+    ok: false,
+    code: outcome.code,
+    summary: outcome.summary,
+    retryable: !outcome.reconciliationRequired && outcome.code !== 'INVALID_PAYLOAD',
+  };
+}
+
 /** Runs a single claimed job through its handler and records the outcome. */
 export async function processJob(job: ClaimedJob, deps: WorkerDeps): Promise<JobOutcome> {
   try {
-    let outcome: { ok: true; detail: string } | { ok: false; code: string; summary: string };
+    let outcome: HandlerResult;
 
     if (job.jobType === 'thumbnail') {
       outcome = await handleThumbnailJob(job, deps.store);
+    } else if (job.jobType === 'archive_file') {
+      outcome = await handleArchiveJob(job, deps, 'archive');
+    } else if (job.jobType === 'restore_file') {
+      outcome = await handleArchiveJob(job, deps, 'restore');
     } else {
-      outcome = { ok: false, code: 'UNKNOWN_JOB_TYPE', summary: `No handler for job type ${job.jobType}` };
+      outcome = { ok: false, code: 'UNKNOWN_JOB_TYPE', summary: `No handler for job type ${job.jobType}`, retryable: false };
     }
 
     if (outcome.ok) {
@@ -81,7 +139,9 @@ export async function processJob(job: ClaimedJob, deps: WorkerDeps): Promise<Job
     }
 
     // INVALID_PAYLOAD and UNKNOWN_JOB_TYPE are deterministic: retrying cannot help.
-    const retryable = outcome.code !== 'INVALID_PAYLOAD' && outcome.code !== 'UNKNOWN_JOB_TYPE';
+    const retryable =
+      outcome.retryable ??
+      (outcome.code !== 'INVALID_PAYLOAD' && outcome.code !== 'UNKNOWN_JOB_TYPE');
     await deps.fail(job, outcome.code, outcome.summary, retryable);
     await deps.activity(job, `Job ${job.jobType} ${retryable ? 'failed, will retry' : 'failed permanently'}: ${outcome.summary}`);
     return { jobId: job.jobId, status: retryable ? 'retry' : 'failed', detail: outcome.summary };
@@ -117,7 +177,9 @@ export function buildWorkerDeps(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any,
   store: ObjectStore,
-  log: (message: string) => void = console.log
+  log: (message: string) => void = console.log,
+  archive?: ArchiveDeps,
+  loadArchiveTarget?: (workspaceId: string, fileId: string) => Promise<ArchiveFileRecord | null>
 ): WorkerDeps {
   return {
     claim: async () => {
@@ -136,6 +198,8 @@ export function buildWorkerDeps(
       };
     },
     store,
+    archive,
+    loadArchiveTarget,
     complete: (jobId, result) => completeJob(supabase, jobId, result),
     fail: async (job, code, summary, retryable) => {
       await failJob(supabase, job.jobId, job.attempt, 3, code, summary, retryable);
