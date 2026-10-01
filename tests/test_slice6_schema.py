@@ -66,6 +66,9 @@ class Slice6SchemaTests(unittest.TestCase):
             self.sql_content,
         )
 
+    def test_claim_job_not_granted_to_clients(self) -> None:
+        self.assertNotIn("GRANT EXECUTE ON FUNCTION octo.claim_job", self.sql_content)
+
 
 if __name__ == "__main__":
     unittest.main()
