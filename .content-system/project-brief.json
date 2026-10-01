@@ -1,0 +1,33 @@
+{
+  "schema_version": "content-generation.project-brief.v2",
+  "project": "Octo",
+  "audience": [
+    "the owner",
+    "family members and collaborators invited into specific workspaces",
+    "agents granted scoped platform capabilities"
+  ],
+  "problem": "Files, project data, app state, and agent operations are scattered across local machines and unrelated storage/services, making reuse, secure access, archival, and operations harder than they need to be.",
+  "solution": "A self-hosted control plane with one identity/workspace model and one platform API that routes structured state to PostgreSQL, active objects to R2, archival objects to Google Drive, and optional retrieval/graph/analytics capabilities only where enabled.",
+  "evidence": [
+    {
+      "claim": "The accepted planning direction is to build Octo in vertical slices around a small reusable control plane, with advanced graph and analytics capabilities optional per workspace.",
+      "source": "Owner architecture direction recorded in the Octo program issue and child slice issues.",
+      "status": "planned",
+      "supports": "The program issue enumerates the stable core, storage ownership model, slice order, invariants, and non-goals.",
+      "limits": "This is an accepted planning direction, not evidence that the product has been implemented or benchmarked.",
+      "recorded_at": "2026-09-30T20:01:00Z",
+      "source_revision": {
+        "kind": "owner_decision",
+        "reference": "Octo program issue #1",
+        "observed_at": "2026-09-30",
+        "uri": "https://github.com/Pukujan/octo-database/issues/1"
+      },
+      "cite_in_readme": false
+    }
+  ],
+  "boundaries": [
+    "Version one is single-owner/multi-workspace rather than a public SaaS tenancy platform.",
+    "No master infrastructure credentials are exposed to browsers or ordinary agent tokens.",
+    "Neo4j, DuckDB/Parquet, distributed workers, and mature observability are capability slices rather than mandatory bootstrap dependencies."
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "schema_version": "octo.boss-claim.v1",
+  "status": "active",
+  "who_is_boss_now": "chatgpt-sol-orchestrator",
+  "last_heartbeat": "2026-09-30T21:44:00Z",
+  "last_github_activity": "2026-09-30T21:44:00Z",
+  "claim_queue": [],
+  "recorded_at": "2026-09-30T21:44:00Z",
+  "notes": "Previous bootstrap lease expired after 30 minutes with no valid check-in. Queue was empty; this live continuer claimed the vacant decision-boss seat under ACS FIFO rules."
+}

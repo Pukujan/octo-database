@@ -1,0 +1,80 @@
+name: validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Octo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Prepare validation tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          validation_root=$(mktemp -d "$RUNNER_TEMP/octo-validation.XXXXXX")
+          echo "VALIDATION_ROOT=$validation_root" >> "$GITHUB_ENV"
+          python -m venv "$validation_root/venv"
+          "$validation_root/venv/bin/python" -m pip install -r requirements-ci.txt
+          "$validation_root/venv/bin/python" -m pip check
+
+      - name: Ruff lint
+        run: '"$VALIDATION_ROOT/venv/bin/ruff" check scripts tests'
+
+      - name: Ruff format
+        run: '"$VALIDATION_ROOT/venv/bin/ruff" format --check scripts tests'
+
+      - name: Python type check
+        run: '"$VALIDATION_ROOT/venv/bin/mypy"'
+
+      - name: JSON contract integrity
+        run: '"$VALIDATION_ROOT/venv/bin/python" scripts/check_json.py'
+
+      - name: Integrity integration tests
+        run: '"$VALIDATION_ROOT/venv/bin/python" -m unittest discover -s tests -v'
+
+      - name: Validate pinned PCM adopter state
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/Pukujan/project-continuity-modules.git "$VALIDATION_ROOT/pcm"
+          git -C "$VALIDATION_ROOT/pcm" checkout --quiet 4e2385474b4af9249ca009cbdcb38c4498932475
+          PYTHONPATH="$VALIDATION_ROOT/pcm/src" "$VALIDATION_ROOT/venv/bin/python" -m continuity validate --root .
+
+      - name: Validate full CGM adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/Pukujan/content-generation-modules.git "$VALIDATION_ROOT/cgm"
+          git -C "$VALIDATION_ROOT/cgm" checkout --quiet c069613ca8b3e02bcf5aba1960160583537f8a3a
+          "$VALIDATION_ROOT/venv/bin/python" "$VALIDATION_ROOT/cgm/scripts/validate_content_system.py" \
+            --root "$VALIDATION_ROOT/cgm" \
+            --adapter .content-system \
+            --project-root .
+
+      - name: Validate pinned ACS hot-loader
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/Pukujan/agent-custom-setup.git "$VALIDATION_ROOT/acs"
+          git -C "$VALIDATION_ROOT/acs" checkout --quiet fa57bae9a5229b454b57ea0b3f3e4dac0bbc8b4e
+          "$VALIDATION_ROOT/venv/bin/python" "$VALIDATION_ROOT/acs/modules/coordination/multi-agent-hotload/v0.1.0/scripts/hotload_check.py" \
+            --root "$VALIDATION_ROOT/acs/modules/coordination/multi-agent-hotload/v0.1.0" \
+            --assignment "$GITHUB_WORKSPACE/.coord/assignment.json" \
+            --cgm-root "$VALIDATION_ROOT/cgm" \
+            --adopter-root "$GITHUB_WORKSPACE"

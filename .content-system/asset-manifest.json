@@ -1,0 +1,15 @@
+{
+  "schema_version": "content-generation.asset-manifest.v1",
+  "system_version": "0.5.7",
+  "assets": [
+    {
+      "path": "docs/assets/workspace-dashboard.svg",
+      "role": "ui-reference",
+      "orientation": "svg",
+      "dimensions": "960x540",
+      "text_policy": "Plain navigation and action labels; identifies itself as a draft layout.",
+      "review": "draft",
+      "source": "Code-authored layout reference for the owner-requested template/component dashboard. Not a product execution screenshot."
+    }
+  ]
+}
