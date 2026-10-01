@@ -121,7 +121,7 @@ export const App: React.FC = () => {
 
   // Load workspaces when authenticated
   useEffect(() => {
-    if (!sessionToken || !principal) return;
+    if (!sessionToken) return;
 
     async function loadData() {
       try {
@@ -130,10 +130,10 @@ export const App: React.FC = () => {
           headers: { Authorization: `Bearer ${sessionToken}` },
         });
         if (res.ok) {
-          const wsList = await res.json();
+          const wsList: WorkspaceSummary[] = await res.json();
           setWorkspaces(wsList);
           if (wsList.length > 0) {
-            handleSelectWorkspace(wsList[0].id, wsList[0].role);
+            handleSelectWorkspace(wsList[0]!, wsList[0]!.role, wsList);
           }
         }
       } catch (e) {
@@ -144,7 +144,14 @@ export const App: React.FC = () => {
     }
 
     loadData();
-  }, [sessionToken]);
+  }, [sessionToken, principal?.id]);
+
+  // Sync activeContext when principal loads
+  useEffect(() => {
+    if (principal && activeContext && (!activeContext.principal.email || activeContext.principal.id !== principal.id)) {
+      setActiveContext((prev) => (prev ? { ...prev, principal } : null));
+    }
+  }, [principal]);
 
   // Load files and keys for active workspace
   /** Reloads gallery media for a workspace. */
@@ -234,12 +241,18 @@ export const App: React.FC = () => {
     if (res.ok) await refreshShares(activeContext.workspace.id);
   };
 
-  const handleSelectWorkspace = async (workspaceId: string, roleHint?: string) => {
-    if (!sessionToken || !principal) return;
+  const handleSelectWorkspace = async (
+    workspaceIdOrObj: string | WorkspaceSummary,
+    roleHint?: string,
+    wsList?: WorkspaceSummary[]
+  ) => {
+    if (!sessionToken) return;
 
     try {
-      // Find workspace metadata
-      const ws = workspaces.find((w) => w.id === workspaceId);
+      const workspaceId = typeof workspaceIdOrObj === 'string' ? workspaceIdOrObj : workspaceIdOrObj.id;
+      // Find workspace metadata from wsList, object, or current state
+      const list = wsList ?? workspaces;
+      const ws = typeof workspaceIdOrObj === 'object' ? workspaceIdOrObj : list.find((w) => w.id === workspaceId);
       const role = (roleHint ?? ws?.role ?? 'member') as WorkspaceRole;
 
       if (ws) {
@@ -249,12 +262,22 @@ export const App: React.FC = () => {
             slug: ws.slug,
             name: ws.name,
             description: ws.description,
-            createdBy: principal.id,
+            createdBy: principal?.id ?? ws.id,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           },
           role,
-          principal,
+          principal: principal ?? {
+            id: ws.id,
+            authUserId: ws.id,
+            email: '',
+            displayName: null,
+            avatarUrl: null,
+            isPlatformOwner: false,
+            isGuest: false,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
           capabilities: {
             canManageMembers: role === 'owner' || role === 'admin',
             canUploadFiles: role === 'owner' || role === 'admin' || role === 'operator',

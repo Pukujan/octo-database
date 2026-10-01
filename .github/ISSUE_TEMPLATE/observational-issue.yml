@@ -1,0 +1,100 @@
+name: Observational Issue Log
+description: File a 3-plane observational issue or non-binding proposal with full provenance, reproducibility, and priority rating.
+title: "[OBSERVATION]: "
+labels: ["observational-issue", "proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Observational Issue & Non-Binding Proposal Protocol
+        > **Notice**: All observational issues filed under this system are **proposals**, NOT literal implementation mandates.
+        > Observational logs must be human-understandable, grounded in concrete evidence, and include provenance, reproducibility, and citations.
+
+  - type: dropdown
+    id: plane
+    attributes:
+      label: Contributor Plane
+      description: Select your contributor plane. Plane determines your priority rubric range.
+      options:
+        - "Plane 1: Lead Owner / Developer (Priorities 1–20)"
+        - "Plane 2: Approved Collaborator (Priorities 20–40)"
+        - "Plane 3: Community / External Contributor (Priorities 40–100)"
+    validations:
+      required: true
+
+  - type: input
+    id: priority
+    attributes:
+      label: Priority Rating (1–100)
+      description: Enter numerical priority rating within your plane's rubric range (Plane 1: 1–20, Plane 2: 20–40, Plane 3: 40–100). Rating reflects severity as a blocker or systemic risk (P1 is highest priority/blocker).
+      placeholder: "e.g., 5"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk_classification
+    attributes:
+      label: Risk & Blocker Classification
+      description: Classify the operational or architectural risk and blocker level.
+      options:
+        - "Critical Blocker / High Systemic Risk"
+        - "Major Blocker / High Workstream Risk"
+        - "Moderate Blocker / Medium Friction"
+        - "Low Blocker / Ergonomics & Quality"
+        - "Informational / Observational Note"
+    validations:
+      required: true
+
+  - type: textarea
+    id: human_summary
+    attributes:
+      label: Human-Understandable Summary
+      description: Plain-language summary explaining what was observed, why it matters, and who is affected.
+      placeholder: "Clear explanation of the observation understandable by humans without deciphering raw logs..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: provenance
+    attributes:
+      label: Provenance & Context
+      description: Origin of this observation (observer identity, agent/tool session, commit SHA, environment/host, date/timestamp).
+      placeholder: "- Observer: Lead Developer / Contributor Name\n- Environment: gravebuster host / Ubuntu 22.04 / local dev\n- Commit / Session: commit <sha> / session <id>"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducibility
+    attributes:
+      label: Reproducibility Steps / Evidence
+      description: Exact steps, commands, raw test output, error traces, or logs demonstrating the observation.
+      placeholder: "1. Execute command: npm test ...\n2. Observe output / error trace: ...\n3. Evidence logs: ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: citations
+    attributes:
+      label: Citations & References
+      description: Exact commits, repository file paths with line numbers, documentation links, or upstream issue URLs.
+      placeholder: "- Commit: https://github.com/Pukujan/octo-database/commit/<sha>\n- Path: src/main.tsx#L120-L150\n- Spec / RFC: docs/CONTINUITY_RECORDS_POLICY.md"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_actions
+    attributes:
+      label: Non-Binding Proposed Next Actions
+      description: Concrete recommended next steps. Explicitly treated as a non-binding proposal, not a literal implementation mandate.
+      placeholder: "*(proposal)* Proposed actions:\n- [ ] Action item 1\n- [ ] Action item 2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: child_sub_issues
+    attributes:
+      label: Child Sub-Issues & Tracking
+      description: Track sub-issues or related issues using GitHub Markdown tasklists (`- [ ] #<child_issue>`).
+      placeholder: "- [ ] #<child_issue_1>\n- [ ] #<child_issue_2>"
+    validations:
+      required: false
