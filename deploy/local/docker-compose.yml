@@ -1,0 +1,60 @@
+name: octo-local
+
+services:
+  octo-web:
+    build:
+      context: ../..
+      dockerfile: deploy/gravebuster/Dockerfile.web
+    container_name: octo-local-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8095:80"
+    depends_on:
+      octo-api:
+        condition: service_started
+    networks:
+      - octo-local-net
+
+  octo-api:
+    build:
+      context: ../..
+      dockerfile: deploy/gravebuster/Dockerfile.api
+    container_name: octo-local-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PORT=3001
+      - OCTO_STORAGE_BACKEND=local
+    depends_on:
+      octo-db:
+        condition: service_healthy
+    networks:
+      - octo-local-net
+
+  octo-db:
+    image: pgvector/pgvector:pg16
+    container_name: octo-local-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - octo-local-db-data:/var/lib/postgresql/data
+      - ../gravebuster/initdb/00-supabase-auth-scaffold.sql:/docker-entrypoint-initdb.d/00-supabase-auth-scaffold.sql:ro
+      - ../../supabase/migrations:/docker-entrypoint-initdb.d/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - octo-local-net
+
+networks:
+  octo-local-net:
+    driver: bridge
+
+volumes:
+  octo-local-db-data:

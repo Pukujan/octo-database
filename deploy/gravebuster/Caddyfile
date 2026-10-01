@@ -1,0 +1,27 @@
+:80 {
+    log {
+        output stdout
+        format console
+    }
+
+    # Container liveness responder
+    handle /healthz {
+        respond "OK" 200
+    }
+
+    # Proxy API and server health endpoints to the Node service
+    handle /api/* {
+        reverse_proxy octo-api:3001
+    }
+
+    handle /health {
+        reverse_proxy octo-api:3001
+    }
+
+    # Static Vite build with SPA routing fallback
+    handle {
+        root * /srv
+        file_server
+        try_files {path} /index.html
+    }
+}

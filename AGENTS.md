@@ -52,13 +52,14 @@ Pinned versions currently used by repository validation:
 - The repository is public; use GitHub-hosted `ubuntu-latest` for CI.
 - Never force-push unless the owner explicitly directs recovery that requires it.
 - **Auto-merge is mandatory and requires no human approval.** Every agent MUST arm
-  auto-merge (`gh pr merge <n> --auto --squash`) on every pull request it opens, and
-  MUST NOT wait for, request, or add a review requirement. Repository `allow_auto_merge`
+  auto-merge (`gh pr merge <n> --auto --squash`) on every pull request it opens targeting `main`,
+  and MUST NOT wait for, request, or add a review requirement. Repository `allow_auto_merge`
   is enabled, branch protection on `main` requires only the `gates` status check, and
   the "require branches to be up to date" setting is OFF, so a PR merges automatically
   as soon as `gates` is green without anyone rebasing it. `.github/workflows/auto-merge.yml`
-  also arms auto-merge on every same-repo PR as a backstop.
-- Do not add review requirements, approval gates, or manual-merge steps: they deadlock a
+  also arms auto-merge on every same-repo PR as a backstop. Pull requests targeting `production`
+  are owner-merged by standing instruction and must not be armed for auto-merge.
+- Do not add review requirements, approval gates, or manual-merge steps on `main`: they deadlock a
   single-owner repository and contradict the owner's standing instruction.
 - If `gh pr merge --auto` fails, fix the cause (for example, mark a draft PR ready with
   `gh pr ready <n>`) and re-arm it; do not escalate to the owner for approval.

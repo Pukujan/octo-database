@@ -1,0 +1,11 @@
+# Overlay file to join the existing Cloudflare Tunnel edge network on gravebuster
+services:
+  octo-web:
+    networks:
+      study-os_edge:
+        aliases:
+          - octo-web
+
+networks:
+  study-os_edge:
+    external: true

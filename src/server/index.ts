@@ -13,7 +13,7 @@ if (fs.existsSync('.env') && typeof process.loadEnvFile === 'function') {
   process.loadEnvFile('.env');
 }
 import { createServer, IncomingMessage, ServerResponse } from 'http';
-import { randomBytes, randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { loadR2ConfigFromEnv, R2StorageProvider } from '../storage/r2-client';
 import { LocalObjectStore, ObjectStore, R2ObjectStore } from '../storage/object-store';
 import { GoogleDriveProvider, loadGoogleDriveConfigFromEnv } from '../storage/google-drive-provider';
@@ -41,6 +41,7 @@ import {
   dbInsertApiKey,
   dbInsertFile,
   dbInsertGuestPrincipal,
+  dbUpsertGooglePrincipal,
   dbInsertMembership,
   dbInsertWorkspace,
   dbListApiKeys,
@@ -421,6 +422,37 @@ async function attributeAgentAction(
   }
 }
 
+/**
+ * Resolves the public origin from PUBLIC_BASE_URL, X-Forwarded-* headers,
+ * Host header, or fallback local URL origin.
+ */
+export function getPublicOrigin(req: IncomingMessage, url: URL): string {
+  const publicBase = process.env['PUBLIC_BASE_URL'];
+  if (publicBase) {
+    return publicBase.replace(/\/+$/, '');
+  }
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  const forwardedHost = req.headers['x-forwarded-host'];
+  if (forwardedProto && forwardedHost) {
+    const proto = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto).split(',')[0]!.trim();
+    const host = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost).split(',')[0]!.trim();
+    return `${proto}://${host}`;
+  }
+  if (req.headers.host) {
+    const proto = req.headers['x-forwarded-proto']
+      ? (Array.isArray(req.headers['x-forwarded-proto']) ? req.headers['x-forwarded-proto'][0] : req.headers['x-forwarded-proto']).split(',')[0]!.trim()
+      : 'http';
+    return `${proto}://${req.headers.host}`;
+  }
+  return url.origin;
+}
+
+export function getGoogleClientCredentials(): { clientId: string | null; clientSecret: string | null } {
+  const clientId = process.env['GOOGLE_OAUTH_CLIENT_ID'] ?? process.env['GOOGLE_CLIENT_ID'] ?? null;
+  const clientSecret = process.env['GOOGLE_OAUTH_CLIENT_SECRET'] ?? process.env['GOOGLE_CLIENT_SECRET'] ?? null;
+  return { clientId, clientSecret };
+}
+
 export const server = createServer(async (req, res) => {
   // Handle CORS Preflight
   if (req.method === 'OPTIONS') {
@@ -441,12 +473,13 @@ export const server = createServer(async (req, res) => {
     if (pathname === '/health' && req.method === 'GET') {
       const dbStatus = await testDbConnection();
       const r2Status = r2Provider ? await r2Provider.testConnection() : { connected: false, bucket: 'none' };
+      const { clientId } = getGoogleClientCredentials();
       sendJson(res, 200, {
         status: 'ok',
         version: '0.1.0',
         database: dbStatus,
         r2: r2Status,
-        googleAuthEnabled: Boolean(process.env['GOOGLE_OAUTH_CLIENT_ID']),
+        googleAuthEnabled: Boolean(clientId),
       });
       return;
     }
@@ -454,7 +487,7 @@ export const server = createServer(async (req, res) => {
     // 1b. Google OAuth start. Reports a clear state instead of a dead 404 when the
     // OAuth client has not been provisioned yet.
     if (pathname === '/api/auth/google' && req.method === 'GET') {
-      const clientId = process.env['GOOGLE_OAUTH_CLIENT_ID'];
+      const { clientId } = getGoogleClientCredentials();
       if (!clientId) {
         sendJson(res, 501, {
           error:
@@ -462,7 +495,8 @@ export const server = createServer(async (req, res) => {
         });
         return;
       }
-      const redirectUri = `${url.origin}/api/auth/google/callback`;
+      const origin = getPublicOrigin(req, url);
+      const redirectUri = `${origin}/api/auth/google/callback`;
       const authorizeUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
       authorizeUrl.searchParams.set('client_id', clientId);
       authorizeUrl.searchParams.set('redirect_uri', redirectUri);
@@ -473,6 +507,125 @@ export const server = createServer(async (req, res) => {
       res.writeHead(302, { Location: authorizeUrl.toString() });
       res.end();
       return;
+    }
+
+    // 1c. Google OAuth callback: GET /api/auth/google/callback
+    if (pathname === '/api/auth/google/callback' && req.method === 'GET') {
+      const origin = getPublicOrigin(req, url);
+      const errorParam = url.searchParams.get('error');
+      if (errorParam) {
+        res.writeHead(302, { Location: `${origin}/#auth_error=${encodeURIComponent(errorParam)}` });
+        res.end();
+        return;
+      }
+      const code = url.searchParams.get('code');
+      if (!code) {
+        res.writeHead(302, { Location: `${origin}/#auth_error=MISSING_CODE` });
+        res.end();
+        return;
+      }
+      const { clientId, clientSecret } = getGoogleClientCredentials();
+      if (!clientId || !clientSecret) {
+        res.writeHead(302, { Location: `${origin}/#auth_error=GOOGLE_AUTH_NOT_CONFIGURED` });
+        res.end();
+        return;
+      }
+      const redirectUri = `${origin}/api/auth/google/callback`;
+      try {
+        const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            code,
+            client_id: clientId,
+            client_secret: clientSecret,
+            redirect_uri: redirectUri,
+            grant_type: 'authorization_code',
+          }),
+        });
+
+        if (!tokenResponse.ok) {
+          const errText = await tokenResponse.text();
+          console.error('Google token exchange failed:', tokenResponse.status, errText);
+          res.writeHead(302, { Location: `${origin}/#auth_error=TOKEN_EXCHANGE_FAILED` });
+          res.end();
+          return;
+        }
+
+        const tokenData = (await tokenResponse.json()) as { id_token?: string; access_token?: string };
+        let sub = '';
+        let email = '';
+        let displayName: string | null = null;
+        let avatarUrl: string | null = null;
+
+        if (tokenData.id_token) {
+          try {
+            const parts = tokenData.id_token.split('.');
+            if (parts.length >= 2) {
+              const payload = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString('utf8'));
+              sub = payload.sub ?? '';
+              email = payload.email ?? '';
+              displayName = payload.name ?? null;
+              avatarUrl = payload.picture ?? null;
+            }
+          } catch (e) {
+            console.warn('Could not parse Google id_token payload:', e);
+          }
+        }
+
+        if ((!sub || !email) && tokenData.access_token) {
+          const userinfoRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+            headers: { Authorization: `Bearer ${tokenData.access_token}` },
+          });
+          if (userinfoRes.ok) {
+            const userinfo = (await userinfoRes.json()) as {
+              sub?: string;
+              email?: string;
+              name?: string;
+              picture?: string;
+            };
+            sub = userinfo.sub ?? sub;
+            email = userinfo.email ?? email;
+            displayName = userinfo.name ?? displayName;
+            avatarUrl = userinfo.picture ?? avatarUrl;
+          }
+        }
+
+        if (!sub || !email) {
+          res.writeHead(302, { Location: `${origin}/#auth_error=MISSING_PROFILE` });
+          res.end();
+          return;
+        }
+
+        // Derive deterministic RFC4122-compatible UUID for sub to satisfy PostgreSQL UUID type
+        const subHash = createHash('sha256').update(`google:${sub}`).digest('hex');
+        const authUserId = `${subHash.slice(0, 8)}-${subHash.slice(8, 12)}-4${subHash.slice(13, 16)}-a${subHash.slice(17, 20)}-${subHash.slice(20, 32)}`;
+
+        const principal = await dbUpsertGooglePrincipal(authUserId, email, displayName, avatarUrl);
+
+        // Ensure the principal has at least one workspace to enter
+        const workspaces = await dbGetAuthorizedWorkspaces(principal.id);
+        if (workspaces.length === 0) {
+          const slug = `personal-${principal.id.slice(0, 8)}`;
+          const ws = await dbInsertWorkspace(
+            randomUUID(),
+            slug,
+            'Personal',
+            'Personal workspace',
+            principal.id
+          );
+          await dbInsertMembership(ws.id, principal.id, 'owner');
+        }
+
+        res.writeHead(302, { Location: `${origin}/#token=${principal.id}` });
+        res.end();
+        return;
+      } catch (err) {
+        console.error('Google auth callback error:', err);
+        res.writeHead(302, { Location: `${origin}/#auth_error=INTERNAL_ERROR` });
+        res.end();
+        return;
+      }
     }
 
     // 2. Guest Login: POST /api/auth/guest
@@ -516,6 +669,20 @@ export const server = createServer(async (req, res) => {
           role: 'owner',
         },
         sessionToken: principal.id,
+      });
+      return;
+    }
+
+    // 2b. Current Principal: GET /api/me
+    if (pathname === '/api/me' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      sendJson(res, 200, {
+        principal: auth.principal,
+        apiKey: auth.apiKey ?? null,
       });
       return;
     }
@@ -1693,6 +1860,44 @@ export const server = createServer(async (req, res) => {
         // configuration that produced it.
       });
       return;
+    }
+
+    // Static asset serving if dist/ directory exists (standalone/production)
+    const distPath = path.resolve(process.cwd(), 'dist');
+    if (fs.existsSync(distPath) && req.method === 'GET') {
+      const relPath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+      const filePath = path.join(distPath, relPath);
+      // Prevent path traversal
+      if (filePath.startsWith(distPath) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+        const ext = path.extname(filePath).toLowerCase();
+        const contentTypes: Record<string, string> = {
+          '.html': 'text/html; charset=utf-8',
+          '.js': 'application/javascript; charset=utf-8',
+          '.css': 'text/css; charset=utf-8',
+          '.json': 'application/json; charset=utf-8',
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.svg': 'image/svg+xml',
+          '.ico': 'image/x-icon',
+          '.webp': 'image/webp',
+          '.woff': 'font/woff',
+          '.woff2': 'font/woff2',
+          '.ttf': 'font/ttf',
+        };
+        const contentType = contentTypes[ext] ?? 'application/octet-stream';
+        res.writeHead(200, { 'Content-Type': contentType });
+        fs.createReadStream(filePath).pipe(res);
+        return;
+      }
+
+      // SPA fallback for HTML navigation requests
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath) && (!path.extname(pathname) || req.headers.accept?.includes('text/html'))) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        fs.createReadStream(indexPath).pipe(res);
+        return;
+      }
     }
 
     // 404 for unknown route

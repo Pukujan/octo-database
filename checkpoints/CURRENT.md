@@ -19,7 +19,7 @@
 - **Slice 9 (Issue #11 / OCTO-0900)**: Merged (`PR #34`) — bitemporal epistemic schema.
 - **Schema hardening**: Grants narrowed to DML (TRUNCATE is not subject to RLS), anon-reachable principal lookup removed, API-key roles capped at the creator's live role, and `claim_job` scoped by workspace (`PR #38`, `PR #40`).
 - **Dashboard storage tiers**: Merged (`PR #41`) — storage tier chips and archive/restore actions in the dashboard.
-- **Deployment design (Issue #43 / OCTO-1000)**: Design spec merged (`PR #44`) — hosting Octo on gravebuster at `octodb.design-bakery.com`, a `production` branch promoted by the owner, and a pull-based systemd deploy timer. Implementation not started.
+- **Deployment implementation (Issue #43 / OCTO-1000)**: Implemented OAuth callback, /api/me, frontend fragment pickup, public origin resolution, static file serving, and gravebuster Docker Compose stack with systemd autodeploy.
 - **Live Verification**: 3 guest workspaces verified live across active R2 and Google Drive archival tiers (`scripts/verify_live_guest_storage.py`).
 - **CGM Visual Direction**: Pinned editorial hero PNG (`docs/assets/octo-hero-banner.png`) registered in asset manifest and embedded in README.
 
@@ -31,5 +31,5 @@
 
 ## Next action
 
-Owner reviews the deployment design spec (`docs/superpowers/specs/2026-10-01-octo-gravebuster-deployment-design.md`, merged in PR #44). Once approved, write the implementation plan for OCTO-1000 (Issue #43).
+Merge OCTO-1000 implementation PR after green gates; then owner performs external actions (register OAuth redirect URI, map tunnel hostname in Zero Trust, verify port 8090 on gravebuster).
 

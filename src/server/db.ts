@@ -66,6 +66,43 @@ export async function dbInsertGuestPrincipal(
   return rows[0]!;
 }
 
+export async function dbUpsertGooglePrincipal(
+  authUserId: string,
+  email: string,
+  displayName: string | null,
+  avatarUrl: string | null
+): Promise<{
+  id: string;
+  authUserId: string;
+  email: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  isGuest: boolean;
+  isPlatformOwner: boolean;
+}> {
+  const sql = `
+    INSERT INTO octo.principals (id, auth_user_id, email, display_name, avatar_url, is_guest, is_platform_owner)
+    VALUES (gen_random_uuid(), $1, $2, $3, $4, false, false)
+    ON CONFLICT (auth_user_id) DO UPDATE SET
+      email = EXCLUDED.email,
+      display_name = COALESCE(EXCLUDED.display_name, octo.principals.display_name),
+      avatar_url = COALESCE(EXCLUDED.avatar_url, octo.principals.avatar_url),
+      is_guest = false,
+      updated_at = now()
+    RETURNING id, auth_user_id AS "authUserId", email, display_name AS "displayName", avatar_url AS "avatarUrl", is_guest AS "isGuest", is_platform_owner AS "isPlatformOwner";
+  `;
+  const rows = await query<{
+    id: string;
+    authUserId: string;
+    email: string;
+    displayName: string | null;
+    avatarUrl: string | null;
+    isGuest: boolean;
+    isPlatformOwner: boolean;
+  }>(sql, [authUserId, email, displayName, avatarUrl]);
+  return rows[0]!;
+}
+
 export async function dbInsertWorkspace(
   id: string,
   slug: string,
