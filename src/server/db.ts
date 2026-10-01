@@ -581,3 +581,155 @@ export async function dbListActivity(
     [workspaceId, limit]
   );
 }
+
+// 6. Retrieval Operations (Slice 8)
+export async function dbEnsureEmbeddingConfig(
+  workspaceId: string,
+  model: string,
+  modelVersion: string,
+  dimensions: number,
+  chunker: string,
+  chunkSize: number,
+  chunkOverlap: number
+): Promise<string> {
+  const sql = `
+    INSERT INTO octo.embedding_configs
+      (workspace_id, model, model_version, dimensions, chunker, chunk_size, chunk_overlap)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    ON CONFLICT (workspace_id, model, model_version, chunker, chunk_size, chunk_overlap)
+    DO NOTHING
+    RETURNING id;
+  `;
+  const inserted = await query<{ id: string }>(sql, [
+    workspaceId, model, modelVersion, dimensions, chunker, chunkSize, chunkOverlap,
+  ]);
+  if (inserted[0]) return inserted[0].id;
+
+  const existing = await query<{ id: string }>(
+    `SELECT id FROM octo.embedding_configs
+     WHERE workspace_id = $1 AND model = $2 AND model_version = $3
+       AND chunker = $4 AND chunk_size = $5 AND chunk_overlap = $6`,
+    [workspaceId, model, modelVersion, chunker, chunkSize, chunkOverlap]
+  );
+  return existing[0]!.id;
+}
+
+/**
+ * Registers an immutable document version. A repeat of the same content hash
+ * returns the existing version instead of creating a duplicate.
+ */
+export async function dbUpsertDocumentVersion(
+  workspaceId: string,
+  title: string,
+  contentHash: string,
+  mimeType: string,
+  byteSize: number,
+  extractedText: string,
+  createdBy: string
+): Promise<{ versionId: string; documentId: string; created: boolean }> {
+  const docSql = `
+    INSERT INTO octo.documents (workspace_id, title, created_by)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (workspace_id, title) DO NOTHING
+    RETURNING id;
+  `;
+  const docInserted = await query<{ id: string }>(docSql, [workspaceId, title, createdBy]);
+  let documentId = docInserted[0]?.id;
+
+  if (!documentId) {
+    const found = await query<{ id: string }>(
+      'SELECT id FROM octo.documents WHERE workspace_id = $1 AND title = $2',
+      [workspaceId, title]
+    );
+    documentId = found[0]!.id;
+  }
+
+  const versionSql = `
+    INSERT INTO octo.document_versions
+      (document_id, workspace_id, version_number, content_hash, mime_type, byte_size,
+       extracted_text, extraction_status)
+    VALUES (
+      $1, $2,
+      COALESCE((SELECT MAX(version_number) + 1 FROM octo.document_versions WHERE document_id = $1), 1),
+      $3, $4, $5, $6, 'extracted'
+    )
+    ON CONFLICT (document_id, content_hash) DO NOTHING
+    RETURNING id;
+  `;
+  const versionInserted = await query<{ id: string }>(versionSql, [
+    documentId, workspaceId, contentHash, mimeType, byteSize, extractedText,
+  ]);
+
+  if (versionInserted[0]) {
+    return { versionId: versionInserted[0].id, documentId, created: true };
+  }
+
+  const existing = await query<{ id: string }>(
+    'SELECT id FROM octo.document_versions WHERE document_id = $1 AND content_hash = $2',
+    [documentId, contentHash]
+  );
+  return { versionId: existing[0]!.id, documentId, created: false };
+}
+
+/** Writes chunks and embeddings for a version, replacing any prior derived rows. */
+export async function dbReplaceChunksAndEmbeddings(
+  workspaceId: string,
+  versionId: string,
+  configId: string,
+  chunks: Array<{ chunkIndex: number; chunkKey: string; content: string; startOffset: number; endOffset: number; tokenEstimate: number }>,
+  vectors: number[][]
+): Promise<number> {
+  // Derived artifacts are rebuilt as a unit so a partial run cannot leave a
+  // half-indexed version.
+  await query('DELETE FROM octo.embeddings WHERE workspace_id = $1 AND chunk_id IN (SELECT id FROM octo.chunks WHERE document_version_id = $2)', [workspaceId, versionId]);
+  await query('DELETE FROM octo.chunks WHERE document_version_id = $1', [versionId]);
+
+  for (let i = 0; i < chunks.length; i += 1) {
+    const chunk = chunks[i]!;
+    const inserted = await query<{ id: string }>(
+      `INSERT INTO octo.chunks
+         (workspace_id, document_version_id, config_id, chunk_index, chunk_key, content,
+          start_offset, end_offset, token_estimate)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id`,
+      [workspaceId, versionId, configId, chunk.chunkIndex, chunk.chunkKey, chunk.content,
+       chunk.startOffset, chunk.endOffset, chunk.tokenEstimate]
+    );
+    const chunkId = inserted[0]!.id;
+    const vectorLiteral = `[${(vectors[i] ?? []).join(',')}]`;
+    await query(
+      `INSERT INTO octo.embeddings (workspace_id, chunk_id, config_id, embedding)
+       VALUES ($1, $2, $3, $4::vector)`,
+      [workspaceId, chunkId, configId, vectorLiteral]
+    );
+  }
+
+  return chunks.length;
+}
+
+/** Workspace-scoped semantic retrieval. The filter is applied in SQL. */
+export async function dbMatchChunks(
+  workspaceId: string,
+  queryVector: number[],
+  matchCount = 10,
+  minSimilarity = 0
+): Promise<
+  Array<{
+    chunkId: string;
+    documentVersionId: string;
+    content: string;
+    chunkIndex: number;
+    similarity: number;
+    model: string;
+    modelVersion: string;
+    chunker: string;
+  }>
+> {
+  const literal = `[${queryVector.join(',')}]`;
+  return query(
+    `SELECT chunk_id AS "chunkId", document_version_id AS "documentVersionId", content,
+            chunk_index AS "chunkIndex", similarity, model, model_version AS "modelVersion", chunker
+     FROM octo.match_chunks($1, $2::vector, $3, $4)`,
+    [workspaceId, literal, matchCount, minSimilarity]
+  );
+}
