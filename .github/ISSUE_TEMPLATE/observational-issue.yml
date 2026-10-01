@@ -7,6 +7,7 @@ body:
     attributes:
       value: |
         ### Observational Issue & Non-Binding Proposal Protocol
+        > **Source**: This form is published by **Pukujan/observational-issue-ops**. Every other repository consumes it from here rather than keeping its own copy; file an observation here when the subject is the protocol itself.
         > **Notice**: All observational issues filed under this system are **proposals**, NOT literal implementation mandates.
         > Observational logs must be human-understandable, grounded in concrete evidence, and include provenance, reproducibility, and citations.
 
@@ -26,7 +27,7 @@ body:
     id: priority
     attributes:
       label: Priority Rating (1–100)
-      description: Enter numerical priority rating within your plane's rubric range (Plane 1: 1–20, Plane 2: 20–40, Plane 3: 40–100). Rating reflects severity as a blocker or systemic risk (P1 is highest priority/blocker).
+      description: "Enter numerical priority rating within your plane's rubric range (Plane 1: 1–20, Plane 2: 20–40, Plane 3: 40–100). Rating reflects severity as a blocker or systemic risk (P1 is highest priority/blocker)."
       placeholder: "e.g., 5"
     validations:
       required: true
