@@ -32,8 +32,9 @@ Before editing:
 
 1. Read the live owning GitHub issue.
 2. Read this file and `PROJECT.md`.
-3. Read only the minimum task/checkpoint material needed for the active work.
-4. Re-read current GitHub branch/PR/check state before claiming delivery.
+3. If the work is a productization/vertical slice, read `docs/productization/SLICE_CONTRACT.md` and the slice's accepted PDD/SDD/EVAL packet. Do not implement against an unlocked or self-invented success condition.
+4. Read only the minimum task/checkpoint material needed for the active work.
+5. Re-read current GitHub branch/PR/check state before claiming delivery.
 
 GitHub issues own feature scope and lifecycle, but they remain subordinate to explicit owner direction and this anti-overengineering contract.
 
