@@ -34,6 +34,34 @@ export async function query<T = unknown>(text: string, params: unknown[] = []): 
   }
 }
 
+/**
+ * Runs `fn` inside a single transaction on one pooled client. Commits on success,
+ * rolls back on any throw, and always releases the client. Multi-write invariants
+ * (workspace + owner membership + key) must use this rather than separate `query`
+ * calls, which each check out their own connection and cannot roll back together.
+ */
+export async function withTransaction<T>(
+  fn: (client: { query: (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }> }) => Promise<T>
+): Promise<T> {
+  const client = await dbPool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn({
+      query: async (text: string, params: unknown[] = []) => {
+        const res = await client.query(text, params);
+        return { rows: res.rows as unknown[] };
+      },
+    });
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function testDbConnection(): Promise<{ connected: boolean; version?: string; error?: string }> {
   try {
     const rows = await query<{ version: string }>('SELECT version()');
@@ -145,7 +173,15 @@ export async function dbInsertMembership(
 }
 
 export async function dbGetAuthorizedWorkspaces(principalId: string): Promise<
-  { id: string; slug: string; name: string; description: string | null; role: string; isOwner: boolean }[]
+  {
+    id: string;
+    slug: string;
+    name: string;
+    description: string | null;
+    role: string;
+    isOwner: boolean;
+    retentionDays: number | null;
+  }[]
 > {
   const pRows = await query<{ is_platform_owner: boolean }>(
     'SELECT is_platform_owner FROM octo.principals WHERE id = $1',
@@ -153,26 +189,28 @@ export async function dbGetAuthorizedWorkspaces(principalId: string): Promise<
   );
   if (pRows[0]?.is_platform_owner) {
     const sql = `
-      SELECT 
+      SELECT
         w.id,
         w.slug,
         w.name,
         w.description,
         'owner' AS role,
-        true AS "isOwner"
+        true AS "isOwner",
+        w.retention_days AS "retentionDays"
       FROM octo.workspaces w
       ORDER BY w.name ASC;
     `;
     return query(sql, []);
   }
   const sql = `
-    SELECT 
+    SELECT
       w.id,
       w.slug,
       w.name,
       w.description,
       m.role,
-      (m.role = 'owner') AS "isOwner"
+      (m.role = 'owner') AS "isOwner",
+      w.retention_days AS "retentionDays"
     FROM octo.workspaces w
     JOIN octo.workspace_memberships m ON m.workspace_id = w.id
     WHERE m.principal_id = $1
@@ -377,13 +415,14 @@ export async function dbInsertApiKey(
   principalId: string,
   workspaceId: string | null,
   role: string | null,
-  scopes: string[]
+  scopes: string[],
+  expiresAt: string | null = null
 ): Promise<void> {
   const sql = `
-    INSERT INTO octo.api_keys (id, key_hash, prefix, name, principal_id, workspace_id, role, scopes)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+    INSERT INTO octo.api_keys (id, key_hash, prefix, name, principal_id, workspace_id, role, scopes, expires_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
   `;
-  await query(sql, [id, keyHash, prefix, name, principalId, workspaceId, role, scopes]);
+  await query(sql, [id, keyHash, prefix, name, principalId, workspaceId, role, scopes, expiresAt]);
 }
 
 export async function dbVerifyApiKey(keyHash: string): Promise<{
@@ -420,10 +459,20 @@ export async function dbVerifyApiKey(keyHash: string): Promise<{
 }
 
 export async function dbListApiKeys(principalId: string): Promise<
-  { id: string; prefix: string; name: string; workspaceId: string | null; scopes: string[]; createdAt: string }[]
+  {
+    id: string;
+    prefix: string;
+    name: string;
+    workspaceId: string | null;
+    scopes: string[];
+    expiresAt: string | null;
+    lastUsedAt: string | null;
+    createdAt: string;
+  }[]
 > {
   const sql = `
-    SELECT id, prefix, name, workspace_id AS "workspaceId", scopes, created_at AS "createdAt"
+    SELECT id, prefix, name, workspace_id AS "workspaceId", scopes,
+           expires_at AS "expiresAt", last_used_at AS "lastUsedAt", created_at AS "createdAt"
     FROM octo.api_keys
     WHERE principal_id = $1
     ORDER BY created_at DESC;
@@ -597,7 +646,7 @@ export async function dbEnqueueJob(
   jobType: string,
   idempotencyKey: string,
   payload: Record<string, unknown>,
-  createdBy: string,
+  createdBy: string | null,
   maxAttempts = 3
 ): Promise<{ job: DbJobRow; created: boolean }> {
   const insertSql = `
@@ -905,3 +954,207 @@ export async function dbMatchChunks(
     [workspaceId, literal, matchCount, minSimilarity]
   );
 }
+
+// 6. Workspace data plane (Slice 13): atomic workspace create, delete, and the
+// confirmation/retention helpers. Kept together so the multi-write invariant in
+// dbCreateWorkspaceAtomic is easy to audit.
+
+export async function dbGetWorkspaceById(workspaceId: string): Promise<{
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  retentionDays: number | null;
+} | null> {
+  const rows = await query<{
+    id: string;
+    slug: string;
+    name: string;
+    description: string | null;
+    retentionDays: number | null;
+  }>(
+    `SELECT id, slug, name, description, retention_days AS "retentionDays"
+     FROM octo.workspaces WHERE id = $1`,
+    [workspaceId]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Creates a workspace, the creator's owner membership, and the workspace-scoped
+ * API key in one transaction. A failure in any of the three rolls back all of
+ * them, so a workspace can never exist without its key.
+ */
+export async function dbCreateWorkspaceAtomic(params: {
+  workspaceId: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  retentionDays: number | null;
+  createdBy: string;
+  keyId: string;
+  keyHash: string;
+  keyPrefix: string;
+  keyName: string;
+  keyScopes: string[];
+}): Promise<{ id: string; slug: string; name: string; description: string | null; retentionDays: number | null }> {
+  return withTransaction(async (client) => {
+    const ws = await client.query(
+      `INSERT INTO octo.workspaces (id, slug, name, description, created_by, retention_days)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, slug, name, description, retention_days AS "retentionDays"`,
+      [params.workspaceId, params.slug, params.name, params.description, params.createdBy, params.retentionDays]
+    );
+    const row = ws.rows[0] as {
+      id: string;
+      slug: string;
+      name: string;
+      description: string | null;
+      retentionDays: number | null;
+    };
+
+    await client.query(
+      `INSERT INTO octo.workspace_memberships (workspace_id, principal_id, role)
+       VALUES ($1, $2, 'owner')`,
+      [params.workspaceId, params.createdBy]
+    );
+
+    await client.query(
+      `INSERT INTO octo.api_keys (id, key_hash, prefix, name, principal_id, workspace_id, role, scopes)
+       VALUES ($1, $2, $3, $4, $5, $6, 'owner', $7)`,
+      [
+        params.keyId,
+        params.keyHash,
+        params.keyPrefix,
+        params.keyName,
+        params.createdBy,
+        params.workspaceId,
+        params.keyScopes,
+      ]
+    );
+
+    return row;
+  });
+}
+
+/** Files in a transient archive state block a workspace delete. */
+export async function dbCountTransientFiles(workspaceId: string): Promise<number> {
+  const rows = await query<{ count: string }>(
+    `SELECT count(*)::text AS count FROM octo.files
+     WHERE workspace_id = $1 AND archive_state IN ('archiving', 'restoring')`,
+    [workspaceId]
+  );
+  return parseInt(rows[0]?.count ?? '0', 10);
+}
+
+/** Storage keys for a workspace's files, so a delete can report orphaned bytes. */
+export async function dbListWorkspaceStorageKeys(workspaceId: string): Promise<string[]> {
+  const rows = await query<{ storageKey: string }>(
+    `SELECT storage_key AS "storageKey" FROM octo.files WHERE workspace_id = $1`,
+    [workspaceId]
+  );
+  return rows.map((r) => r.storageKey);
+}
+
+/**
+ * Deletes a workspace inside one transaction. Re-checks the transient archive
+ * state under the transaction so a concurrent archive cannot slip past the
+ * route's pre-check and orphan bytes. Returns false when the workspace is busy.
+ */
+export async function dbDeleteWorkspaceAtomic(workspaceId: string): Promise<boolean> {
+  return withTransaction(async (client) => {
+    const busy = await client.query(
+      `SELECT count(*)::int AS count FROM octo.files
+       WHERE workspace_id = $1 AND archive_state IN ('archiving', 'restoring')`,
+      [workspaceId]
+    );
+    if (((busy.rows[0] as { count: number }).count ?? 0) > 0) return false;
+    await client.query('DELETE FROM octo.workspaces WHERE id = $1', [workspaceId]);
+    return true;
+  });
+}
+
+export async function dbSetConfirmSecret(principalId: string, hash: string): Promise<void> {
+  await query('UPDATE octo.principals SET confirm_secret_hash = $1, updated_at = now() WHERE id = $2', [
+    hash,
+    principalId,
+  ]);
+}
+
+export async function dbGetConfirmSecretHash(principalId: string): Promise<string | null> {
+  const rows = await query<{ hash: string | null }>(
+    'SELECT confirm_secret_hash AS hash FROM octo.principals WHERE id = $1',
+    [principalId]
+  );
+  return rows[0]?.hash ?? null;
+}
+
+/** The id of a principal's account-wide key, or null. Enforces the one-key rule. */
+export async function dbGetAccountWideKeyId(principalId: string): Promise<string | null> {
+  const rows = await query<{ id: string }>(
+    'SELECT id FROM octo.api_keys WHERE principal_id = $1 AND workspace_id IS NULL LIMIT 1',
+    [principalId]
+  );
+  return rows[0]?.id ?? null;
+}
+
+/** Workspaces that have a retention window set, for the archive sweep. */
+export async function dbListRetentionWorkspaces(): Promise<{ id: string; retentionDays: number }[]> {
+  return query<{ id: string; retentionDays: number }>(
+    `SELECT id, retention_days AS "retentionDays" FROM octo.workspaces
+     WHERE retention_days IS NOT NULL`
+  );
+}
+
+/** Active R2 files older than the retention window, candidates for archiving. */
+export async function dbListAgedActiveFiles(workspaceId: string, retentionDays: number): Promise<string[]> {
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM octo.files
+     WHERE workspace_id = $1 AND status = 'active' AND archive_state = 'active_r2'
+       AND created_at < now() - ($2 || ' days')::interval`,
+    [workspaceId, retentionDays]
+  );
+  return rows.map((r) => r.id);
+}
+
+/**
+ * How many jobs of one type already exist for one file. Used as a monotonic
+ * suffix on the archive/restore idempotency key: it is unchanged while a
+ * transition is in flight (so a duplicate is deduped), and increments once the
+ * transition completes (so a later cycle of the same transition is not
+ * permanently swallowed by the unique constraint).
+ */
+export async function dbCountFileJobs(
+  workspaceId: string,
+  jobType: string,
+  fileId: string
+): Promise<number> {
+  const rows = await query<{ count: number }>(
+    `SELECT count(*)::int AS count FROM octo.jobs
+     WHERE workspace_id = $1 AND job_type = $2 AND payload->>'fileId' = $3`,
+    [workspaceId, jobType, fileId]
+  );
+  return rows[0]?.count ?? 0;
+}
+
+/**
+ * True when a job of this type for this file is still open (queued or running).
+ * The retention sweep uses it to avoid double-queueing a file that is already
+ * mid-transition.
+ */
+export async function dbHasOpenFileJob(
+  workspaceId: string,
+  jobType: string,
+  fileId: string
+): Promise<boolean> {
+  const rows = await query<{ open: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM octo.jobs
+       WHERE workspace_id = $1 AND job_type = $2 AND payload->>'fileId' = $3
+         AND state IN ('queued', 'running')
+     ) AS open`,
+    [workspaceId, jobType, fileId]
+  );
+  return rows[0]?.open ?? false;
+}
+

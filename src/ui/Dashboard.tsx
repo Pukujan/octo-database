@@ -14,7 +14,6 @@ import {
   Box,
   Button,
   Card,
-  CardActions,
   CardContent,
   Chip,
   Container,
@@ -45,6 +44,7 @@ import { ShareSummary } from '../media/share-service';
 import { OperationsActivity, OperationsJob, OperationsPage } from './OperationsPage';
 import { GalleryItem } from '../media/gallery-service';
 import { Gallery } from './Gallery';
+import { KeyManager, CreateKeyOptions } from './KeyManager';
 import { octoTheme } from './theme';
 
 export interface DashboardProps {
@@ -64,7 +64,24 @@ export interface DashboardProps {
   onDeleteFile?: (fileId: string) => Promise<void>;
   onArchiveFile?: (fileId: string) => Promise<void>;
   onRestoreFile?: (fileId: string) => Promise<void>;
-  onCreateApiKey?: (name: string, isAccountWide: boolean) => Promise<{ rawSecret: string }>;
+  onCreateApiKey?: (
+    name: string,
+    isAccountWide: boolean,
+    options?: CreateKeyOptions
+  ) => Promise<{ rawSecret: string }>;
+  onRevokeApiKey?: (keyId: string) => Promise<void>;
+  onCreateWorkspace?: (input: {
+    name: string;
+    description?: string;
+    retentionDays?: number | null;
+  }) => Promise<{ workspace: WorkspaceSummary; rawSecret: string }>;
+  onDeleteWorkspace?: (
+    workspaceId: string,
+    confirmSecret: string,
+    confirmSlug: string
+  ) => Promise<void>;
+  onSetConfirmSecret?: (secret: string, currentSecret?: string) => Promise<void>;
+  confirmSecretSet?: boolean;
   shares?: ShareSummary[];
   jobs?: OperationsJob[];
   activity?: OperationsActivity[];
@@ -140,6 +157,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onArchiveFile,
   onRestoreFile,
   onCreateApiKey,
+  onRevokeApiKey,
+  onCreateWorkspace,
+  onDeleteWorkspace,
+  onSetConfirmSecret,
+  confirmSecretSet = false,
   shares = [],
   jobs = [],
   activity = [],
@@ -160,11 +182,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   }, [activeContext?.workspace.id]);
 
-  const [newKeyName, setNewKeyName] = useState('');
-  const [newKeyIsAccountWide, setNewKeyIsAccountWide] = useState(false);
-  const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [createdShareUrl, setCreatedShareUrl] = useState<string | null>(null);
   const [shareExpiry, setShareExpiry] = useState<number>(0);
+
+  // Workspace create/delete state (Slice 13).
+  const [isCreateWsOpen, setIsCreateWsOpen] = useState(false);
+  const [newWsName, setNewWsName] = useState('');
+  const [newWsDescription, setNewWsDescription] = useState('');
+  const [newWsRetention, setNewWsRetention] = useState<number>(0);
+  const [createdWsSecret, setCreatedWsSecret] = useState<{ name: string; secret: string } | null>(null);
+  const [isDeleteWsOpen, setIsDeleteWsOpen] = useState(false);
+  const [deleteSecret, setDeleteSecret] = useState('');
+  const [deleteSlug, setDeleteSlug] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [setupSecret, setSetupSecret] = useState('');
+  const [setupCurrentSecret, setSetupCurrentSecret] = useState('');
+  const [setupError, setSetupError] = useState<string | null>(null);
 
   const [uploadFileName, setUploadFileName] = useState('');
   const [uploadFileContent, setUploadFileContent] = useState('');
@@ -175,17 +208,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     onSelectWorkspace(newId);
   };
 
-  const handleCreateKey = async () => {
-    if (!newKeyName.trim() || !onCreateApiKey) return;
-    try {
-      const res = await onCreateApiKey(newKeyName.trim(), newKeyIsAccountWide);
-      setCreatedSecret(res.rawSecret);
-      setNewKeyName('');
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
   const handleCreateShare = async () => {
     if (!onCreateShare) return;
     try {
@@ -193,6 +215,49 @@ export const Dashboard: React.FC<DashboardProps> = ({
       setCreatedShareUrl(`${window.location.origin}/share/${res.rawToken}`);
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleCreateWorkspace = async () => {
+    if (!newWsName.trim() || !onCreateWorkspace) return;
+    try {
+      const res = await onCreateWorkspace({
+        name: newWsName.trim(),
+        description: newWsDescription.trim() || undefined,
+        retentionDays: newWsRetention > 0 ? newWsRetention : null,
+      });
+      setCreatedWsSecret({ name: res.workspace.name, secret: res.rawSecret });
+      setNewWsName('');
+      setNewWsDescription('');
+      setNewWsRetention(0);
+      setIsCreateWsOpen(false);
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Failed to create workspace');
+    }
+  };
+
+  const handleDeleteWorkspace = async () => {
+    if (!activeContext || !onDeleteWorkspace) return;
+    setDeleteError(null);
+    try {
+      await onDeleteWorkspace(activeContext.workspace.id, deleteSecret, deleteSlug);
+      setIsDeleteWsOpen(false);
+      setDeleteSecret('');
+      setDeleteSlug('');
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Failed to delete workspace');
+    }
+  };
+
+  const handleSetConfirmSecret = async () => {
+    if (!onSetConfirmSecret) return;
+    setSetupError(null);
+    try {
+      await onSetConfirmSecret(setupSecret, setupCurrentSecret || undefined);
+      setSetupSecret('');
+      setSetupCurrentSecret('');
+    } catch (e) {
+      setSetupError(e instanceof Error ? e.message : 'Failed to set confirmation secret');
     }
   };
 
@@ -378,25 +443,37 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </Typography>
             </div>
 
-            {workspaces.length > 0 && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                <Typography variant="body2" color="text.secondary">
-                  Active Workspace:
-                </Typography>
-                <Select
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+              {workspaces.length > 0 && (
+                <>
+                  <Typography variant="body2" color="text.secondary">
+                    Active Workspace:
+                  </Typography>
+                  <Select
+                    size="small"
+                    value={selectedWsId || (workspaces[0]?.id ?? '')}
+                    onChange={(e) => handleWorkspaceChange(e.target.value)}
+                    sx={{ minWidth: 220, bgcolor: 'background.paper', borderRadius: 1.5 }}
+                  >
+                    {workspaces.map((ws) => (
+                      <MenuItem key={ws.id} value={ws.id}>
+                        {ws.name} ({ws.role})
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </>
+              )}
+              {onCreateWorkspace && (
+                <Button
+                  variant="contained"
                   size="small"
-                  value={selectedWsId || (workspaces[0]?.id ?? '')}
-                  onChange={(e) => handleWorkspaceChange(e.target.value)}
-                  sx={{ minWidth: 220, bgcolor: 'background.paper', borderRadius: 1.5 }}
+                  onClick={() => setIsCreateWsOpen(true)}
+                  sx={{ textTransform: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}
                 >
-                  {workspaces.map((ws) => (
-                    <MenuItem key={ws.id} value={ws.id}>
-                      {ws.name} ({ws.role})
-                    </MenuItem>
-                  ))}
-                </Select>
-              </Box>
-            )}
+                  ＋ New Workspace
+                </Button>
+              )}
+            </Box>
           </Box>
 
           {/* Empty / Unauthorized State */}
@@ -405,9 +482,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <Typography variant="h6" gutterBottom>
                 No Authorized Workspaces
               </Typography>
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" color="text.secondary" sx={{ mb: onCreateWorkspace ? 3 : 0 }}>
                 Your account ({principal.email}) does not belong to any active workspaces yet.
               </Typography>
+              {onCreateWorkspace && (
+                <Button variant="contained" onClick={() => setIsCreateWsOpen(true)} sx={{ textTransform: 'none' }}>
+                  ＋ Create your first workspace
+                </Button>
+              )}
             </Card>
           ) : activeContext ? (
             <Box>
@@ -437,6 +519,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </Typography>
                   )}
 
+                  <Typography variant="body2" color="text.secondary">
+                    Cold archive policy:{' '}
+                    {workspaces.find((w) => w.id === activeContext.workspace.id)?.retentionDays ? (
+                      <>
+                        active files older than{' '}
+                        <strong>
+                          {workspaces.find((w) => w.id === activeContext.workspace.id)?.retentionDays} days
+                        </strong>{' '}
+                        auto-archive to Google Drive. Recalled on demand on the next read.
+                      </>
+                    ) : (
+                      'no automatic archive (files stay in R2 until you archive them).'
+                    )}
+                  </Typography>
+
                   <Divider sx={{ my: 2 }} />
 
                   <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
@@ -462,12 +559,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       color={activeContext.capabilities.canManageSettings ? 'success' : 'default'}
                     />
                     <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
-                    <Chip
-                      label="Delete Workspace"
-                      size="small"
-                      variant={activeContext.capabilities.canDeleteWorkspace ? 'outlined' : 'outlined'}
-                      color="error"
-                    />
+                    {onDeleteWorkspace && activeContext.capabilities.canDeleteWorkspace ? (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        color="error"
+                        onClick={() => {
+                          setDeleteError(null);
+                          setIsDeleteWsOpen(true);
+                        }}
+                        sx={{ textTransform: 'none' }}
+                      >
+                        Delete Workspace
+                      </Button>
+                    ) : (
+                      <Chip label="Delete Workspace" size="small" variant="outlined" color="error" />
+                    )}
                   </Box>
                 </CardContent>
               </Card>
@@ -788,103 +895,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </CardContent>
               </Card>
 
-              {/* API Keys (Account-Wide & Workspace-Scoped) */}
-              <Card sx={{ mb: 4, borderRadius: 2 }}>
-                <CardContent>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                    <div>
-                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                        🔑 API Keys (Account-Wide & Workspace-Scoped)
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Machine credentials for automation and agents. Hashed with SHA-256; secrets never stored in plaintext.
-                      </Typography>
-                    </div>
-                  </Box>
-
-                  {/* Created Key Alert */}
-                  {createdSecret && (
-                    <Card sx={{ p: 2, mb: 3, bgcolor: '#f0fdf4', borderColor: '#86efac', borderRadius: 2 }}>
-                      <Typography variant="subtitle2" sx={{ color: '#166534', fontWeight: 600 }}>
-                        New API Key Minted (Copy Now - will not be displayed again):
-                      </Typography>
-                      <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all', mt: 0.5 }}>
-                        {createdSecret}
-                      </Typography>
-                    </Card>
-                  )}
-
-                  {/* Create Key Form */}
-                  {onCreateApiKey && (
-                    <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', mb: 3, flexWrap: 'wrap' }}>
-                      <TextField
-                        size="small"
-                        label="Key Name"
-                        placeholder="e.g. Ingest Agent"
-                        value={newKeyName}
-                        onChange={(e) => setNewKeyName(e.target.value)}
-                        sx={{ width: 220 }}
-                      />
-                      <Select
-                        size="small"
-                        value={newKeyIsAccountWide ? 'account' : 'workspace'}
-                        onChange={(e) => setNewKeyIsAccountWide(e.target.value === 'account')}
-                        sx={{ width: 190 }}
-                      >
-                        <MenuItem value="workspace">Workspace-Scoped</MenuItem>
-                        <MenuItem value="account">Account-Wide</MenuItem>
-                      </Select>
-                      <Button
-                        variant="contained"
-                        size="medium"
-                        onClick={handleCreateKey}
-                        disabled={!newKeyName.trim()}
-                        sx={{ whiteSpace: 'nowrap' }}
-                      >
-                        Generate API Key
-                      </Button>
-                    </Box>
-                  )}
-
-                  {/* Keys Table */}
-                  {apiKeys.length === 0 ? (
-                    <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
-                      No API keys generated yet.
-                    </Typography>
-                  ) : (
-                    <TableContainer>
-                      <Table size="small">
-                        <TableHead>
-                          <TableRow>
-                            <TableCell sx={{ fontWeight: 600 }}>Name</TableCell>
-                            <TableCell sx={{ fontWeight: 600 }}>Prefix</TableCell>
-                            <TableCell sx={{ fontWeight: 600 }}>Scope</TableCell>
-                            <TableCell sx={{ fontWeight: 600 }}>Scopes</TableCell>
-                            <TableCell sx={{ fontWeight: 600 }}>Last Used</TableCell>
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {apiKeys.map((k) => (
-                            <TableRow key={k.id}>
-                              <TableCell sx={{ fontWeight: 500 }}>{k.name}</TableCell>
-                              <TableCell sx={{ whiteSpace: 'nowrap' }}><code>{k.prefix}...</code></TableCell>
-                              <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                                <Chip
-                                  label={k.isAccountWide ? 'Account-Wide' : 'Workspace-Scoped'}
-                                  size="small"
-                                  color={k.isAccountWide ? 'primary' : 'default'}
-                                />
-                              </TableCell>
-                              <TableCell sx={{ whiteSpace: 'nowrap' }}>{k.scopes.join(', ')}</TableCell>
-                              <TableCell sx={{ whiteSpace: 'nowrap' }}>{k.lastUsedAt ?? 'Never'}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </TableContainer>
-                  )}
-                </CardContent>
-              </Card>
+              <KeyManager
+                apiKeys={apiKeys}
+                workspaceName={activeContext.workspace.name}
+                isPlatformOwner={principal.isPlatformOwner}
+                onCreateApiKey={onCreateApiKey}
+                onRevokeApiKey={onRevokeApiKey}
+              />
             </Box>
           ) : (
             <Card sx={{ p: 4, textAlign: 'center' }}>
@@ -894,6 +911,189 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </Card>
           )}
         </Container>
+
+        {/* New Workspace Dialog (Slice 13) */}
+        <Dialog
+          open={isCreateWsOpen}
+          onClose={() => setIsCreateWsOpen(false)}
+          maxWidth="sm"
+          fullWidth
+          aria-labelledby="new-workspace-dialog-title"
+        >
+          <DialogTitle id="new-workspace-dialog-title" sx={{ fontWeight: 700 }}>
+            ＋ New Workspace
+          </DialogTitle>
+          <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+            <Typography variant="body2" color="text.secondary">
+              A workspace is a database: its own files, gallery, and one auto-provisioned API key.
+              The key secret is shown once, right after creation.
+            </Typography>
+            <TextField
+              label="Name"
+              placeholder="e.g. Inventory DB"
+              value={newWsName}
+              onChange={(e) => setNewWsName(e.target.value)}
+              fullWidth
+              size="small"
+              autoFocus
+            />
+            <TextField
+              label="Description (optional)"
+              value={newWsDescription}
+              onChange={(e) => setNewWsDescription(e.target.value)}
+              fullWidth
+              size="small"
+            />
+            <Box>
+              <TextField
+                label="Retention (days, optional)"
+                type="number"
+                value={newWsRetention || ''}
+                onChange={(e) => setNewWsRetention(Number(e.target.value))}
+                size="small"
+                sx={{ width: 220 }}
+                inputProps={{ min: 0 }}
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                Active files older than this auto-archive to Google Drive (cold). Blank = never
+                auto-archive.
+              </Typography>
+            </Box>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, py: 1.5 }}>
+            <Button onClick={() => setIsCreateWsOpen(false)} sx={{ textTransform: 'none' }}>
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              onClick={handleCreateWorkspace}
+              disabled={!newWsName.trim()}
+              sx={{ textTransform: 'none' }}
+            >
+              Create Workspace
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Auto-provisioned workspace key (shown once) */}
+        <Dialog
+          open={Boolean(createdWsSecret)}
+          onClose={() => setCreatedWsSecret(null)}
+          maxWidth="sm"
+          fullWidth
+          aria-labelledby="ws-key-dialog-title"
+        >
+          <DialogTitle id="ws-key-dialog-title" sx={{ fontWeight: 700 }}>
+            ✅ Workspace created
+          </DialogTitle>
+          <DialogContent dividers>
+            <Typography variant="body2" sx={{ mb: 2 }}>
+              <strong>{createdWsSecret?.name}</strong> is ready. Its workspace API key was
+              auto-provisioned. Copy it now — it is not stored and cannot be shown again.
+            </Typography>
+            <Card sx={{ p: 2, bgcolor: '#f0fdf4', borderColor: '#86efac', borderRadius: 2 }}>
+              <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                {createdWsSecret?.secret}
+              </Typography>
+            </Card>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, py: 1.5 }}>
+            <Button variant="contained" onClick={() => setCreatedWsSecret(null)} sx={{ textTransform: 'none' }}>
+              Done
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Delete Workspace Dialog (destructive: human session + secret + typed slug) */}
+        <Dialog
+          open={isDeleteWsOpen}
+          onClose={() => setIsDeleteWsOpen(false)}
+          maxWidth="sm"
+          fullWidth
+          aria-labelledby="delete-workspace-dialog-title"
+        >
+          <DialogTitle id="delete-workspace-dialog-title" sx={{ fontWeight: 700, color: 'error.main' }}>
+            ⚠️ Delete Workspace
+          </DialogTitle>
+          <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Typography variant="body2">
+              This permanently deletes <strong>{activeContext?.workspace.name}</strong> and all of
+              its files, keys, shares, memberships, and jobs. This cannot be undone.
+            </Typography>
+
+            {!confirmSecretSet ? (
+              <Card sx={{ p: 2, bgcolor: '#fffbeb', borderColor: '#fde68a', borderRadius: 2 }}>
+                <Typography variant="body2" sx={{ color: '#92400e', fontWeight: 600, mb: 1 }}>
+                  No confirmation secret is set. Destructive commands are disabled until you set one.
+                </Typography>
+                {onSetConfirmSecret && (
+                  <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <TextField
+                      label="New confirmation secret (min 8 chars)"
+                      type="password"
+                      value={setupSecret}
+                      onChange={(e) => setSetupSecret(e.target.value)}
+                      size="small"
+                      sx={{ flex: '1 1 240px' }}
+                    />
+                    <Button
+                      variant="contained"
+                      onClick={handleSetConfirmSecret}
+                      disabled={setupSecret.length < 8}
+                      sx={{ textTransform: 'none' }}
+                    >
+                      Set Secret
+                    </Button>
+                  </Box>
+                )}
+                {setupError && (
+                  <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
+                    {setupError}
+                  </Typography>
+                )}
+              </Card>
+            ) : (
+              <>
+                <TextField
+                  label={`Type the slug "${activeContext?.workspace.slug}" to confirm`}
+                  value={deleteSlug}
+                  onChange={(e) => setDeleteSlug(e.target.value)}
+                  size="small"
+                  fullWidth
+                />
+                <TextField
+                  label="Confirmation secret"
+                  type="password"
+                  value={deleteSecret}
+                  onChange={(e) => setDeleteSecret(e.target.value)}
+                  size="small"
+                  fullWidth
+                />
+                {deleteError && (
+                  <Typography variant="body2" color="error">
+                    {deleteError}
+                  </Typography>
+                )}
+              </>
+            )}
+          </DialogContent>
+          <DialogActions sx={{ px: 3, py: 1.5 }}>
+            <Button onClick={() => setIsDeleteWsOpen(false)} sx={{ textTransform: 'none' }}>
+              Cancel
+            </Button>
+            {confirmSecretSet && (
+              <Button
+                variant="contained"
+                color="error"
+                onClick={handleDeleteWorkspace}
+                disabled={!deleteSecret || !deleteSlug}
+                sx={{ textTransform: 'none' }}
+              >
+                Delete Workspace
+              </Button>
+            )}
+          </DialogActions>
+        </Dialog>
 
         {/* Platform Admin Dialog */}
         <Dialog
