@@ -66,9 +66,11 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     await page.fill('input[placeholder="e.g. Ingest Agent"]', 'Vision E2E Agent');
     await page.click('button:has-text("Generate API Key")');
 
-    // Verify minted key alert appears with secret
+    // Verify minted key alert appears with the one-time secret. The exact
+    // pattern avoids matching the `octo_live_ws_...` placeholder in the usage
+    // panel's curl example.
     await expect(page.locator('text=New API Key Minted')).toBeVisible();
-    await expect(page.locator('text=octo_live_ws_')).toBeVisible();
+    await expect(page.getByText(/^octo_live_ws_[0-9a-f]{32}$/)).toBeVisible();
 
     // 10. Sign out cleanly
     await page.click('button:has-text("Sign out")');

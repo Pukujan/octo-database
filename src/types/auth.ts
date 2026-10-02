@@ -49,6 +49,8 @@ export interface WorkspaceSummary {
   description: string | null;
   role: WorkspaceRole;
   isOwner: boolean;
+  /** Days after which active files auto-archive to Drive; null = never. */
+  retentionDays?: number | null;
 }
 
 export interface Session {

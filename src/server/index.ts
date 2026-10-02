@@ -33,18 +33,29 @@ import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { hashApiKeySecret } from '../api/keys';
 import {
+  dbCountFileJobs,
+  dbCountTransientFiles,
+  dbCreateWorkspaceAtomic,
   dbDeleteFile,
+  dbDeleteWorkspaceAtomic,
   dbGetArchiveRecord,
+  dbGetAccountWideKeyId,
   dbGetAuthorizedWorkspaces,
+  dbGetConfirmSecretHash,
   dbGetFile,
+  dbGetWorkspaceById,
   dbGetWorkspaceMembership,
+  dbHasOpenFileJob,
   dbInsertApiKey,
   dbInsertFile,
   dbInsertGuestPrincipal,
   dbUpsertGooglePrincipal,
   dbInsertMembership,
   dbInsertWorkspace,
+  dbListAgedActiveFiles,
   dbListApiKeys,
+  dbListRetentionWorkspaces,
+  dbListWorkspaceStorageKeys,
   dbClaimJob,
   dbCompleteJob,
   dbEnsureEmbeddingConfig,
@@ -62,6 +73,7 @@ import {
   dbResolveShareByTokenHash,
   dbRevokeShare,
   dbInsertShare,
+  dbSetConfirmSecret,
   dbUpdateArchiveState,
   dbVerifyApiKey,
   query,
@@ -396,6 +408,83 @@ async function drainQueueOnce(targetWorkspaceId?: string, maxJobs = 10): Promise
 }
 
 /**
+ * Enqueues an archive (or restore) job for one file. The idempotency key is
+ * scoped to the transition *cycle*, not just the file: it embeds a monotonic
+ * count of prior jobs of this type for this file. While a transition is in flight
+ * the count is unchanged, so a repeat is deduped; once it completes the count
+ * increments, so a later archive -> restore -> archive is not permanently
+ * swallowed by the jobs unique constraint (the re-archive defect).
+ */
+async function enqueueFileTransition(
+  direction: 'archive' | 'restore',
+  workspaceId: string,
+  file: { id: string; storageKey: string; mimeType: string },
+  createdBy: string | null
+): Promise<{ job: Awaited<ReturnType<typeof dbEnqueueJob>>['job']; created: boolean }> {
+  const jobType = direction === 'archive' ? 'archive_file' : 'restore_file';
+  const cycle = await dbCountFileJobs(workspaceId, jobType, file.id);
+  return dbEnqueueJob(
+    randomUUID(),
+    workspaceId,
+    jobType,
+    `${direction}:${file.id}:${cycle}`,
+    { fileId: file.id, storageKey: file.storageKey, mimeType: file.mimeType },
+    createdBy
+  );
+}
+
+/**
+ * The retention/tiering policy in full: `workspaces.retention_days` is the only
+ * knob. For each workspace with a window set, active files older than the window
+ * are enqueued for archival. NULL means never auto-archive. Files already
+ * mid-transition are skipped so a slow archive is not double-queued.
+ */
+async function runRetentionSweep(): Promise<number> {
+  if (!archiveDeps) return 0;
+
+  let enqueued = 0;
+  for (const workspace of await dbListRetentionWorkspaces()) {
+    for (const fileId of await dbListAgedActiveFiles(workspace.id, workspace.retentionDays)) {
+      if (await dbHasOpenFileJob(workspace.id, 'archive_file', fileId)) continue;
+
+      const file = await dbGetFile(workspace.id, fileId);
+      if (!file) continue;
+
+      const { created } = await enqueueFileTransition(
+        'archive',
+        workspace.id,
+        { id: file.id, storageKey: file.storageKey, mimeType: file.mimeType },
+        null
+      );
+      if (created) enqueued += 1;
+    }
+  }
+  return enqueued;
+}
+
+/**
+ * Starts the two background loops a single container needs: a minute tick that
+ * drains the job queue (so queued archiving/restores progress without a human
+ * pressing "Run worker pass"), and an hourly retention sweep. Both are unref'd so
+ * they never hold the process open.
+ */
+function startSchedulers(): void {
+  setInterval(() => {
+    drainQueueOnce(undefined, 25).catch((err) => console.warn('Queue drain tick failed:', err));
+  }, 60_000).unref();
+
+  setInterval(() => {
+    runRetentionSweep()
+      .then(async (enqueued) => {
+        if (enqueued > 0) {
+          console.log(`Retention sweep enqueued ${enqueued} archive job(s)`);
+          await drainQueueOnce(undefined, 25);
+        }
+      })
+      .catch((err) => console.warn('Retention sweep failed:', err));
+  }, 60 * 60 * 1000).unref();
+}
+/**
  * Enforces a token scope. Human sessions carry no scope list and are not limited
  * here; API-key callers must hold the required scope or the call is refused.
  */
@@ -407,6 +496,55 @@ function requireScope(auth: AuthContext, scope: OctoScope): boolean {
 /** Standard refusal body for a missing scope. */
 function scopeDenied(res: ServerResponse, scope: OctoScope): void {
   sendJson(res, 403, { error: `FORBIDDEN: Token is missing the required '${scope}' scope` });
+}
+
+/** Lowercase, hyphenated, URL-safe form of a workspace name. */
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+/**
+ * The human confirmation gate for destructive commands. It is satisfied only when
+ * both hold: the caller is a human session (no API key), and the supplied secret
+ * hashes to the principal's stored confirmation secret. An API-key caller can
+ * never satisfy it, whatever its scopes -- that is the structural answer to "can
+ * a blind agent delete a workspace".
+ *
+ * Fails closed: an account that never set a secret refuses with
+ * CONFIRM_SECRET_NOT_SET rather than falling open. Returns true when the request
+ * may proceed, having already written the refusal response otherwise.
+ */
+async function confirmGate(
+  res: ServerResponse,
+  auth: AuthContext,
+  suppliedSecret: unknown
+): Promise<boolean> {
+  if (auth.apiKey) {
+    sendJson(res, 403, {
+      error: 'FORBIDDEN: Destructive commands require a human session; API keys can never confirm.',
+    });
+    return false;
+  }
+
+  const stored = await dbGetConfirmSecretHash(auth.principal.id);
+  if (!stored) {
+    sendJson(res, 412, {
+      error: 'CONFIRM_SECRET_NOT_SET: Set a confirmation secret via POST /api/me/confirm-secret first.',
+    });
+    return false;
+  }
+
+  if (typeof suppliedSecret !== 'string' || hashApiKeySecret(suppliedSecret) !== stored) {
+    sendJson(res, 403, { error: 'CONFIRM_SECRET_INVALID: Confirmation secret does not match.' });
+    return false;
+  }
+
+  return true;
 }
 
 /** Attributes an agent action to its principal for audit. Best-effort. */
@@ -678,10 +816,52 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
       }
+      // The client needs to know whether the destructive-command gate is armed so
+      // it can prompt for setup rather than letting the user hit a 412.
+      const confirmSecretSet = Boolean(await dbGetConfirmSecretHash(auth.principal.id));
       sendJson(res, 200, {
         principal: auth.principal,
         apiKey: auth.apiKey ?? null,
+        confirmSecretSet,
       });
+      return;
+    }
+
+    // 2c. Set or rotate the confirmation secret: POST /api/me/confirm-secret
+    // Human session only. Rotation is itself destructive, so changing an existing
+    // secret requires presenting the current one; first-time setup does not.
+    if (pathname === '/api/me/confirm-secret' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (auth.apiKey) {
+        sendJson(res, 403, {
+          error: 'FORBIDDEN: The confirmation secret is set from a human session, never an API key.',
+        });
+        return;
+      }
+
+      const parsed = JSON.parse(await readBody(req));
+      const { secret, currentSecret } = parsed;
+      if (typeof secret !== 'string' || secret.length < 8) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: secret must be a string of at least 8 characters' });
+        return;
+      }
+
+      const existing = await dbGetConfirmSecretHash(auth.principal.id);
+      if (existing) {
+        if (typeof currentSecret !== 'string' || hashApiKeySecret(currentSecret) !== existing) {
+          sendJson(res, 403, {
+            error: 'CONFIRM_SECRET_INVALID: the current confirmation secret is required to rotate it.',
+          });
+          return;
+        }
+      }
+
+      await dbSetConfirmSecret(auth.principal.id, hashApiKeySecret(secret));
+      sendJson(res, 200, { success: true, rotated: Boolean(existing) });
       return;
     }
 
@@ -704,7 +884,8 @@ export const server = createServer(async (req, res) => {
           slug: string;
           name: string;
           description: string | null;
-        }>('SELECT id, slug, name, description FROM octo.workspaces WHERE id = $1', [
+          retention_days: number | null;
+        }>('SELECT id, slug, name, description, retention_days FROM octo.workspaces WHERE id = $1', [
           auth.apiKey.workspaceId,
         ]);
 
@@ -722,6 +903,7 @@ export const server = createServer(async (req, res) => {
             description: ws.description,
             role: auth.apiKey.role ?? 'member',
             isOwner: auth.apiKey.role === 'owner',
+            retentionDays: ws.retention_days,
           },
         ]);
         return;
@@ -732,6 +914,172 @@ export const server = createServer(async (req, res) => {
       sendJson(res, 200, workspaces);
       return;
     }
+
+    // 3b. Create a workspace: POST /api/workspaces
+    // Workspace = database: the creator becomes owner and the workspace's single
+    // API key is minted in the same transaction, so a workspace can never exist
+    // without its key. The raw key secret is returned exactly once, here.
+    if (pathname === '/api/workspaces' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
+        return;
+      }
+      // A workspace-scoped key is pinned to one workspace and cannot mint more.
+      if (auth.apiKey && auth.apiKey.workspaceId) {
+        sendJson(res, 403, {
+          error: 'FORBIDDEN: A workspace-scoped key cannot create workspaces',
+        });
+        return;
+      }
+
+      const parsed = JSON.parse(await readBody(req));
+      const { name, slug, description, retentionDays } = parsed;
+
+      if (!name || typeof name !== 'string' || !slugify(name)) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: a name that slugifies to at least one character is required' });
+        return;
+      }
+      if (retentionDays !== undefined && retentionDays !== null) {
+        if (!Number.isInteger(retentionDays) || retentionDays <= 0) {
+          sendJson(res, 400, { error: 'BAD_REQUEST: retentionDays must be a positive integer' });
+          return;
+        }
+      }
+
+      const resolvedSlug = typeof slug === 'string' && slug.trim() ? slugify(slug) : slugify(name);
+      if (!resolvedSlug) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: slug is empty' });
+        return;
+      }
+
+      const workspaceId = randomUUID();
+      const keyId = randomUUID();
+      const rawSecret = `octo_live_ws_${randomUUID().replace(/-/g, '')}`;
+
+      try {
+        const workspace = await dbCreateWorkspaceAtomic({
+          workspaceId,
+          slug: resolvedSlug,
+          name: name.trim(),
+          description: typeof description === 'string' && description.trim() ? description.trim() : null,
+          retentionDays: retentionDays ?? null,
+          createdBy: auth.principal.id,
+          keyId,
+          keyHash: hashApiKeySecret(rawSecret),
+          keyPrefix: 'octo_live_ws',
+          keyName: `${name.trim()} workspace key`,
+          keyScopes: ['read', 'write', 'files'],
+        });
+
+        await dbRecordActivity(
+          workspaceId,
+          'workspace.created',
+          `Workspace '${workspace.name}' created`,
+          null,
+          auth.principal.id
+        );
+
+        sendJson(res, 201, {
+          workspace: { ...workspace, role: 'owner', isOwner: true },
+          apiKey: {
+            id: keyId,
+            prefix: 'octo_live_ws',
+            name: `${name.trim()} workspace key`,
+            workspaceId,
+            isAccountWide: false,
+            scopes: ['read', 'write', 'files'],
+          },
+          rawSecret,
+        });
+      } catch (err) {
+        // A slug collision raises the unique-violation code from the plain INSERT.
+        if ((err as { code?: string }).code === '23505') {
+          sendJson(res, 409, {
+            error: `SLUG_TAKEN: a workspace with slug '${resolvedSlug}' already exists`,
+          });
+          return;
+        }
+        throw err;
+      }
+      return;
+    }
+
+    // 3c. Delete a workspace: DELETE /api/workspaces/:id
+    // Destructive: owner-only, gated on the human confirmation secret plus the
+    // typed slug, and refused while any file is mid-archive so a copy in flight
+    // cannot be orphaned.
+    if (pathname.startsWith('/api/workspaces/') && req.method === 'DELETE') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const workspaceId = pathname.slice('/api/workspaces/'.length);
+      if (!UUID_PATTERN.test(workspaceId)) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: workspaceId must be a valid UUID' });
+        return;
+      }
+
+      const parsed = JSON.parse(await readBody(req));
+      if (!(await confirmGate(res, auth, parsed.confirmSecret))) return;
+
+      const workspace = await dbGetWorkspaceById(workspaceId);
+      if (!workspace) {
+        sendJson(res, 404, { error: 'WORKSPACE_NOT_FOUND' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      // A platform owner may delete any workspace; the gate above already required
+      // a human session, so this override is never reachable by an API key.
+      if (mem?.role !== 'owner' && !auth.principal.isPlatformOwner) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Owner role required to delete a workspace' });
+        return;
+      }
+
+      if (parsed.confirmSlug !== workspace.slug) {
+        sendJson(res, 403, {
+          error: `CONFIRM_SLUG_MISMATCH: type the workspace slug '${workspace.slug}' to confirm`,
+        });
+        return;
+      }
+
+      // Refuse while a copy is in flight: deleting now would orphan the bytes.
+      if ((await dbCountTransientFiles(workspaceId)) > 0) {
+        sendJson(res, 409, {
+          error: 'WORKSPACE_BUSY: a file is mid-archive; wait for it to settle and retry',
+        });
+        return;
+      }
+
+      const storageKeys = await dbListWorkspaceStorageKeys(workspaceId);
+
+      // The transaction re-checks the transient state, closing the window between
+      // the pre-check above and the delete.
+      if (!(await dbDeleteWorkspaceAtomic(workspaceId))) {
+        sendJson(res, 409, {
+          error: 'WORKSPACE_BUSY: a file entered a transient archive state during delete',
+        });
+        return;
+      }
+
+      sendJson(res, 200, {
+        success: true,
+        workspaceId,
+        slug: workspace.slug,
+        // The DB cascade removes rows but not R2/Drive bytes. Report them so the
+        // operator sees the consequence instead of a silent leak.
+        orphanedObjects: storageKeys,
+      });
+      return;
+    }
+
 
     // 4. File Catalog: GET /api/files?workspaceId=...
     if (pathname === '/api/files' && req.method === 'GET') {
@@ -1043,13 +1391,26 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
       }
-
       const direction = pathname.endsWith('/archive') ? 'archive' : 'restore';
+      // Archiving removes the bytes from the active tier, so it needs the delete
+      // scope; restoring only writes them back and needs write.
+      const requiredScope: OctoScope = direction === 'archive' ? 'delete' : 'write';
+      if (!requireScope(auth, requiredScope)) {
+        scopeDenied(res, requiredScope);
+        return;
+      }
+
       const suffix = `/${direction}`;
       const fileId = pathname.slice('/api/files/'.length, -suffix.length);
       const workspaceId = url.searchParams.get('workspaceId');
       if (!fileId || !workspaceId) {
         sendJson(res, 400, { error: 'fileId and workspaceId required' });
+        return;
+      }
+
+      // A workspace-scoped key may only touch its own workspace.
+      if (auth.apiKey && auth.apiKey.workspaceId && auth.apiKey.workspaceId !== workspaceId) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
       }
 
@@ -1072,15 +1433,10 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const jobType = direction === 'archive' ? 'archive_file' : 'restore_file';
-      // One in-flight request per (file, direction): a repeat returns the
-      // original job instead of queueing a second copy of the same transition.
-      const { job, created } = await dbEnqueueJob(
-        randomUUID(),
+      const { job, created } = await enqueueFileTransition(
+        direction,
         workspaceId,
-        jobType,
-        `${direction}:${fileId}`,
-        { fileId, storageKey: file.storageKey, mimeType: file.mimeType },
+        { id: file.id, storageKey: file.storageKey, mimeType: file.mimeType },
         auth.principal.id
       );
 
@@ -1192,11 +1548,22 @@ export const server = createServer(async (req, res) => {
 
       const bodyStr = await readBody(req);
       const parsed = JSON.parse(bodyStr);
-      const { name, workspaceId, scopes: requestedScopes } = parsed;
+      const { name, workspaceId, scopes: requestedScopes, expiresInDays } = parsed;
 
       if (!name) {
         sendJson(res, 400, { error: 'name is required' });
         return;
+      }
+
+      let expiresAt: string | null = null;
+      if (expiresInDays !== undefined && expiresInDays !== null) {
+        if (!Number.isInteger(expiresInDays) || expiresInDays <= 0) {
+          sendJson(res, 400, { error: 'BAD_REQUEST: expiresInDays must be a positive integer' });
+          return;
+        }
+        const d = new Date();
+        d.setDate(d.getDate() + expiresInDays);
+        expiresAt = d.toISOString();
       }
 
       // Default is non-destructive: a new token can read and write files but
@@ -1225,7 +1592,24 @@ export const server = createServer(async (req, res) => {
         }
       }
 
+      // `admin` names platform-owner authority, so only a platform owner may hold
+      // or grant it. A key caller could otherwise mint itself a wider key.
+      if (scopes.includes('admin') && !auth.principal.isPlatformOwner) {
+        sendJson(res, 403, { error: 'FORBIDDEN: The admin scope is reserved for platform owners.' });
+        return;
+      }
+
       const isAccountWide = !workspaceId;
+
+      // At most one account-wide key per principal (enforced by a partial unique
+      // index). Refuse a duplicate with guidance rather than minting a second one.
+      if (isAccountWide && (await dbGetAccountWideKeyId(auth.principal.id))) {
+        sendJson(res, 409, {
+          error: 'ACCOUNT_KEY_EXISTS: revoke the existing account-wide key before creating another.',
+        });
+        return;
+      }
+
       const prefix = isAccountWide ? 'octo_live_acc' : 'octo_live_ws';
       const secretBytes = randomUUID().replace(/-/g, '');
       const rawSecret = `${prefix}_${secretBytes}`;
@@ -1250,7 +1634,8 @@ export const server = createServer(async (req, res) => {
         auth.principal.id,
         workspaceId ?? null,
         keyRole,
-        scopes
+        scopes,
+        expiresAt
       );
 
       sendJson(res, 201, {
@@ -1261,6 +1646,7 @@ export const server = createServer(async (req, res) => {
           workspaceId: workspaceId ?? null,
           isAccountWide,
           scopes,
+          expiresAt,
         },
         rawSecret,
       });
@@ -1273,6 +1659,12 @@ export const server = createServer(async (req, res) => {
       const auth = await authenticateRequest(req);
       if (!auth) {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      // Revoking a credential is destructive: a read-only or ingest token must
+      // not be able to withdraw the account's keys.
+      if (!requireScope(auth, 'delete')) {
+        scopeDenied(res, 'delete');
         return;
       }
 
@@ -1618,6 +2010,10 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
       }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
 
       const workspaceId = url.searchParams.get('workspaceId');
       if (!workspaceId) {
@@ -1641,6 +2037,10 @@ export const server = createServer(async (req, res) => {
       const auth = await authenticateRequest(req);
       if (!auth) {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
         return;
       }
 
@@ -1683,6 +2083,10 @@ export const server = createServer(async (req, res) => {
       const auth = await authenticateRequest(req);
       if (!auth) {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
         return;
       }
 
@@ -1919,5 +2323,13 @@ if (
     console.log(`- Health: http://localhost:${PORT}/health`);
     console.log(`- Guest Login: POST http://localhost:${PORT}/api/auth/guest`);
     console.log(`- R2 Active Bucket: ${r2Provider ? r2Provider.bucket : 'none'}`);
+    // Apply the retention policy once at boot, then on the hourly tick, so a
+    // deployment does not wait up to an hour to honour an existing window.
+    void runRetentionSweep()
+      .then((enqueued) => {
+        if (enqueued > 0) console.log(`Retention sweep enqueued ${enqueued} archive job(s)`);
+      })
+      .catch((err) => console.warn('Retention sweep failed:', err));
+    startSchedulers();
   });
 }
