@@ -108,54 +108,14 @@ jobs:
           OCTO_MEDIA_SECRET: ci-media-secret
           DATABASE_URL: postgresql://postgres:postgres@localhost:54329/postgres
         run: npx playwright test
-      - name: Validate stack-manifest against the published OIO release train
+      - name: Validate stack-manifest against the certified release train
         shell: bash
         run: |
           set -euo pipefail
-          "$VALIDATION_ROOT/venv/bin/python" - <<'PY'
-          import json
-          import urllib.request
-
-          with open("stack-manifest.json", encoding="utf-8") as fh:
-              manifest = json.load(fh)
-
-          # The manifest records the release train by its human-readable GitHub
-          # blob URL; fetch the same file through raw.githubusercontent.com.
-          url = manifest["source"].replace(
-              "github.com/Pukujan/observational-issue-ops/blob/",
-              "raw.githubusercontent.com/Pukujan/observational-issue-ops/",
-          )
-          with urllib.request.urlopen(url, timeout=30) as response:
-              releases = json.load(response)
-
-          failures = []
-          if manifest["release_train"] != releases["release_train"]:
-              failures.append(
-                  f"release_train: manifest {manifest['release_train']!r} "
-                  f"!= published {releases['release_train']!r}"
-              )
-
-          certified = releases["certified"]
-          for name, pin in manifest["pins"].items():
-              published = certified.get(name)
-              if published is None:
-                  failures.append(f"{name}: not certified in the published release train")
-                  continue
-              for field in ("version", "commit", "module", "cli", "modules"):
-                  if field in pin and pin[field] != published.get(field):
-                      failures.append(
-                          f"{name}.{field}: manifest {pin[field]!r} "
-                          f"!= published {published.get(field)!r}"
-                      )
-
-          if failures:
-              print("FAIL: stack-manifest.json does not match the published release train")
-              for failure in failures:
-                  print(" -", failure)
-              raise SystemExit(1)
-
-          print(f"OK: stack-manifest.json matches release train {releases['release_train']}")
-          PY
+          git clone --quiet --depth 1 https://github.com/Pukujan/agent-stack-train.git "$VALIDATION_ROOT/train"
+          "$VALIDATION_ROOT/venv/bin/python" "$VALIDATION_ROOT/train/scripts/check_manifest.py" \
+            --manifest stack-manifest.json \
+            --train "$VALIDATION_ROOT/train/stack-releases.json"
 
       - name: Validate pinned PCM adopter state
         shell: bash
