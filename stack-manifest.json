@@ -1,8 +1,8 @@
 {
-  "schema_version": "observational-issue-ops.stack-manifest.v1",
+  "schema_version": "agent-stack-train.stack-manifest.v1",
   "adopter": "octo-database",
   "release_train": "2026-10-01",
-  "source": "https://github.com/Pukujan/observational-issue-ops/blob/main/stack-releases.json",
+  "source": "https://github.com/Pukujan/agent-stack-train/blob/main/stack-releases.json",
   "pins": {
     "observational-issue-ops": {
       "version": "0.1.0"
