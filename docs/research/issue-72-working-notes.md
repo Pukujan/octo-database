@@ -423,6 +423,16 @@ owner intent → strong-model draft → independent critique → owner accept/co
 
 The owner should not have to manually author detailed specifications. The model should do that translation work, while the owner keeps decision authority.
 
+#### Evidence note
+
+External research supports the broader engineering risks behind this concern, but not a universal claim that coding agents specifically overbuild security.
+
+- DORA recommends small batches because they shorten feedback loops and reports that AI adoption can increase delivery instability unless paired with strong delivery fundamentals and user-centricity.
+- NIST usable-security research explicitly warns that security controls can become so burdensome that users circumvent them.
+- USENIX research has documented organizational cultures that create an artificial trade-off between security and usability.
+
+Therefore, treat "agents overbuild hypothetical security/edge cases" as an **observed Octo/agent-workflow failure mode and working hypothesis**, not as a settled general empirical fact about all coding agents.
+
 #### Anti-pattern: defensive completeness that destroys product delivery
 
 A recurring agent failure mode is optimizing for hypothetical failure, security, privacy, abstraction, or extreme edge cases until the main product flow becomes late, awkward, or unusable.
