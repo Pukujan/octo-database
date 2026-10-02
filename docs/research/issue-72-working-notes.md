@@ -341,6 +341,45 @@ A fresh machine or agent can authenticate to a workspace and:
 
 The local machine remains a cache/working environment; valuable state is durable or reconstructible elsewhere.
 
+
+### 15. Delivery strategy: aggressive code replacement, strict scope discipline
+
+The owner does not treat existing implementation code as sacred. If replacing or deleting current code is the fastest path to a coherent product, that is acceptable.
+
+The constraint is not code preservation; it is **scope control and usable delivery**.
+
+Working rules:
+
+- Preserve accepted data contracts, user jobs, durable state, and proven behavior when still relevant.
+- Do not preserve a frontend/backend implementation merely because it already exists.
+- Prefer mature systems and glue code over custom reimplementation.
+- Build one vertical slice at a time from user job -> API capability -> frontend flow -> automated task test.
+- A slice is not done because code compiles; it is done when the intended user job works end to end.
+- Security/privacy/hardening beyond existing provider/framework defaults and explicit repository invariants is out of scope unless the owner asks for it or a concrete functional blocker requires it.
+- Agents must not introduce speculative roles, policy engines, extra approval systems, isolation layers, scanners, compliance machinery, or generalized abstractions while trying to "make it safer."
+- Agents may replace old code aggressively, but may not invent new product scope.
+- Every implementation decision should answer: "Does this directly help the accepted user job work sooner and more reliably?"
+
+Proposed delivery loop:
+
+```
+accepted user job
+      ↓
+reuse check
+      ↓
+API capability / contract
+      ↓
+frontend/design-system implementation
+      ↓
+automated user-flow test
+      ↓
+fix until usable
+      ↓
+ship slice
+```
+
+If a mature system already satisfies a step, integrate it rather than reproducing it.
+
 ## Questions still open
 
 - Which Hermes/custom-setup files are truly canonical and which are generated/cache?
