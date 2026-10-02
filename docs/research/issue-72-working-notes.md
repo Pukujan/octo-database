@@ -282,6 +282,65 @@ The initial operational-data requirement is therefore:
 - DuckDB access for long-range analysis
 - no requirement for DAX unless Power BI is deliberately adopted
 
+
+### 14. Consolidated target stack and glue contract
+
+The working target is one workspace-oriented server API with multiple thin clients rather than separate bespoke integration logic for every app or agent.
+
+**Core data plane**
+- PostgreSQL: live relational/transactional state and workspace catalog
+- pgvector: optional vector projection/search
+- Neo4j or another graph database: optional graph projection
+- Parquet: long-term operational/observational history
+- DuckDB: analytical queries over Parquet and other analytical data
+- R2: hot/app-serving object storage where needed
+- Google Drive: large/cold/rarely used file storage
+- Git/GitHub: code and repository-owned project continuity
+
+**Server role**
+The server owns workspace identity, authorization, routing, sync/orchestration, file placement, projections, analytics access, jobs, proposals, and human-approved execution. It presents one stable capability contract even when the backing provider differs.
+
+**Client surfaces**
+- Web frontend uses the workspace API.
+- Applications use a typed SDK generated/wrapped around the same API.
+- Agents use the same capabilities through an MCP adapter and/or SDK/CLI.
+- Provider-native consoles remain available for deep infrastructure administration.
+
+A likely interface family is:
+
+```
+HTTP/JSON workspace API
+        ↓
+typed TypeScript SDK
+        ↓
+CLI
+        ↓
+MCP server / agent adapter
+```
+
+The SDK should be thin: authentication, typed requests, retries/pagination where useful, and capability discovery. It should not duplicate server policy.
+
+The MCP layer should translate agent tool calls into the same workspace capability API rather than gaining separate infrastructure credentials.
+
+**Frontend stack**
+- OpenPencil: agent-addressable design workspace / design artifacts
+- shadcn/ui: production component/design-system foundation
+- React/Next.js: application shell
+- Onlook: optional visual editing of the real frontend code
+- mature external consoles/tools for generic DB, analytics, graph, and provider administration
+
+**Success condition**
+A fresh machine or agent can authenticate to a workspace and:
+1. discover its allowed capabilities;
+2. fetch/rehydrate needed state;
+3. operate on live data/files through the same API contract;
+4. query analytical history when permitted;
+5. propose changes without gaining human execution authority;
+6. open the product frontend and complete the important user jobs without owner rescue;
+7. deep-link into mature specialist tools when deeper administration is needed.
+
+The local machine remains a cache/working environment; valuable state is durable or reconstructible elsewhere.
+
 ## Questions still open
 
 - Which Hermes/custom-setup files are truly canonical and which are generated/cache?
