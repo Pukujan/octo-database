@@ -380,6 +380,29 @@ ship slice
 
 If a mature system already satisfies a step, integrate it rather than reproducing it.
 
+
+### 16. Architecture lock and execution handoff
+
+The architecture discussion is now reflected in `PROJECT.md` and implementation planning continues in issue #74.
+
+Locked process decision:
+
+- `PROJECT.md` owns global product purpose, boundaries, durable-state principles, and cross-slice invariants.
+- Each vertical slice owns its own compact PDD/SDD/TDD-style success condition in the live GitHub issue and linked docs as needed.
+- Do not design one giant hidden oracle for the whole product in advance.
+- Public deterministic tests prove known contracts.
+- Targeted metamorphic/property tests prove slice invariants.
+- A small hidden holdout is used only where an agent could plausibly overfit or falsely claim end-to-end success.
+- Production smoke verification closes the slice where deployment behavior matters.
+- Existing working R2, Google OAuth/login, Google Drive integration, storage lifecycle, CI, and production deployment are reused behind the new workspace API unless a slice demonstrates a simpler replacement.
+
+Helper-stack proposals:
+- ACS #57: productization/reuse/done-claim runtime discipline.
+- CGM #50: frontend/content surface routing.
+- PCM #228: preserve slice success references without owning the product oracle.
+- OIO #16: record productization failures without owning acceptance.
+- agent-stack-train should move pins only after compatible helper releases actually ship.
+
 ## Questions still open
 
 - Which Hermes/custom-setup files are truly canonical and which are generated/cache?
