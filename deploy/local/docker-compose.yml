@@ -26,6 +26,8 @@ services:
     environment:
       - PORT=3001
       - OCTO_STORAGE_BACKEND=local
+    volumes:
+      - octo-local-file-data:/tmp/octo-storage
     depends_on:
       octo-db:
         condition: service_healthy
@@ -59,3 +61,4 @@ networks:
 
 volumes:
   octo-local-db-data:
+  octo-local-file-data:
