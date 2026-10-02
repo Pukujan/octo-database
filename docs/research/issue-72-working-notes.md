@@ -271,7 +271,7 @@ DuckDB analytical queries
 dashboards / humans / agents
 ```
 
-DAX is not a general requirement for this architecture. DAX is Microsoft's formula/query language for Power BI / Analysis Services semantic models. If Power BI becomes a selected analytics frontend later, DAX may be useful inside that tool. For the core workspace analytics path, SQL + DuckDB over Parquet is sufficient initially.
+DAX is not a general requirement for this architecture. Power BI should remain an optional downstream analytics client rather than a core Octo dependency. If a workspace later needs Power BI, it can consume the same curated analytical data/semantic definitions without changing Octo's storage or analytics foundation. DAX is Microsoft's formula/query language for Power BI / Analysis Services semantic models. If Power BI becomes a selected analytics frontend later, DAX may be useful inside that tool. For the core workspace analytics path, SQL + DuckDB over Parquet is sufficient initially.
 
 A semantic/metrics layer may become useful later if many dashboards/agents need the same named business metrics (for example, one authoritative definition of "active workspace", "failed run rate", or "storage growth"). Do not introduce one until repeated metric-definition drift becomes a real problem.
 
