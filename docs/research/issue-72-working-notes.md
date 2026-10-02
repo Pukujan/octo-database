@@ -170,6 +170,32 @@ Sync policy should be defined by data class rather than blindly syncing every by
 
 The exact sync boundaries are still undecided.
 
+### 10. Disposable local machines / regenerable workspaces
+
+The central goal is to eliminate most dependence on local storage. A laptop or workstation should be treated primarily as disposable compute plus a hot local cache.
+
+Important state should live durably in the server-side data environment or in another explicit upstream authority, and local state should be either synchronized or reproducible on demand.
+
+The "server database" should be understood as a data environment rather than one physical database engine. Different capabilities may include:
+
+- PostgreSQL for live relational/transactional state
+- pgvector for vector search where appropriate
+- Parquet for large historical/analytical datasets
+- DuckDB (or a compatible hosted service) for analytics over Parquet and other data
+- Neo4j or another graph database for graph projections where a graph model is useful
+- file/object storage for large binary content
+- Git/GitHub as the authority for source code and repository-owned PCM state
+
+The desired recovery property is: if a Mac disappears, a new machine can authenticate, reconstruct local tools/workspaces, rehydrate needed data, clone authoritative repositories, and fetch or regenerate local indexes/caches without losing valuable state.
+
+Local persistence should therefore be the exception. Every local artifact should ideally be classified as one of:
+- canonical elsewhere and re-fetchable
+- synchronized to durable storage
+- derived/rebuildable
+- intentionally ephemeral
+
+This is broader than "move files to the cloud": the goal is to make the working environment portable and regenerable while allowing each workspace to choose the data engines it actually needs.
+
 ## Questions still open
 
 - Which Hermes/custom-setup files are truly canonical and which are generated/cache?
