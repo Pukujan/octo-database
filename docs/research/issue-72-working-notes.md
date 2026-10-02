@@ -196,6 +196,27 @@ Local persistence should therefore be the exception. Every local artifact should
 
 This is broader than "move files to the cloud": the goal is to make the working environment portable and regenerable while allowing each workspace to choose the data engines it actually needs.
 
+
+### 11. Frontend boundary: shell, not replacement consoles
+
+The owner is dissatisfied with the current frontend: it feels like a basic/toy control panel and does not provide the quality of dashboard/analytics experience originally expected.
+
+The desired correction is not simply "polish Dashboard.tsx." The repository already has a reuse-before-build rule in AGENTS.md: mature OSS/provider surfaces should own generic infrastructure administration; custom UI should exist only for workspace/user workflows that are specific to this system.
+
+Working frontend boundary:
+
+- keep a custom workspace shell/home
+- keep custom file/gallery experiences where the workflow is unique
+- keep custom agent proposal/review/approval surfaces
+- keep useful workspace overview, recent activity, storage summaries, and links
+- use mature database consoles for database administration
+- use mature analytics/dashboard software rather than recreating BI/chart builders
+- use native graph tooling for graph administration/exploration where appropriate
+- prefer deep links or embedding/glue over rebuilding those tools
+- do not keep expanding the current monolithic dashboard simply because a feature needs a screen
+
+The frontend should feel like a coherent workspace portal that composes mature systems, not a homemade replacement for every system it connects.
+
 ## Questions still open
 
 - Which Hermes/custom-setup files are truly canonical and which are generated/cache?
