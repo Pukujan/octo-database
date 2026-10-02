@@ -225,11 +225,19 @@ test.describe('Workspace data plane', () => {
         body: JSON.stringify({ confirmSecret: 'anything', confirmSlug: a.workspace.slug }),
       });
 
+      // A malformed (empty) body must produce the same clean refusal, never a
+      // 500 from parsing an absent payload.
+      const deleteNoBodyRes = await fetch(`/api/workspaces/${a.workspace.id}`, {
+        method: 'DELETE',
+        headers: keyHeaders,
+      });
+
       return {
         ownStatus,
         otherStatus,
         deleteStatus: deleteRes.status,
         deleteBody: await deleteRes.json(),
+        deleteNoBodyStatus: deleteNoBodyRes.status,
       };
     });
 
@@ -237,5 +245,6 @@ test.describe('Workspace data plane', () => {
     expect(result.otherStatus).toBe(403);
     expect(result.deleteStatus).toBe(403);
     expect(JSON.stringify(result.deleteBody)).toMatch(/human session|API keys can never/i);
+    expect(result.deleteNoBodyStatus).toBe(403);
   });
 });
