@@ -136,6 +136,83 @@ Add them when:
 
 Do not use this rule to bypass explicit security requirements already present in the slice.
 
+
+## Progressive robustness
+
+Do not choose between "ship weak software" and "harden everything before anyone can use it." Build robustness in levels.
+
+### Level 1 — Working slice
+
+Required before the slice can be considered functionally implemented:
+
+- the primary user job works end to end;
+- canonical state and ownership are correct;
+- the API contract is coherent;
+- normal error handling exists for expected failures;
+- deterministic tests cover the important logic;
+- at least one real end-to-end path proves the user job.
+
+This is not a throwaway prototype. It is the smallest implementation that is structurally correct for the accepted job.
+
+### Level 2 — Production-ready slice
+
+Required before ordinary production use:
+
+- Level 1 remains green;
+- real provider/database integration is exercised;
+- retries/idempotency/transaction boundaries exist where the actual operation needs them;
+- data migrations and recovery behavior are defined where state can be changed durably;
+- one or more variant/metamorphic checks cover important invariants;
+- production smoke verifies the deployed path;
+- basic operational visibility exists for failures that would otherwise be invisible.
+
+Do not generalize these mechanisms beyond the slice.
+
+### Level 3 — Hardened slice
+
+Add only when justified by real exposure or consequence.
+
+Triggers include:
+
+- high-frequency or high-volume use;
+- meaningful external/user exposure;
+- irreversible or expensive operations;
+- repeated production failures;
+- demonstrated abuse/threat patterns;
+- material performance/reliability limits;
+- explicit owner requirement.
+
+Possible hardening includes stronger recovery, concurrency handling, rate/scale work, additional failure-mode tests, more detailed observability, stronger approval boundaries for high-impact actions, or provider redundancy.
+
+A hypothetical edge case by itself is not a hardening trigger.
+
+### Robustness decision rule
+
+For each proposed robustness task, ask:
+
+1. **Likelihood** — is this failure common, observed, or credible in the current use?
+2. **Blast radius** — what is affected if it happens?
+3. **Irreversibility** — can we recover cheaply?
+4. **Exposure** — is this local/internal, owner-only, or externally used?
+5. **Cost of delay** — does solving it now delay validation of the primary job?
+
+Increase robustness when the first four materially outweigh the fifth.
+
+If not, record the risk or observation and continue shipping.
+
+### Test-depth rule
+
+Weak testing is not the same thing as limited hardening.
+
+Every slice still requires tests strong enough to prove its accepted claims. Additional test breadth follows the same progressive rule:
+
+- always test the primary contract and end-to-end job;
+- add variant/property tests for important invariants;
+- add hidden holdouts when false completion/overfitting is plausible;
+- add broad failure matrices only after production exposure, repeated failures, or explicit scope justifies them.
+
+The goal is **minimum sufficient robustness, not minimum testing**.
+
 ## Frontend slices
 
 For product-facing UI, the eval must describe real tasks rather than screenshots alone.
