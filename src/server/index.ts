@@ -211,6 +211,20 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return promise;
 }
 
+// Helper: read a JSON object body, tolerating empty or malformed input. An
+// absent body becomes {}, so each route's own validation produces its intended
+// refusal (400/403/412) rather than an unhandled 500 from JSON.parse.
+async function readJsonObject(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const raw = await readBody(req);
+  if (!raw.trim()) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
 interface AuthContext {
   principal: Principal;
   apiKey?: {
@@ -843,7 +857,7 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const parsed = JSON.parse(await readBody(req));
+      const parsed = await readJsonObject(req);
       const { secret, currentSecret } = parsed;
       if (typeof secret !== 'string' || secret.length < 8) {
         sendJson(res, 400, { error: 'BAD_REQUEST: secret must be a string of at least 8 characters' });
@@ -937,18 +951,20 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const parsed = JSON.parse(await readBody(req));
+      const parsed = await readJsonObject(req);
       const { name, slug, description, retentionDays } = parsed;
 
       if (!name || typeof name !== 'string' || !slugify(name)) {
         sendJson(res, 400, { error: 'BAD_REQUEST: a name that slugifies to at least one character is required' });
         return;
       }
+      let retentionDaysValue: number | null = null;
       if (retentionDays !== undefined && retentionDays !== null) {
-        if (!Number.isInteger(retentionDays) || retentionDays <= 0) {
+        if (typeof retentionDays !== 'number' || !Number.isInteger(retentionDays) || retentionDays <= 0) {
           sendJson(res, 400, { error: 'BAD_REQUEST: retentionDays must be a positive integer' });
           return;
         }
+        retentionDaysValue = retentionDays;
       }
 
       const resolvedSlug = typeof slug === 'string' && slug.trim() ? slugify(slug) : slugify(name);
@@ -967,7 +983,7 @@ export const server = createServer(async (req, res) => {
           slug: resolvedSlug,
           name: name.trim(),
           description: typeof description === 'string' && description.trim() ? description.trim() : null,
-          retentionDays: retentionDays ?? null,
+          retentionDays: retentionDaysValue,
           createdBy: auth.principal.id,
           keyId,
           keyHash: hashApiKeySecret(rawSecret),
@@ -1026,7 +1042,7 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const parsed = JSON.parse(await readBody(req));
+      const parsed = await readJsonObject(req);
       if (!(await confirmGate(res, auth, parsed.confirmSecret))) return;
 
       const workspace = await dbGetWorkspaceById(workspaceId);
