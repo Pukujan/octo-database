@@ -459,6 +459,29 @@ Working correction:
 
 This is not an instruction to ignore real security requirements. It is an instruction to keep security proportional to the accepted product contract and not let agents use hypothetical risk as an unlimited scope-expansion mechanism.
 
+
+### 18. Eval-driven slice contract
+
+Eval-driven delivery is now a repository-level working method, not only a discussion idea.
+
+Canonical reusable template:
+- `docs/productization/SLICE_CONTRACT.md`
+
+The locked flow is:
+
+owner intent → strong planning model drafts PDD/SDD/EVAL → independent critique → owner accepts/corrects → locked slice → implementation → declared evals → production smoke where applicable → done/fix
+
+The slice contract separates:
+- PDD: user job, scope, reuse, observable outcome
+- SDD: data authority, capabilities, API/provider/client design, existing-code reuse/replacement
+- EVAL/TDD: public deterministic tests, end-to-end user flow, targeted metamorphic properties, optional hidden holdout, production smoke
+
+Implementing agents do not get to redefine success after seeing what they built.
+
+The hidden holdout is optional and should test the same product claim under unseen scenario details, not obscure implementation trivia.
+
+`AGENTS.md` now requires agents doing vertical-slice work to read the locked packet before implementation.
+
 ## Questions still open
 
 - Which Hermes/custom-setup files are truly canonical and which are generated/cache?
