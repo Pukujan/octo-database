@@ -403,6 +403,52 @@ Helper-stack proposals:
 - OIO #16: record productization failures without owning acceptance.
 - agent-stack-train should move pins only after compatible helper releases actually ship.
 
+
+### 17. Spec authority and the overbuilding failure pattern
+
+#### Who decides PDD / SDD / TDD
+
+The owner retains product authority.
+
+Working authority split:
+
+- **Owner:** decides the problem worth solving, intended user, product tradeoffs, unacceptable compromises, and what "good enough" means.
+- **Strong planning model:** converts owner intent into a concrete PDD/SDD/TDD draft with user jobs, API/system boundaries, acceptance criteria, test strategy, and explicit unknowns.
+- **Independent critic/reviewer:** challenges ambiguity, missing cases, hidden scope expansion, and weak success criteria.
+- **Implementing agents:** execute the accepted contract; they do not redefine success to match what they happened to build.
+
+Flow:
+
+owner intent → strong-model draft → independent critique → owner accept/correct → locked slice contract → implementation
+
+The owner should not have to manually author detailed specifications. The model should do that translation work, while the owner keeps decision authority.
+
+#### Anti-pattern: defensive completeness that destroys product delivery
+
+A recurring agent failure mode is optimizing for hypothetical failure, security, privacy, abstraction, or extreme edge cases until the main product flow becomes late, awkward, or unusable.
+
+Typical symptoms:
+
+- adding generalized policy/permission machinery before the core job works;
+- designing for rare failure modes before validating the common path;
+- expanding security/privacy scope beyond explicit requirements;
+- creating abstractions for hypothetical future use instead of integrating the mature tool already available;
+- treating "technically safe" or "well-tested" as sufficient even when the product still needs heavy owner intervention;
+- spending large implementation effort on defensive behavior while the frontend, onboarding, workflow clarity, and end-to-end usability remain weak.
+
+The resulting software may be technically sophisticated yet still fail productization because a normal user cannot complete the intended job without the creator rescuing them.
+
+Working correction:
+
+1. optimize first for the accepted primary user job;
+2. reuse mature systems and their defaults;
+3. add only the edge cases required by the current slice or demonstrated by real failures;
+4. keep explicit security invariants that the owner requested;
+5. do not let speculative security/privacy/hardening become new product scope;
+6. judge completion by end-to-end usability and low human rescue, not defensive code volume.
+
+This is not an instruction to ignore real security requirements. It is an instruction to keep security proportional to the accepted product contract and not let agents use hypothetical risk as an unlimited scope-expansion mechanism.
+
 ## Questions still open
 
 - Which Hermes/custom-setup files are truly canonical and which are generated/cache?
