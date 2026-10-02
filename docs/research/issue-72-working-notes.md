@@ -248,6 +248,40 @@ deep-link/embed mature DB / analytics / graph / provider tools
 
 Custom frontend should focus on workspace overview, gallery/files, agent proposal/approval flows, and cross-system summaries. Do not rebuild SQL consoles, BI builders, graph explorers, or provider administration.
 
+
+### 13. Operational data vs analytical data
+
+The workspace needs two related but different data paths.
+
+**Operational data** is the live state used to run the system: current users, jobs, files, agent state, proposals, application records, statuses, and recent events. This belongs primarily in PostgreSQL (and other live operational stores only when a workspace explicitly needs them).
+
+**Analytical data** is the long-range history used to understand the system over time. Operational/event history can be periodically exported or compacted into Parquet and queried with DuckDB. This should not require the live transactional database to become the long-term analytical warehouse.
+
+Working flow:
+
+```
+live app / agent operations
+        ↓
+PostgreSQL current state + event records
+        ↓ periodic export / compaction
+Parquet historical datasets
+        ↓
+DuckDB analytical queries
+        ↓
+dashboards / humans / agents
+```
+
+DAX is not a general requirement for this architecture. DAX is Microsoft's formula/query language for Power BI / Analysis Services semantic models. If Power BI becomes a selected analytics frontend later, DAX may be useful inside that tool. For the core workspace analytics path, SQL + DuckDB over Parquet is sufficient initially.
+
+A semantic/metrics layer may become useful later if many dashboards/agents need the same named business metrics (for example, one authoritative definition of "active workspace", "failed run rate", or "storage growth"). Do not introduce one until repeated metric-definition drift becomes a real problem.
+
+The initial operational-data requirement is therefore:
+- reliable live state in PostgreSQL
+- appendable operational/event history where useful
+- periodic or threshold-based export to Parquet
+- DuckDB access for long-range analysis
+- no requirement for DAX unless Power BI is deliberately adopted
+
 ## Questions still open
 
 - Which Hermes/custom-setup files are truly canonical and which are generated/cache?
