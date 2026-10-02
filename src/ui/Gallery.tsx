@@ -34,7 +34,7 @@ export const Gallery: React.FC<GalleryProps> = ({ items, workspaceName }) => {
   const videosCount = items.filter((i) => i.kind === 'video').length;
 
   return (
-    <Box sx={{ py: 2 }}>
+    <Box>
       {/* Gallery Header */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <div>
