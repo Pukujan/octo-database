@@ -30,6 +30,14 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
     description: 'List workspaces this principal is authorized to use.',
   },
   {
+    action: 'workspaces.create',
+    method: 'POST',
+    path: '/api/workspaces',
+    requiredScope: 'write',
+    description:
+      'Create a workspace (workspace = database) and auto-provision its key. Not available to workspace-scoped keys.',
+  },
+  {
     action: 'files.list',
     method: 'GET',
     path: '/api/files?workspaceId=<id>',
@@ -58,6 +66,20 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
     description: 'Delete a file. Destructive; requires the delete scope.',
   },
   {
+    action: 'files.archive',
+    method: 'POST',
+    path: '/api/files/<fileId>/archive?workspaceId=<id>',
+    requiredScope: 'delete',
+    description: 'Move a file from active storage to the cold archive. Restored on demand.',
+  },
+  {
+    action: 'files.restore',
+    method: 'POST',
+    path: '/api/files/<fileId>/restore?workspaceId=<id>',
+    requiredScope: 'write',
+    description: 'Pull an archived file back into active storage.',
+  },
+  {
     action: 'jobs.list',
     method: 'GET',
     path: '/api/jobs?workspaceId=<id>',
@@ -78,6 +100,55 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
     requiredScope: 'files',
     description: 'List gallery media in an authorized workspace.',
   },
+  {
+    action: 'jobs.run',
+    method: 'POST',
+    path: '/api/jobs/run?workspaceId=<id>',
+    requiredScope: 'write',
+    description: 'Drain one pass of the background job queue for an authorized workspace.',
+  },
+  {
+    action: 'activity.list',
+    method: 'GET',
+    path: '/api/activity?workspaceId=<id>',
+    requiredScope: 'read',
+    description: 'Read the activity feed for an authorized workspace.',
+  },
+  {
+    action: 'keys.revoke',
+    method: 'DELETE',
+    path: '/api/keys/<keyId>',
+    requiredScope: 'delete',
+    description: 'Revoke one of this principal\'s API keys. Destructive.',
+  },
+];
+
+/**
+ * Actions that require the `admin` scope. `admin` names cross-tenant authority,
+ * so it is platform-owner-only: a key may carry it only when its principal is a
+ * platform owner, and only a platform owner may grant it. Listed separately so
+ * the enforcement is visible rather than implied.
+ */
+export const ADMIN_CAPABILITIES: CapabilityDescriptor[] = [
+  {
+    action: 'workspaces.delete.any',
+    method: 'DELETE',
+    path: '/api/workspaces/<id>',
+    requiredScope: 'admin',
+    description:
+      'Delete a workspace the caller does not own. Also requires a human session and the confirmation secret.',
+  },
+];
+
+/**
+ * Named permission presets for the key picker, mapped onto the five real scopes.
+ * `custom` means an explicit scope list instead.
+ */
+export const SCOPE_PRESETS: { id: string; label: string; scopes: OctoScope[] }[] = [
+  { id: 'read-only', label: 'Read-only', scopes: ['read', 'files'] },
+  { id: 'read-write', label: 'Read-write', scopes: ['read', 'write', 'files'] },
+  { id: 'ingest', label: 'Ingest', scopes: ['write', 'files'] },
+  { id: 'full', label: 'Full', scopes: ['read', 'write', 'files', 'delete'] },
 ];
 
 /**

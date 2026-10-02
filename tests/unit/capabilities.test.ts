@@ -4,10 +4,12 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  ADMIN_CAPABILITIES,
   AUTH_GUIDANCE,
   capabilitiesForScopes,
   hasScope,
   OCTO_CAPABILITIES,
+  SCOPE_PRESETS,
 } from '../../src/api/capabilities';
 
 describe('Capability discovery', () => {
@@ -47,5 +49,36 @@ describe('Capability discovery', () => {
     expect(serialized).toContain('Bearer');
     // No provider, database, or infrastructure secret shape appears.
     expect(serialized).not.toMatch(/CLOUDFLARE_SECRET|SERVICE_ROLE|password|refresh_token/i);
+  });
+
+  it('advertises workspace create and the archive/restore transitions', () => {
+    const byAction = new Map(OCTO_CAPABILITIES.map((c) => [c.action, c]));
+    expect(byAction.get('workspaces.create')?.requiredScope).toBe('write');
+    expect(byAction.get('files.archive')?.requiredScope).toBe('delete');
+    expect(byAction.get('files.restore')?.requiredScope).toBe('write');
+    expect(byAction.get('activity.list')?.requiredScope).toBe('read');
+    expect(byAction.get('keys.revoke')?.requiredScope).toBe('delete');
+  });
+
+  it('keeps admin-scoped capabilities out of the ordinary surface', () => {
+    expect(ADMIN_CAPABILITIES.length).toBeGreaterThan(0);
+    expect(ADMIN_CAPABILITIES.every((c) => c.requiredScope === 'admin')).toBe(true);
+    // admin never appears among the capabilities a normal scope list can reach.
+    const reachable = capabilitiesForScopes(['read', 'write', 'delete', 'files']);
+    expect(reachable.some((c) => c.requiredScope === 'admin')).toBe(false);
+  });
+
+  it('defines presets that map only onto real scopes', () => {
+    const realScopes = new Set(OCTO_CAPABILITIES.map((c) => c.requiredScope));
+    expect(SCOPE_PRESETS.length).toBeGreaterThan(0);
+    for (const preset of SCOPE_PRESETS) {
+      expect(preset.scopes.length).toBeGreaterThan(0);
+      for (const scope of preset.scopes) {
+        expect(realScopes.has(scope)).toBe(true);
+      }
+    }
+    // The Full preset is the only one that grants destructive authority.
+    const withDelete = SCOPE_PRESETS.filter((p) => p.scopes.includes('delete'));
+    expect(withDelete.map((p) => p.id)).toEqual(['full']);
   });
 });

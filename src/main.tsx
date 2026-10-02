@@ -37,6 +37,7 @@ export const App: React.FC = () => {
   const [activity, setActivity] = useState<OperationsActivity[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [googleAuthEnabled, setGoogleAuthEnabled] = useState(false);
+  const [confirmSecretSet, setConfirmSecretSet] = useState(false);
 
   // Probe server capabilities so unimplemented controls are not shown as live.
   useEffect(() => {
@@ -83,6 +84,7 @@ export const App: React.FC = () => {
               setPrincipal(data.principal);
               localStorage.setItem('octo_principal', JSON.stringify(data.principal));
             }
+            if (data) setConfirmSecretSet(Boolean(data.confirmSecretSet));
           })
           .catch((err) => console.error('Failed to resolve principal from token:', err));
         history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -135,6 +137,7 @@ export const App: React.FC = () => {
           setPrincipal(data.principal);
           localStorage.setItem('octo_principal', JSON.stringify(data.principal));
         }
+        if (data) setConfirmSecretSet(Boolean(data.confirmSecretSet));
       })
       .catch((err) => console.error('Failed to restore principal:', err));
     return () => {
@@ -502,7 +505,11 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleCreateApiKey = async (name: string, isAccountWide: boolean) => {
+  const handleCreateApiKey = async (
+    name: string,
+    isAccountWide: boolean,
+    options?: { scopes?: string[]; expiresInDays?: number | null }
+  ) => {
     if (!sessionToken) throw new Error('Unauthenticated');
     const res = await fetch(`${API_BASE}/api/keys`, {
       method: 'POST',
@@ -513,13 +520,116 @@ export const App: React.FC = () => {
       body: JSON.stringify({
         name,
         workspaceId: isAccountWide ? null : activeContext?.workspace.id,
+        scopes: options?.scopes,
+        expiresInDays: options?.expiresInDays ?? undefined,
       }),
     });
 
-    if (!res.ok) throw new Error('Failed to create API key');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error ?? 'Failed to create API key');
+    }
     const data = await res.json();
     setApiKeys((prev) => [data.apiKey, ...prev]);
     return { rawSecret: data.rawSecret };
+  };
+
+  const handleRevokeApiKey = async (keyId: string) => {
+    if (!sessionToken) throw new Error('Unauthenticated');
+    const res = await fetch(`${API_BASE}/api/keys/${keyId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error ?? 'Failed to revoke API key');
+    }
+    setApiKeys((prev) => prev.filter((k) => k.id !== keyId));
+  };
+
+  /** Creates a workspace and returns the auto-provisioned key secret (shown once). */
+  const handleCreateWorkspace = async (input: {
+    name: string;
+    description?: string;
+    retentionDays?: number | null;
+  }) => {
+    if (!sessionToken) throw new Error('Unauthenticated');
+    const res = await fetch(`${API_BASE}/api/workspaces`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error ?? 'Failed to create workspace');
+    }
+    const data = await res.json();
+
+    // Refresh the authorized-workspace list so the new workspace appears.
+    const wsRes = await fetch(`${API_BASE}/api/workspaces`, {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
+    if (wsRes.ok) setWorkspaces(await wsRes.json());
+
+    return { workspace: data.workspace as WorkspaceSummary, rawSecret: data.rawSecret as string };
+  };
+
+  /** Deletes a workspace. Requires the human confirmation secret and typed slug. */
+  const handleDeleteWorkspace = async (
+    workspaceId: string,
+    confirmSecret: string,
+    confirmSlug: string
+  ) => {
+    if (!sessionToken) throw new Error('Unauthenticated');
+    const res = await fetch(`${API_BASE}/api/workspaces/${workspaceId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({ confirmSecret, confirmSlug }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error ?? 'Failed to delete workspace');
+    }
+
+    const wsRes = await fetch(`${API_BASE}/api/workspaces`, {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
+    if (wsRes.ok) {
+      const remaining: WorkspaceSummary[] = await wsRes.json();
+      setWorkspaces(remaining);
+      if (activeContext?.workspace.id === workspaceId) {
+        setActiveContext(null);
+        setFiles([]);
+        setGalleryItems([]);
+        setShares([]);
+        setJobs([]);
+        setActivity([]);
+      }
+    }
+  };
+
+  /** Sets or rotates the account's destructive-command confirmation secret. */
+  const handleSetConfirmSecret = async (secret: string, currentSecret?: string) => {
+    if (!sessionToken) throw new Error('Unauthenticated');
+    const res = await fetch(`${API_BASE}/api/me/confirm-secret`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({ secret, currentSecret }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error ?? 'Failed to set confirmation secret');
+    }
+    setConfirmSecretSet(true);
   };
 
   return (
@@ -541,6 +651,11 @@ export const App: React.FC = () => {
       onArchiveFile={handleArchiveFile}
       onRestoreFile={handleRestoreFile}
       onCreateApiKey={handleCreateApiKey}
+      onRevokeApiKey={handleRevokeApiKey}
+      onCreateWorkspace={handleCreateWorkspace}
+      onDeleteWorkspace={handleDeleteWorkspace}
+      onSetConfirmSecret={handleSetConfirmSecret}
+      confirmSecretSet={confirmSecretSet}
       shares={shares}
       onCreateShare={handleCreateShare}
       onRevokeShare={handleRevokeShare}
