@@ -1907,8 +1907,13 @@ export const server = createServer(async (req, res) => {
   }
 });
 
-// Start listening if run directly
-if (process.argv[1]?.endsWith('server/index.ts') || process.argv[1]?.endsWith('server/index.js')) {
+// Start listening if run directly. Compare on the basename so the guard holds on
+// Windows too, where argv[1] is a backslash path and never matches 'server/index.ts'.
+const entryFile = process.argv[1] ? path.basename(process.argv[1]) : '';
+if (
+  (entryFile === 'index.ts' || entryFile === 'index.js') &&
+  path.basename(path.dirname(process.argv[1]!)) === 'server'
+) {
   server.listen(PORT, () => {
     console.log(`Octo Platform Server listening on http://localhost:${PORT}`);
     console.log(`- Health: http://localhost:${PORT}/health`);

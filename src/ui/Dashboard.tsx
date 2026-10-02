@@ -412,7 +412,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           ) : activeContext ? (
             <Box>
               {/* Active Workspace Metadata */}
-              <Card sx={{ mb: 4, p: 2, borderRadius: 2 }}>
+              <Card sx={{ mb: 4, borderRadius: 2 }}>
                 <CardContent sx={{ pb: 1 }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
                     <div>
