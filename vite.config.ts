@@ -12,10 +12,15 @@ import { fileURLToPath, URL } from 'node:url';
  * backs off after a connection failure.
  */
 const quietExpectedRefusal = (proxy: {
-  on: (event: 'error', listener: (error: { code?: string; message?: string }) => void) => void;
+  on: (event: 'error', listener: (error: any) => void) => void;
 }) => {
   proxy.on('error', (error) => {
     if (error?.code === 'ECONNREFUSED') return;
+    if (error && typeof error === 'object' && 'errors' in error && Array.isArray(error.errors)) {
+      if (error.errors.every((e: any) => e?.code === 'ECONNREFUSED')) {
+        return;
+      }
+    }
     console.error('[vite] octo api proxy error:', error?.message ?? error);
   });
 };
