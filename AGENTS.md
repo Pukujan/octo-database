@@ -16,7 +16,7 @@ These rules override generic agent preferences, defensive-programming instincts,
 6. **Reuse before build.** Before creating UI, admin tooling, dashboards, auth consoles, storage browsers, job consoles, or operational panels, first use an existing OSS/provider surface or a maintained template when it satisfies the workflow. Supabase's local/admin surfaces and other already-selected product surfaces are preferred for platform administration.
 7. **Custom UI must be user-workflow-specific.** Build custom frontend only where the workspace/user experience actually needs it (for example, a workspace-specific file/gallery experience). Do not recreate infrastructure administration in product UI.
 8. **No speculative future-proofing.** Do not add layers, roles, services, generalized policy systems, distributed-systems machinery, test harnesses, or extension points for hypothetical future needs.
-9. **No ceremony as acceptance.** Hidden holdouts, metamorphic suites, exhaustive failure matrices, independent-review rituals, transcript capture, security scans, and evidence bundles are optional techniques, not mandatory gates, unless the owner explicitly requests them for the current task.
+9. **No ceremony as acceptance.** Hidden holdouts, metamorphic suites, exhaustive failure matrices, independent-review rituals, transcript capture, security scans, and evidence bundles are not universal gates. Use targeted metamorphic/property tests and small hidden holdouts only when the owning slice explicitly includes them in its success condition under `PROJECT.md` or the live GitHub issue. Do not expand that authorization into unrelated hardening or process.
 10. **Minimum sufficient change.** Prefer the smallest change that makes the requested workflow work. If two designs satisfy the accepted scope, choose the one with fewer moving parts and less custom code.
 11. **Ask only when materially blocked.** Do not stop delivery to seek approval for ordinary implementation details already inside accepted scope. Ask the owner before adding scope, not before executing it.
 
@@ -32,8 +32,9 @@ Before editing:
 
 1. Read the live owning GitHub issue.
 2. Read this file and `PROJECT.md`.
-3. Read only the minimum task/checkpoint material needed for the active work.
-4. Re-read current GitHub branch/PR/check state before claiming delivery.
+3. If the work is a productization/vertical slice, read `docs/productization/SLICE_CONTRACT.md` and the slice's accepted PDD/SDD/EVAL packet. Do not implement against an unlocked or self-invented success condition.
+4. Read only the minimum task/checkpoint material needed for the active work.
+5. Re-read current GitHub branch/PR/check state before claiming delivery.
 
 GitHub issues own feature scope and lifecycle, but they remain subordinate to explicit owner direction and this anti-overengineering contract.
 
@@ -43,9 +44,9 @@ ACS, PCM, and CGM are helpers, not product authorities. Use them only to the ext
 
 Pinned versions currently used by repository validation:
 
-- ACS hot-loader v0.1.0 @ `fa57bae9a5229b454b57ea0b3f3e4dac0bbc8b4e`.
+- ACS hot-loader v0.1.0 @ `3a381eba11c6262c702f5d696878c371342e859a`.
 - PCM @ `4e2385474b4af9249ca009cbdcb38c4498932475`.
-- CGM 0.5.7 @ `c069613ca8b3e02bcf5aba1960160583537f8a3a`.
+- CGM 0.5.12 @ `6831f91e165b62d719c05eb492f7375fa932b560`.
 
 ## Git and delivery
 

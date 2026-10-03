@@ -33,9 +33,10 @@ test.describe('Scoped Share Links', () => {
     await page.setInputFiles('input[type="file"]', photo);
     await expect(page.getByText('share-e2e-photo.png').first()).toBeVisible();
 
-    await expect(page.getByRole('heading', { name: '🔗 Scoped Share Links' })).toBeVisible();
-    await page.click('button:has-text("Create Share Link")');
-    await expect(page.getByText('Share link created')).toBeVisible();
+    await page.getByRole('button', { name: 'Access', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Share links' })).toBeVisible();
+    await page.getByRole('button', { name: 'Create link' }).click();
+    await expect(page.getByText('Copy this link now')).toBeVisible();
 
     const shareUrl = await page
       .locator('text=/\\/share\\/octo_share_/')

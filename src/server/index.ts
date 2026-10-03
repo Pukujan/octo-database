@@ -28,15 +28,21 @@ import { ensureThumbnail } from '../media/thumbnail-service';
 import { signMediaUrl, verifyMediaToken } from '../media/media-token';
 import { hashShareToken } from '../media/share-service';
 import { JobOutcome, processJob } from '../jobs/worker';
-import { AUTH_GUIDANCE, capabilitiesForScopes, hasScope, OctoScope } from '../api/capabilities';
+import {
+  AUTH_GUIDANCE,
+  capabilitiesForScopes,
+  hasScope,
+  minimumRoleForCapability,
+  OctoScope,
+} from '../api/capabilities';
 import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { hashApiKeySecret } from '../api/keys';
 import {
-  dbCountFileJobs,
   dbCountTransientFiles,
   dbCreateWorkspaceAtomic,
-  dbDeleteFile,
+  dbDeleteFileIfIdle,
+  dbEnqueueFileTransition,
   dbDeleteWorkspaceAtomic,
   dbGetArchiveRecord,
   dbGetAccountWideKeyId,
@@ -63,6 +69,7 @@ import {
   dbReplaceChunksAndEmbeddings,
   dbUpsertDocumentVersion,
   dbEnqueueJob,
+  dbRetryJob,
   dbFailJob,
   dbListActivity,
   dbListJobs,
@@ -79,7 +86,7 @@ import {
   query,
   testDbConnection,
 } from './db';
-import { Principal, WorkspaceRole } from '../types/auth';
+import { Principal, ROLE_HIERARCHY, WorkspaceRole } from '../types/auth';
 
 const PORT = parseInt(process.env['PORT'] ?? '3001', 10);
 
@@ -211,6 +218,20 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return promise;
 }
 
+// Helper: read a JSON object body, tolerating empty or malformed input. An
+// absent body becomes {}, so each route's own validation produces its intended
+// refusal (400/403/412) rather than an unhandled 500 from JSON.parse.
+async function readJsonObject(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const raw = await readBody(req);
+  if (!raw.trim()) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
 interface AuthContext {
   principal: Principal;
   apiKey?: {
@@ -222,6 +243,25 @@ interface AuthContext {
     scopes: string[];
     isAccountWide: boolean;
   };
+}
+
+function keyWorkspaceMatches(auth: AuthContext, workspaceId: string): boolean {
+  return !auth.apiKey?.workspaceId || auth.apiKey.workspaceId === workspaceId;
+}
+
+function effectiveWorkspaceRole(auth: AuthContext, liveRoleValue: string): WorkspaceRole {
+  const liveRole = liveRoleValue in ROLE_HIERARCHY ? liveRoleValue as WorkspaceRole : 'member';
+  const keyRole = auth.apiKey?.workspaceId ? auth.apiKey.role as WorkspaceRole | null : null;
+  if (!keyRole || !(keyRole in ROLE_HIERARCHY)) return liveRole;
+  return ROLE_HIERARCHY[liveRole] <= ROLE_HIERARCHY[keyRole] ? liveRole : keyRole;
+}
+
+function roleMeetsMinimum(role: WorkspaceRole, minimum: WorkspaceRole): boolean {
+  return ROLE_HIERARCHY[role] >= ROLE_HIERARCHY[minimum];
+}
+
+function roleAllows(auth: AuthContext, liveRole: string, minimum: WorkspaceRole): boolean {
+  return roleMeetsMinimum(effectiveWorkspaceRole(auth, liveRole), minimum);
 }
 
 // Helper: authenticate caller from Authorization header
@@ -333,14 +373,15 @@ interface MediaAuthorization {
 async function authorizeMediaRequest(
   req: IncomingMessage,
   url: URL
-): Promise<MediaAuthorization | null> {
+): Promise<MediaAuthorization | false | null> {
   const bearer = await authenticateRequest(req);
   if (bearer) {
     const workspaceId = url.searchParams.get('workspaceId');
     const fileId = url.searchParams.get('fileId');
     if (!workspaceId || !fileId) return null;
+    if (!requireScope(bearer, 'files') || !keyWorkspaceMatches(bearer, workspaceId)) return false;
     const mem = await dbGetWorkspaceMembership(workspaceId, bearer.principal.id);
-    if (!mem) return null;
+    if (!mem || !roleAllows(bearer, mem.role, 'member')) return false;
     return { principalId: bearer.principal.id, workspaceId, fileId };
   }
 
@@ -420,14 +461,16 @@ async function enqueueFileTransition(
   workspaceId: string,
   file: { id: string; storageKey: string; mimeType: string },
   createdBy: string | null
-): Promise<{ job: Awaited<ReturnType<typeof dbEnqueueJob>>['job']; created: boolean }> {
-  const jobType = direction === 'archive' ? 'archive_file' : 'restore_file';
-  const cycle = await dbCountFileJobs(workspaceId, jobType, file.id);
-  return dbEnqueueJob(
+): Promise<
+  | { status: 'missing' }
+  | { status: 'busy' }
+  | { status: 'queued'; job: Awaited<ReturnType<typeof dbEnqueueJob>>['job']; created: boolean }
+> {
+  return dbEnqueueFileTransition(
     randomUUID(),
     workspaceId,
-    jobType,
-    `${direction}:${file.id}:${cycle}`,
+    direction,
+    `${direction}:${file.id}`,
     { fileId: file.id, storageKey: file.storageKey, mimeType: file.mimeType },
     createdBy
   );
@@ -450,13 +493,13 @@ async function runRetentionSweep(): Promise<number> {
       const file = await dbGetFile(workspace.id, fileId);
       if (!file) continue;
 
-      const { created } = await enqueueFileTransition(
+      const transition = await enqueueFileTransition(
         'archive',
         workspace.id,
         { id: file.id, storageKey: file.storageKey, mimeType: file.mimeType },
         null
       );
-      if (created) enqueued += 1;
+      if (transition.status === 'queued' && transition.created) enqueued += 1;
     }
   }
   return enqueued;
@@ -843,7 +886,7 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const parsed = JSON.parse(await readBody(req));
+      const parsed = await readJsonObject(req);
       const { secret, currentSecret } = parsed;
       if (typeof secret !== 'string' || secret.length < 8) {
         sendJson(res, 400, { error: 'BAD_REQUEST: secret must be a string of at least 8 characters' });
@@ -889,8 +932,9 @@ export const server = createServer(async (req, res) => {
           auth.apiKey.workspaceId,
         ]);
 
-        if (rows.length === 0) {
-          sendJson(res, 200, []);
+        const mem = await dbGetWorkspaceMembership(auth.apiKey.workspaceId, auth.principal.id);
+        if (rows.length === 0 || !mem) {
+          sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
           return;
         }
 
@@ -901,8 +945,8 @@ export const server = createServer(async (req, res) => {
             slug: ws.slug,
             name: ws.name,
             description: ws.description,
-            role: auth.apiKey.role ?? 'member',
-            isOwner: auth.apiKey.role === 'owner',
+            role: effectiveWorkspaceRole(auth, mem.role),
+            isOwner: effectiveWorkspaceRole(auth, mem.role) === 'owner',
             retentionDays: ws.retention_days,
           },
         ]);
@@ -937,18 +981,20 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const parsed = JSON.parse(await readBody(req));
+      const parsed = await readJsonObject(req);
       const { name, slug, description, retentionDays } = parsed;
 
       if (!name || typeof name !== 'string' || !slugify(name)) {
         sendJson(res, 400, { error: 'BAD_REQUEST: a name that slugifies to at least one character is required' });
         return;
       }
+      let retentionDaysValue: number | null = null;
       if (retentionDays !== undefined && retentionDays !== null) {
-        if (!Number.isInteger(retentionDays) || retentionDays <= 0) {
+        if (typeof retentionDays !== 'number' || !Number.isInteger(retentionDays) || retentionDays <= 0) {
           sendJson(res, 400, { error: 'BAD_REQUEST: retentionDays must be a positive integer' });
           return;
         }
+        retentionDaysValue = retentionDays;
       }
 
       const resolvedSlug = typeof slug === 'string' && slug.trim() ? slugify(slug) : slugify(name);
@@ -967,7 +1013,7 @@ export const server = createServer(async (req, res) => {
           slug: resolvedSlug,
           name: name.trim(),
           description: typeof description === 'string' && description.trim() ? description.trim() : null,
-          retentionDays: retentionDays ?? null,
+          retentionDays: retentionDaysValue,
           createdBy: auth.principal.id,
           keyId,
           keyHash: hashApiKeySecret(rawSecret),
@@ -1026,7 +1072,7 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const parsed = JSON.parse(await readBody(req));
+      const parsed = await readJsonObject(req);
       if (!(await confirmGate(res, auth, parsed.confirmSecret))) return;
 
       const workspace = await dbGetWorkspaceById(workspaceId);
@@ -1100,7 +1146,7 @@ export const server = createServer(async (req, res) => {
       }
 
       // Enforce workspace-scoped key restrictions
-      if (auth.apiKey && auth.apiKey.workspaceId && auth.apiKey.workspaceId !== workspaceId) {
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
       }
@@ -1144,7 +1190,7 @@ export const server = createServer(async (req, res) => {
       }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin' && mem.role !== 'operator')) {
+      if (!mem || !roleAllows(auth, mem.role, 'operator')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Operator role or higher required to upload' });
         return;
       }
@@ -1186,16 +1232,26 @@ export const server = createServer(async (req, res) => {
       const sizeBytes = payload.byteLength;
       const etag: string | null = `stored-${payload.byteLength}`;
       // Commit record into PostgreSQL octo.files
-      const fileRecord = await dbInsertFile(
-        fileId,
-        workspaceId,
-        auth.principal.id,
-        name,
-        mimeType ?? 'application/octet-stream',
-        sizeBytes,
-        storageKey,
-        etag?.replace(/"/g, '') ?? null
-      );
+      let fileRecord;
+      try {
+        fileRecord = await dbInsertFile(
+          fileId,
+          workspaceId,
+          auth.principal.id,
+          name,
+          mimeType ?? 'application/octet-stream',
+          sizeBytes,
+          storageKey,
+          etag?.replace(/"/g, '') ?? null
+        );
+      } catch (err) {
+        try {
+          await objectStore.delete(storageKey);
+        } catch (cleanupError) {
+          console.error(`File upload cleanup failed for ${fileId}:`, cleanupError);
+        }
+        throw err;
+      }
 
       await attributeAgentAction(
         auth,
@@ -1214,6 +1270,10 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
       }
+      if (!requireScope(auth, 'files')) {
+        scopeDenied(res, 'files');
+        return;
+      }
 
       const fileId = url.searchParams.get('fileId');
       const workspaceId = url.searchParams.get('workspaceId');
@@ -1221,9 +1281,17 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'fileId and workspaceId required' });
         return;
       }
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+      if (!objectStore) {
+        sendJson(res, 503, { error: 'STORAGE_UNAVAILABLE: no storage backend configured.' });
+        return;
+      }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem) {
+      if (!mem || !roleAllows(auth, mem.role, 'member')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
         return;
       }
@@ -1244,10 +1312,13 @@ export const server = createServer(async (req, res) => {
       return;
     }
     // 6b. File Content: GET /api/files/content?workspaceId=...&fileId=...
-    // Streams bytes for the explicit local storage backend. R2 callers use the
-    // presigned URL from /api/files/download instead.
+    // Streams authorized bytes for browser downloads, restoring cold files on demand.
     if (pathname === '/api/files/content' && req.method === 'GET') {
       const auth = await authorizeMediaRequest(req, url);
+      if (auth === false) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not authorized for this workspace' });
+        return;
+      }
       if (!auth) {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
@@ -1285,6 +1356,10 @@ export const server = createServer(async (req, res) => {
     // Serves a cached small WebP derivative so grids never fetch full originals.
     if (pathname === '/api/files/thumbnail' && req.method === 'GET') {
       const auth = await authorizeMediaRequest(req, url);
+      if (auth === false) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not authorized for this workspace' });
+        return;
+      }
       if (!auth) {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
@@ -1356,22 +1431,32 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'fileId and workspaceId required' });
         return;
       }
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+      if (!objectStore) {
+        sendJson(res, 503, { error: 'STORAGE_UNAVAILABLE: no storage backend configured.' });
+        return;
+      }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+      if (!mem || !roleAllows(auth, mem.role, 'admin')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to delete files' });
         return;
       }
 
-      const deleted = await dbDeleteFile(workspaceId, fileId);
-      if (!deleted) {
+      const result = await dbDeleteFileIfIdle(workspaceId, fileId);
+      if (result.status === 'missing') {
         sendJson(res, 404, { error: 'FILE_NOT_FOUND' });
         return;
       }
-
-      if (objectStore) {
-        await objectStore.delete(deleted.storageKey);
+      if (result.status === 'busy') {
+        sendJson(res, 409, { error: 'FILE_BUSY: archive or restore is in progress' });
+        return;
       }
+
+      await objectStore.delete(result.storageKey);
 
       await attributeAgentAction(auth, workspaceId, 'file.deleted', `File ${fileId} deleted by agent principal`);
       sendJson(res, 200, { success: true, fileId });
@@ -1409,13 +1494,13 @@ export const server = createServer(async (req, res) => {
       }
 
       // A workspace-scoped key may only touch its own workspace.
-      if (auth.apiKey && auth.apiKey.workspaceId && auth.apiKey.workspaceId !== workspaceId) {
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
       }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin' && mem.role !== 'operator')) {
+      if (!mem || !roleAllows(auth, mem.role, 'operator')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Operator role or higher required' });
         return;
       }
@@ -1433,12 +1518,21 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const { job, created } = await enqueueFileTransition(
+      const transition = await enqueueFileTransition(
         direction,
         workspaceId,
         { id: file.id, storageKey: file.storageKey, mimeType: file.mimeType },
         auth.principal.id
       );
+      if (transition.status === 'missing') {
+        sendJson(res, 404, { error: 'FILE_NOT_FOUND' });
+        return;
+      }
+      if (transition.status === 'busy') {
+        sendJson(res, 409, { error: 'FILE_BUSY: another archive or restore is in progress' });
+        return;
+      }
+      const { job, created } = transition;
 
       if (created) {
         await dbRecordActivity(
@@ -1471,9 +1565,13 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId required' });
         return;
       }
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem) {
+      if (!mem || !roleAllows(auth, mem.role, 'member')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
         return;
       }
@@ -1888,22 +1986,93 @@ export const server = createServer(async (req, res) => {
       return;
     }
 
-    // 9b. Capability discovery (Slice 7)
-    // Describes HOW to call Octo for the presented token, filtered to the scopes
-    // the token actually holds. The description is documentation only: every call
-    // is still authorized server-side against the token's scopes.
+    // 9b. Workspace-aware capability discovery.
     if (pathname === '/api/capabilities' && req.method === 'GET') {
       const auth = await authenticateRequest(req);
       if (!auth) {
-        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        sendJson(res, 401, {
+          error: 'UNAUTHENTICATED',
+          code: 'UNAUTHENTICATED',
+          message: 'A valid Octo credential is required.',
+        });
         return;
       }
 
-      // A session (human) caller is not scope-limited; report the full surface.
+      const requestedWorkspaceId = url.searchParams.get('workspaceId');
+      if (requestedWorkspaceId !== null && !UUID_PATTERN.test(requestedWorkspaceId)) {
+        sendJson(res, 400, {
+          error: 'INVALID_WORKSPACE_ID',
+          code: 'INVALID_WORKSPACE_ID',
+          message: 'workspaceId must be a UUID.',
+        });
+        return;
+      }
+
       const scopes = auth.apiKey ? auth.apiKey.scopes : ['read', 'write', 'delete', 'files', 'admin'];
-      const capabilities = capabilitiesForScopes(scopes);
+      let workspace: { id: string; role: WorkspaceRole } | null = null;
+      let unavailable: { action: string; reason: 'PROVIDER_UNAVAILABLE' }[] = [];
+      let capabilities = capabilitiesForScopes(scopes);
+
+      if (requestedWorkspaceId) {
+        if (!keyWorkspaceMatches(auth, requestedWorkspaceId)) {
+          sendJson(res, 403, {
+            error: 'WORKSPACE_ACCESS_DENIED',
+            code: 'WORKSPACE_ACCESS_DENIED',
+            message: 'This credential cannot access the requested workspace.',
+          });
+          return;
+        }
+
+        let mem;
+        try {
+          const exists = await dbGetWorkspaceById(requestedWorkspaceId);
+          mem = exists ? await dbGetWorkspaceMembership(requestedWorkspaceId, auth.principal.id) : null;
+        } catch {
+          sendJson(res, 500, {
+            error: 'CAPABILITY_LOOKUP_FAILED',
+            code: 'CAPABILITY_LOOKUP_FAILED',
+            message: 'Workspace capabilities could not be loaded.',
+          });
+          return;
+        }
+        if (!mem) {
+          sendJson(res, 403, {
+            error: 'WORKSPACE_ACCESS_DENIED',
+            code: 'WORKSPACE_ACCESS_DENIED',
+            message: 'This credential cannot access the requested workspace.',
+          });
+          return;
+        }
+
+        const role = effectiveWorkspaceRole(auth, mem.role);
+        workspace = { id: requestedWorkspaceId, role };
+        capabilities = capabilities.filter((capability) => {
+          if (capability.action === 'workspaces.create') return !auth.apiKey?.workspaceId;
+          return roleMeetsMinimum(role, minimumRoleForCapability(capability.action));
+        });
+
+        const providerByAction: Record<string, boolean> = {
+          'files.download': Boolean(objectStore),
+          'files.upload': Boolean(objectStore),
+          'files.delete': Boolean(objectStore),
+          'files.archive': Boolean(objectStore && archiveDeps),
+          'files.restore': Boolean(objectStore && archiveDeps),
+        };
+        const supported = [] as typeof capabilities;
+        for (const capability of capabilities) {
+          const configured = providerByAction[capability.action];
+          if (configured === false) unavailable.push({ action: capability.action, reason: 'PROVIDER_UNAVAILABLE' });
+          else supported.push(capability);
+        }
+        capabilities = supported;
+      } else if (auth.apiKey?.workspaceId) {
+        capabilities = capabilities.filter((capability) => capability.action !== 'workspaces.create');
+      }
 
       sendJson(res, 200, {
+        contractVersion: 1,
+        discoveryMode: requestedWorkspaceId ? 'workspace' : 'unbound',
+        workspace,
         principal: {
           id: auth.principal.id,
           isGuest: auth.principal.isGuest,
@@ -1919,6 +2088,7 @@ export const server = createServer(async (req, res) => {
           : { type: 'session' },
         auth: AUTH_GUIDANCE,
         capabilities,
+        unavailable,
       });
       return;
     }
@@ -1944,9 +2114,17 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId, jobType, and idempotencyKey are required' });
         return;
       }
+      if (jobType === 'archive_file' || jobType === 'restore_file') {
+        sendJson(res, 400, { error: 'JOB_TYPE_RESERVED: use the file archive or restore route' });
+        return;
+      }
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin' && mem.role !== 'operator')) {
+      if (!mem || !roleAllows(auth, mem.role, 'operator')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Operator role or higher required to enqueue jobs' });
         return;
       }
@@ -1992,6 +2170,10 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId is required' });
         return;
       }
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
       if (!mem) {
@@ -2018,6 +2200,10 @@ export const server = createServer(async (req, res) => {
       const workspaceId = url.searchParams.get('workspaceId');
       if (!workspaceId) {
         sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
       }
 
@@ -2057,16 +2243,12 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const rows = await query<{ id: string }>(
-        `UPDATE octo.jobs
-         SET state = 'queued', attempt = 0, available_at = now(),
-             error_code = NULL, error_summary = NULL, completed_at = NULL, updated_at = now()
-         WHERE id = $1 AND workspace_id = $2 AND state = 'failed'
-         RETURNING id`,
-        [jobId, workspaceId]
-      );
-
-      if (rows.length === 0) {
+      const retry = await dbRetryJob(jobId, workspaceId);
+      if (retry === 'busy') {
+        sendJson(res, 409, { error: 'FILE_BUSY: archive or restore is in progress' });
+        return;
+      }
+      if (retry !== 'requeued') {
         sendJson(res, 404, { error: 'JOB_NOT_RETRYABLE: no failed job with that id in this workspace' });
         return;
       }
@@ -2095,9 +2277,13 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId is required' });
         return;
       }
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin' && mem.role !== 'operator')) {
+      if (!mem || !roleAllows(auth, mem.role, 'operator')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Operator role or higher required to run jobs' });
         return;
       }
