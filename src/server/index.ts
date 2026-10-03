@@ -1312,8 +1312,7 @@ export const server = createServer(async (req, res) => {
       return;
     }
     // 6b. File Content: GET /api/files/content?workspaceId=...&fileId=...
-    // Streams bytes for the explicit local storage backend. R2 callers use the
-    // presigned URL from /api/files/download instead.
+    // Streams authorized bytes for browser downloads, restoring cold files on demand.
     if (pathname === '/api/files/content' && req.method === 'GET') {
       const auth = await authorizeMediaRequest(req, url);
       if (auth === false) {

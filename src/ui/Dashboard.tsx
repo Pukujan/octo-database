@@ -9,6 +9,7 @@
 
 import React, { useEffect, useState } from 'react';
 import {
+  Alert,
   AppBar,
   Avatar,
   Box,
@@ -61,6 +62,7 @@ export interface DashboardProps {
   onSelectWorkspace: (workspaceId: string) => void;
   onUploadFile?: (name: string, mimeType: string, content: string) => Promise<void>;
   onUploadBinaryFile?: (file: File) => Promise<void>;
+  onDownloadFile?: (fileId: string) => Promise<void>;
   onDeleteFile?: (fileId: string) => Promise<void>;
   onArchiveFile?: (fileId: string) => Promise<void>;
   onRestoreFile?: (fileId: string) => Promise<void>;
@@ -153,6 +155,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onSelectWorkspace,
   onUploadFile,
   onUploadBinaryFile,
+  onDownloadFile,
   onDeleteFile,
   onArchiveFile,
   onRestoreFile,
@@ -202,6 +205,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [uploadFileName, setUploadFileName] = useState('');
   const [uploadFileContent, setUploadFileContent] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [fileActionError, setFileActionError] = useState<string | null>(null);
+
+  const runFileAction = async (action: () => Promise<void>, fallback: string) => {
+    setFileActionError(null);
+    try {
+      await action();
+    } catch (e) {
+      setFileActionError(e instanceof Error ? e.message : fallback);
+    }
+  };
 
   const handleWorkspaceChange = (newId: string) => {
     setSelectedWsId(newId);
@@ -269,7 +282,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       setUploadFileName('');
       setUploadFileContent('');
     } catch (e) {
-      console.error(e);
+      setFileActionError(e instanceof Error ? e.message : 'File upload failed');
     } finally {
       setIsUploading(false);
     }
@@ -585,13 +598,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                     <div>
                       <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                        📁 File Catalog (Cloudflare R2)
+                        📁 File Catalog
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        Logical file records pointing to objects stored in the dedicated Cloudflare R2 bucket.
+                        Logical file records backed by the configured storage tier.
                       </Typography>
                     </div>
                   </Box>
+
+                  {fileActionError && (
+                    <Alert severity="error" sx={{ mb: 2 }} onClose={() => setFileActionError(null)}>
+                      {fileActionError}
+                    </Alert>
+                  )}
 
                   {/* Upload Form */}
                   {onUploadFile && activeContext.capabilities.canUploadFiles && (
@@ -627,7 +646,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         disabled={isUploading || !uploadFileName.trim()}
                         sx={{ whiteSpace: 'nowrap' }}
                       >
-                        Upload Text to R2
+                        Upload Text File
                       </Button>
 
                       {onUploadBinaryFile && (
@@ -635,20 +654,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           variant="outlined"
                           size="medium"
                           component="label"
+                          disabled={isUploading}
                           sx={{ whiteSpace: 'nowrap' }}
                         >
-                          Upload Image/Video
+                          Upload File
                           <input
                             type="file"
                             hidden
-                            accept="image/*,video/*"
-                            aria-label="Upload image or video file"
+                            aria-label="Upload file"
                             onChange={async (e) => {
                               const chosen = e.target.files?.[0];
                               if (chosen) {
                                 setIsUploading(true);
                                 try {
-                                  await onUploadBinaryFile(chosen);
+                                  await runFileAction(() => onUploadBinaryFile(chosen), 'File upload failed');
                                 } finally {
                                   setIsUploading(false);
                                   e.target.value = '';
@@ -675,7 +694,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <TableCell sx={{ fontWeight: 600, width: '14%' }}>MIME Type</TableCell>
                             <TableCell sx={{ fontWeight: 600, width: '16%' }}>Storage Tier</TableCell>
                             <TableCell sx={{ fontWeight: 600 }}>Storage Key</TableCell>
-                            <TableCell sx={{ fontWeight: 600, width: '18%' }} align="right">
+                            <TableCell sx={{ fontWeight: 600, width: '24%' }} align="right">
                               Actions
                             </TableCell>
                           </TableRow>
@@ -698,7 +717,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                       ? 'Restoring...'
                                       : f.archiveState === 'reconciliation_required'
                                       ? 'Needs Reconcile'
-                                      : 'R2 (Active)'
+                                      : 'Active'
                                   }
                                   color={
                                     f.archiveState === 'archived_drive'
@@ -724,13 +743,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 <code>{f.storageKey}</code>
                               </TableCell>
                               <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                                {onDownloadFile && (
+                                  <Button
+                                    size="small"
+                                    variant="outlined"
+                                    onClick={() => void runFileAction(() => onDownloadFile(f.id), 'File download failed')}
+                                    sx={{ mr: 1 }}
+                                  >
+                                    Download
+                                  </Button>
+                                )}
                                 {f.archiveState === 'archived_drive' ? (
                                   onRestoreFile && (
                                     <Button
                                       size="small"
                                       variant="outlined"
                                       color="info"
-                                      onClick={() => onRestoreFile(f.id)}
+                                      onClick={() => void runFileAction(() => onRestoreFile(f.id), 'File restore failed')}
                                       sx={{ mr: 1 }}
                                     >
                                       Restore
@@ -742,7 +771,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                       size="small"
                                       variant="outlined"
                                       color="secondary"
-                                      onClick={() => onArchiveFile(f.id)}
+                                      onClick={() => void runFileAction(() => onArchiveFile(f.id), 'File archive failed')}
                                       sx={{ mr: 1 }}
                                     >
                                       Archive
@@ -754,7 +783,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                     size="small"
                                     variant="outlined"
                                     color="error"
-                                    onClick={() => onDeleteFile(f.id)}
+                                    onClick={() => void runFileAction(() => onDeleteFile(f.id), 'File deletion failed')}
                                   >
                                     Delete
                                   </Button>
