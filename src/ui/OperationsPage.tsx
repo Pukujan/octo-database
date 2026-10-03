@@ -47,6 +47,7 @@ export const OperationsPage: React.FC<OperationsPageProps> = ({
   onRunWorker,
 }) => {
   const failed = jobs.filter((job) => job.state === 'failed');
+  const queued = jobs.filter((job) => job.state === 'queued');
   const otherJobs = jobs
     .filter((job) => job.state !== 'failed')
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -73,6 +74,9 @@ export const OperationsPage: React.FC<OperationsPageProps> = ({
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
             Follow background work and pick up anything that needs a retry.
           </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+            Queued: {queued.length} · Failed: {failed.length}
+          </Typography>
         </Box>
         {onRunWorker && (
           <Button
@@ -80,7 +84,7 @@ export const OperationsPage: React.FC<OperationsPageProps> = ({
             onClick={onRunWorker}
             sx={{ borderRadius: 2, px: 2, whiteSpace: 'nowrap' }}
           >
-            Run pending work
+            Run worker pass
           </Button>
         )}
       </Box>

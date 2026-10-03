@@ -44,7 +44,6 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     await expect(page.getByRole('heading', { name: 'Personal (Guest)', exact: true })).toBeVisible();
     await expect(page.locator('text=Guest Sandbox')).toBeVisible();
     await expect(page.locator('text=File Catalog')).toBeVisible();
-    await expect(page.locator('text=API Keys (Account-Wide & Workspace-Scoped)')).toBeVisible();
     await expect(page.getByRole('heading', { name: /Gallery$/ })).toBeVisible();
 
     // 6 & 7. Multimodal Vision Audit on the authenticated dashboard.
@@ -54,15 +53,19 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
       expect(dashVisionResult.score).toBeGreaterThanOrEqual(75);
     }
 
-    // 8. Test File Upload via UI
+    // 8. Test File Upload via the focused Files view.
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
+    await page.getByRole('button', { name: 'New text file' }).click();
     await page.fill('input[placeholder="notes.txt"]', 'qa_report.txt');
-    await page.fill('input[placeholder="File body content..."]', 'Live visual QA report verification text.');
-    await page.click('button:has-text("Upload Text File")');
+    await page.fill('input[placeholder="Write something useful…"]', 'Live visual QA report verification text.');
+    await page.getByRole('button', { name: 'Save file' }).click();
 
     // Verify file appears in table
     await expect(page.getByRole('cell', { name: 'qa_report.txt', exact: true })).toBeVisible();
 
-    // 9. Test API Key Generation via UI
+    // 9. Test API Key Generation via Access.
+    await page.getByRole('button', { name: 'Access', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'API keys' })).toBeVisible();
     await page.fill('input[placeholder="e.g. Ingest Agent"]', 'Vision E2E Agent');
     await page.click('button:has-text("Generate API Key")');
 
@@ -73,7 +76,7 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     await expect(page.getByText(/^octo_live_ws_[0-9a-f]{32}$/)).toBeVisible();
 
     // 10. Sign out cleanly
-    await page.click('button:has-text("Sign out")');
+    await page.getByRole('button', { name: 'Sign out' }).click();
     await expect(page.locator('text=Welcome to Octo')).toBeVisible();
   });
 

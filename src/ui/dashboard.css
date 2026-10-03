@@ -250,7 +250,15 @@ select:focus-visible {
 }
 
 .octo-sidebar__brand {
-  padding: 0 10px 28px;
+  padding: 0 10px 20px;
+}
+
+.octo-sidebar__product {
+  display: block;
+  margin-top: 5px;
+  color: var(--octo-muted);
+  font-size: 9px;
+  letter-spacing: 0.035em;
 }
 
 .octo-workspace-select {
@@ -1107,7 +1115,11 @@ select:focus-visible {
   }
 
   .octo-sidebar__brand {
-    padding: 0 3px 14px;
+    padding: 0 3px 12px;
+  }
+
+  .octo-sidebar__product {
+    display: none;
   }
 
   .octo-workspace-select {

@@ -375,7 +375,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <div className="octo-overview-hero__meta">
               <span className="octo-status-dot" />
               <span>{activeContext?.role ?? 'Workspace'} workspace</span>
-              {principal?.isGuest && <span>Guest session</span>}
+              {principal?.isGuest && <span>Guest Sandbox</span>}
             </div>
             <h1 className="octo-overview-hero__title">{activeWorkspaceName}</h1>
             <p className="octo-overview-hero__description">
@@ -413,7 +413,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <section className="octo-panel">
             <div className="octo-panel__header">
               <div>
-                <h2 className="octo-panel__title">Recently added</h2>
+                <h2 className="octo-panel__title">File Catalog</h2>
                 <p className="octo-panel__subtitle">{files.length} {files.length === 1 ? 'file' : 'files'} in this workspace</p>
               </div>
               <button className="octo-text-link" onClick={() => setView('files')}>View all</button>
@@ -686,17 +686,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <section className="octo-login__action">
             <div className="octo-login__card">
               <span className="octo-login__eyebrow">Sign in to continue</span>
-              <h2 className="octo-login__title">Welcome back</h2>
+              <h2 className="octo-login__title">Welcome to Octo</h2>
               <p className="octo-login__description">Choose how you want to enter your workspace.</p>
               <div className="octo-login__buttons">
-                {googleAuthEnabled && (
+                {googleAuthEnabled ? (
                   <Button className="octo-button" variant="contained" fullWidth onClick={onSignInWithGoogle} disabled={isLoading}>
-                    Continue with Google
+                    Sign in with Google
+                  </Button>
+                ) : (
+                  <Button className="octo-button" variant="contained" fullWidth disabled aria-label="Google sign-in not configured">
+                    Google sign-in not configured
                   </Button>
                 )}
                 {onSignInAsGuest && (
                   <Button className="octo-button octo-button--quiet" variant="outlined" fullWidth onClick={onSignInAsGuest} disabled={isLoading}>
-                    Continue as guest
+                    Continue as Guest
                   </Button>
                 )}
               </div>
@@ -710,7 +714,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <div className="octo-app">
           <div className="octo-shell">
             <aside className="octo-sidebar">
-              <div className="octo-sidebar__brand"><Brand /></div>
+              <div className="octo-sidebar__brand">
+                <Brand />
+                <span className="octo-sidebar__product">Workspace Control Dashboard</span>
+              </div>
               <label className="octo-eyebrow" htmlFor="workspace-select" style={{ padding: '0 10px 8px' }}>Workspace</label>
               <div className="octo-workspace-select">
                 <span className="octo-workspace-select__icon">{activeWorkspaceName.slice(0, 1).toUpperCase()}</span>
@@ -750,7 +757,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
               {onCreateWorkspace && (
                 <button className="octo-nav__item" type="button" style={{ marginTop: 14 }} onClick={() => { setWorkspaceError(null); setIsCreateWsOpen(true); }}>
-                  <Icon name="plus" size={17} /><span className="octo-nav__label">New workspace</span>
+                  <Icon name="plus" size={17} /><span className="octo-nav__label">New Workspace</span>
                 </button>
               )}
 
@@ -827,7 +834,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         ref={binaryInputRef}
         type="file"
         hidden
-        aria-label="Choose files to upload"
+        aria-label="Upload file"
         onChange={(event) => {
           const file = event.target.files?.[0];
           void handleBinaryFile(file);
@@ -849,7 +856,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       </Dialog>
 
       <Dialog open={isCreateWsOpen} onClose={() => setIsCreateWsOpen(false)} maxWidth="sm" fullWidth PaperProps={{ className: 'octo-dialog-paper' }}>
-        <DialogTitle>New workspace</DialogTitle>
+        <DialogTitle>New Workspace</DialogTitle>
         <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
           <TextField label="Name" value={newWsName} onChange={(event) => setNewWsName(event.target.value)} fullWidth />
           <TextField label="Description" value={newWsDescription} onChange={(event) => setNewWsDescription(event.target.value)} fullWidth />
@@ -858,7 +865,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
           <Button onClick={() => setIsCreateWsOpen(false)}>Cancel</Button>
-          <Button variant="contained" disabled={!newWsName.trim()} onClick={() => void handleCreateWorkspace()}>Create workspace</Button>
+          <Button variant="contained" disabled={!newWsName.trim()} onClick={() => void handleCreateWorkspace()}>Create Workspace</Button>
         </DialogActions>
       </Dialog>
 

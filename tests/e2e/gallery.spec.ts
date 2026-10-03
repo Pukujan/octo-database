@@ -35,6 +35,7 @@ test.describe('Workspace Gallery', () => {
     await makePng(photo, { r: 200, g: 60, b: 40 });
     await page.setInputFiles('input[type="file"]', photo);
     await expect(page.getByText('gallery-e2e-photo.png').first()).toBeVisible();
+    await page.getByRole('button', { name: 'Gallery', exact: true }).click();
 
     // Grid thumbnail must resolve to a small derivative, not the original.
     const thumb = page.locator('img[alt="gallery-e2e-photo.png"]');

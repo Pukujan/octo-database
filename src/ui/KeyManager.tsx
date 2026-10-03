@@ -189,7 +189,7 @@ export const KeyManager: React.FC<KeyManagerProps> = ({
         {createdSecret && (
           <Card sx={{ p: 2, mb: 3, bgcolor: 'action.hover', borderColor: 'success.main', borderRadius: 2 }}>
             <Typography variant="subtitle2" color="success.main" sx={{ fontWeight: 700 }}>
-              New key created. Copy this secret now; it will not be shown again.
+              New API Key Minted. Copy this secret now; it will not be shown again.
             </Typography>
             <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all', mt: 1, color: 'text.primary' }}>
               {createdSecret}
@@ -214,7 +214,7 @@ export const KeyManager: React.FC<KeyManagerProps> = ({
               <TextField
                 size="small"
                 label="Key name"
-                placeholder="e.g. Ingest agent"
+                placeholder="e.g. Ingest Agent"
                 value={newKeyName}
                 onChange={(e) => setNewKeyName(e.target.value)}
                 fullWidth
@@ -293,7 +293,7 @@ export const KeyManager: React.FC<KeyManagerProps> = ({
               disabled={!newKeyName.trim() || (isCustom && customScopes.length === 0)}
               sx={{ mt: 2, whiteSpace: 'nowrap' }}
             >
-              Create API key
+              Generate API Key
             </Button>
           </Box>
         )}

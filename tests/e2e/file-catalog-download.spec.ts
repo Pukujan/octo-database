@@ -15,6 +15,7 @@ test('uploads an arbitrary file and downloads identical bytes from the catalog',
     await page.getByText('Continue as Guest').click();
     await expect(page.getByText('Workspace Control Dashboard')).toBeVisible();
 
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await page.getByLabel('Upload file').setInputFiles(sourcePath);
     const fileRow = page.getByRole('row').filter({ hasText: fileName });
     await expect(fileRow).toBeVisible();
