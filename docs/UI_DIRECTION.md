@@ -40,3 +40,5 @@ Keep the existing API and storage callbacks as the data/action boundary. A visua
 ## Research workflow
 
 Use design tooling when it is available, especially a code-native visual editor or editable design canvas. If it is unavailable, iterate directly on the real React code and browser preview. Use the same workspace data and actions across design iterations; owner taste decides visual quality.
+
+For the owner-requested Dyad dashboard experiment, use [the Dyad dashboard brief](frontend/DYAD_DASHBOARD_BRIEF.md). It separates current API behavior from proposed quota and observability contracts so a prototype cannot mistake sample data for production capability.
