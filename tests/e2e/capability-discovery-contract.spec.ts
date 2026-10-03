@@ -83,6 +83,21 @@ test.describe('Workspace capability discovery contract', () => {
     expect(otherWorkspaceResponse.status()).toBe(201);
     const otherWorkspace = (await otherWorkspaceResponse.json()).workspace as { id: string };
 
+    const fixtureName = `capability-read-${randomUUID()}.txt`;
+    const fixtureBytes = `capability fixture ${randomUUID()}`;
+    const uploadFixture = await request.post('/api/files/upload', {
+      headers: bearer(owner.sessionToken),
+      data: {
+        workspaceId: owner.workspace.id,
+        name: fixtureName,
+        mimeType: 'text/plain',
+        data: fixtureBytes,
+        dataEncoding: 'utf8',
+      },
+    });
+    expect(uploadFixture.status()).toBe(201);
+    const fixture = (await uploadFixture.json()) as { id: string };
+
     const key = await createWorkspaceKey(
       request,
       owner.sessionToken,
@@ -116,6 +131,37 @@ test.describe('Workspace capability discovery contract', () => {
     expect(selectedActions.has('files.upload')).toBe(false);
     expect(selectedActions.has('workspaces.create')).toBe(false);
 
+    const listedFiles = await request.get(`/api/files?workspaceId=${owner.workspace.id}`, {
+      headers: keyHeaders,
+    });
+    expect(listedFiles.status()).toBe(200);
+    expect((await listedFiles.json()).some((file: { id: string }) => file.id === fixture.id)).toBe(true);
+
+    const download = await request.get(
+      `/api/files/download?workspaceId=${owner.workspace.id}&fileId=${fixture.id}`,
+      { headers: keyHeaders }
+    );
+    expect(download.status()).toBe(200);
+    expect((await download.json()).downloadUrl).toBeTruthy();
+
+    const content = await request.get(
+      `/api/files/content?workspaceId=${owner.workspace.id}&fileId=${fixture.id}`,
+      { headers: keyHeaders }
+    );
+    expect(content.status()).toBe(200);
+    expect(await content.text()).toBe(fixtureBytes);
+
+    const refusedUpload = await request.post('/api/files/upload', {
+      headers: keyHeaders,
+      data: {
+        workspaceId: owner.workspace.id,
+        name: 'read-only-refused.txt',
+        data: 'not allowed',
+        dataEncoding: 'utf8',
+      },
+    });
+    expect(refusedUpload.status()).toBe(403);
+
     const crossWorkspace = await request.get(
       `/api/capabilities?workspaceId=${otherWorkspace.id}`,
       { headers: keyHeaders }
@@ -131,6 +177,14 @@ test.describe('Workspace capability discovery contract', () => {
       headers: keyHeaders,
     });
     expect(crossWorkspaceFiles.status()).toBe(403);
+    for (const path of [
+      `/api/files/download?workspaceId=${otherWorkspace.id}&fileId=${fixture.id}`,
+      `/api/files/content?workspaceId=${otherWorkspace.id}&fileId=${fixture.id}`,
+      `/api/files/thumbnail?workspaceId=${otherWorkspace.id}&fileId=${fixture.id}`,
+      `/api/gallery?workspaceId=${otherWorkspace.id}`,
+    ]) {
+      expect((await request.get(path, { headers: keyHeaders })).status()).toBe(403);
+    }
 
     // Omitting workspaceId remains compatible with the existing discovery
     // fields while clearly identifying the response as unbound.
@@ -147,6 +201,22 @@ test.describe('Workspace capability discovery contract', () => {
       unavailable: [],
     });
     expect(actions(unbound).has('workspaces.create')).toBe(false);
+
+    const accountKeyResponse = await request.post('/api/keys', {
+      headers: bearer(owner.sessionToken),
+      data: { name: `capability account writer ${randomUUID()}`, scopes: ['write'] },
+    });
+    expect(accountKeyResponse.status()).toBe(201);
+    const accountKey = (await accountKeyResponse.json()) as MintedKey;
+    const accountDiscovery = await request.get(
+      `/api/capabilities?workspaceId=${owner.workspace.id}`,
+      { headers: bearer(accountKey.rawSecret) }
+    );
+    expect(accountDiscovery.status()).toBe(200);
+    expect(actions((await accountDiscovery.json()) as CapabilityDiscovery).has('workspaces.create')).toBe(true);
+    expect((await request.delete(`/api/keys/${accountKey.apiKey.id}`, {
+      headers: bearer(owner.sessionToken),
+    })).status()).toBe(200);
 
     const unauthenticated = await request.get(
       `/api/capabilities?workspaceId=${owner.workspace.id}`
@@ -167,6 +237,16 @@ test.describe('Workspace capability discovery contract', () => {
       code: 'INVALID_WORKSPACE_ID',
       message: expect.any(String),
     });
+
+    expect((await request.delete(`/api/keys/${key.apiKey.id}`, {
+      headers: bearer(owner.sessionToken),
+    })).status()).toBe(200);
+    expect((await request.get(`/api/capabilities?workspaceId=${owner.workspace.id}`, {
+      headers: keyHeaders,
+    })).status()).toBe(401);
+    expect((await request.get(`/api/files?workspaceId=${owner.workspace.id}`, {
+      headers: keyHeaders,
+    })).status()).toBe(401);
   });
 
   test('a member key with write scope cannot discover or invoke operator-only actions, and live membership removal takes effect', async ({
@@ -200,6 +280,21 @@ test.describe('Workspace capability discovery contract', () => {
     expect(discovery.workspace).toEqual({ id: owner.workspace.id, role: 'member' });
     expect(memberActions.has('files.upload')).toBe(false);
     expect(memberActions.has('jobs.run')).toBe(false);
+
+    // A workspace key retains its role cap if live membership is promoted.
+    await query(
+      `UPDATE octo.workspace_memberships SET role = 'operator', updated_at = now()
+       WHERE workspace_id = $1 AND principal_id = $2`,
+      [owner.workspace.id, member.principal.id]
+    );
+    const afterPromotionResponse = await request.get(
+      `/api/capabilities?workspaceId=${owner.workspace.id}`,
+      { headers: keyHeaders }
+    );
+    expect(afterPromotionResponse.status()).toBe(200);
+    const afterPromotion = (await afterPromotionResponse.json()) as CapabilityDiscovery;
+    expect(afterPromotion.workspace).toEqual({ id: owner.workspace.id, role: 'member' });
+    expect(actions(afterPromotion).has('files.upload')).toBe(false);
 
     const upload = await request.post('/api/files/upload', {
       headers: keyHeaders,
