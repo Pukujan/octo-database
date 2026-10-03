@@ -26,3 +26,4 @@ playwright-report/
 Thumbs.db
 deploy/gravebuster/.deploy-state
 deploy/gravebuster/*.log
+.dyad/
