@@ -160,6 +160,15 @@ export function capabilitiesForScopes(scopes: string[]): CapabilityDescriptor[] 
   return OCTO_CAPABILITIES.filter((capability) => granted.has(capability.requiredScope));
 }
 
+/** Workspace role required for the operations exposed by the current inventory. */
+export function minimumRoleForCapability(action: string): 'member' | 'operator' | 'admin' {
+  if (action === 'files.delete') return 'admin';
+  if (['files.upload', 'files.archive', 'files.restore', 'jobs.enqueue', 'jobs.run'].includes(action)) {
+    return 'operator';
+  }
+  return 'member';
+}
+
 /** True when the granted scopes permit the required scope. */
 export function hasScope(scopes: string[], required: OctoScope): boolean {
   return scopes.includes(required);
