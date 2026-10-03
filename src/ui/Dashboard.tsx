@@ -1,43 +1,16 @@
-/**
- * Octo Workspace Control Dashboard (Slices 1, 2, and 7)
- *
- * Polished control dashboard with Google sign-in, Guest login,
- * authorized workspace selector, file catalog (R2), and API key management.
- * Follows CGM visual direction guidelines (clear visual hierarchy, restrained palette,
- * consistent spacing, and expressive vector visuals).
- */
-
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  AppBar,
-  Avatar,
-  Box,
   Button,
-  Card,
-  CardContent,
-  Chip,
-  Container,
+  CssBaseline,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
-  Divider,
-  Grid,
-  MenuItem,
-  Select,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   TextField,
   ThemeProvider,
-  Toolbar,
-  Typography,
 } from '@mui/material';
-import { Principal, WorkspaceRole, WorkspaceSummary } from '../types/auth';
+import { Principal, WorkspaceSummary } from '../types/auth';
 import { WorkspaceContext } from '../auth/workspace-service';
 import { FileRecord } from '../storage/file-service';
 import { ApiKey } from '../api/keys';
@@ -46,7 +19,8 @@ import { OperationsActivity, OperationsJob, OperationsPage } from './OperationsP
 import { GalleryItem } from '../media/gallery-service';
 import { Gallery } from './Gallery';
 import { KeyManager, CreateKeyOptions } from './KeyManager';
-import { octoTheme } from './theme';
+import { createOctoTheme, OctoDesignSystemId } from './theme';
+import './dashboard.css';
 
 export interface DashboardProps {
   principal: Principal | null;
@@ -94,52 +68,105 @@ export interface DashboardProps {
   isLoading?: boolean;
 }
 
-// Decorative SVG Illustration for Login Hero per CGM visual guidelines
-const LoginHeroIllustration: React.FC = () => (
-  <svg
-    width="100%"
-    height="160"
-    viewBox="0 0 400 160"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-    style={{ maxWidth: 360, margin: '0 auto 16px auto', display: 'block' }}
-  >
-    <rect width="400" height="160" rx="12" fill="#eff6ff" />
-    {/* Central Octo Hub */}
-    <circle cx="200" cy="80" r="36" fill="#2563eb" fillOpacity="0.1" />
-    <circle cx="200" cy="80" r="26" fill="#2563eb" />
-    <text x="200" y="86" textAnchor="middle" fill="#ffffff" fontSize="20" fontWeight="bold">
-      🐙
-    </text>
+type DashboardView = 'overview' | 'files' | 'gallery' | 'operations' | 'access';
 
-    {/* Connected Nodes */}
-    {/* Left Node: Database / Workspace */}
-    <circle cx="90" cy="80" r="22" fill="#ffffff" stroke="#cbd5e1" strokeWidth="2" />
-    <text x="90" y="85" textAnchor="middle" fill="#475569" fontSize="13">
-      🗄️
-    </text>
-    <path d="M114 80H172" stroke="#93c5fd" strokeWidth="2" strokeDasharray="4 4" />
+const VIEW_LABELS: Record<DashboardView, string> = {
+  overview: 'Overview',
+  files: 'Files',
+  gallery: 'Gallery',
+  operations: 'Operations',
+  access: 'Access',
+};
 
-    {/* Right Node: Cloudflare R2 Active Storage */}
-    <circle cx="310" cy="80" r="22" fill="#ffffff" stroke="#cbd5e1" strokeWidth="2" />
-    <text x="310" y="85" textAnchor="middle" fill="#475569" fontSize="13">
-      ☁️
-    </text>
-    <path d="M228 80H286" stroke="#93c5fd" strokeWidth="2" strokeDasharray="4 4" />
+const NAV_ITEMS: Array<{ id: DashboardView; icon: IconName }> = [
+  { id: 'overview', icon: 'overview' },
+  { id: 'files', icon: 'files' },
+  { id: 'gallery', icon: 'gallery' },
+  { id: 'operations', icon: 'operations' },
+  { id: 'access', icon: 'access' },
+];
 
-    {/* Top Node: Scoped API Gateway */}
-    <circle cx="200" cy="25" r="16" fill="#ffffff" stroke="#cbd5e1" strokeWidth="2" />
-    <text x="200" y="30" textAnchor="middle" fill="#475569" fontSize="10">
-      🔑
-    </text>
-    <path d="M200 43V52" stroke="#93c5fd" strokeWidth="2" />
+type IconName = 'overview' | 'files' | 'gallery' | 'operations' | 'access' | 'chevron' | 'sun' | 'moon' | 'upload' | 'plus' | 'arrow' | 'alert' | 'document' | 'clock' | 'signout' | 'close';
 
-    {/* Bottom Label */}
-    <text x="200" y="142" textAnchor="middle" fill="#1e293b" fontSize="13" fontWeight="700">
-      Personal Control Plane • Workspaces • R2 Storage • Machine APIs
-    </text>
-  </svg>
-);
+const ICON_PATHS: Record<IconName, React.ReactNode> = {
+  overview: <><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="3.5" width="7" height="4" rx="1.5" /><rect x="13.5" y="10.5" width="7" height="10" rx="1.5" /><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" /></>,
+  files: <><path d="M3.5 7.5h6l2 2h9v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" /><path d="M3.5 7.5v-2a2 2 0 0 1 2-2h3l2 2h4" /></>,
+  gallery: <><rect x="3.5" y="3.5" width="17" height="17" rx="3" /><circle cx="9" cy="9" r="1.5" /><path d="m20.5 15-5-5L6 20.5" /></>,
+  operations: <><path d="M4 18.5h16" /><path d="M6 15V9M12 15V4M18 15v-4" /><circle cx="6" cy="7" r="1.5" /><circle cx="12" cy="17.5" r="1.5" /><circle cx="18" cy="9" r="1.5" /></>,
+  access: <><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 1 1 8 0v3" /><circle cx="12" cy="15.5" r="1" /><path d="M12 16.5v2" /></>,
+  chevron: <path d="m7 10 5 5 5-5" />,
+  sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2M12 19.5v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2.5 12h2m15 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>,
+  moon: <path d="M20.2 15.7A8.5 8.5 0 0 1 8.3 3.8 8.5 8.5 0 1 0 20.2 15.7Z" />,
+  upload: <><path d="M12 16V4" /><path d="m7 9 5-5 5 5" /><path d="M4 16.5v2A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5v-2" /></>,
+  plus: <><path d="M12 5v14M5 12h14" /></>,
+  arrow: <><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></>,
+  alert: <><path d="M12 3.5 2.8 20h18.4L12 3.5Z" /><path d="M12 9v4.5M12 17h.01" /></>,
+  document: <><path d="M7 3.5h7l4 4V20a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 20V5a1.5 1.5 0 0 1 1-1.5Z" /><path d="M14 3.5V8h4M9 12h6M9 16h6" /></>,
+  clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
+  signout: <><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" /><path d="M14 16l4-4-4-4M18 12H9" /></>,
+  close: <><path d="m6 6 12 12M18 6 6 18" /></>,
+};
+
+function Icon({ name, size = 17 }: { name: IconName; size?: number }) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {ICON_PATHS[name]}
+    </svg>
+  );
+}
+
+function Brand() {
+  return (
+    <div className="octo-brand">
+      <span className="octo-brand__mark">
+        <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24" fill="none">
+          <path d="M12 4.2c-3.5 0-6.4 2.6-6.4 5.8 0 2.1 1.2 3.9 3.1 4.9l-1.4 4.3 3.2-2.4h3l3.2 2.4-1.4-4.3c1.9-1 3.1-2.8 3.1-4.9 0-3.2-2.9-5.8-6.4-5.8Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+          <circle cx="9.5" cy="9.5" r=".65" fill="currentColor" />
+          <circle cx="14.5" cy="9.5" r=".65" fill="currentColor" />
+          <path d="M8.8 15.1 5.2 17.2M15.2 15.1l3.6 2.1M7.9 12.9l-3.1 1.2M16.1 12.9l3.1 1.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      </span>
+      <span>octo</span>
+    </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Date unavailable';
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date);
+}
+
+function FileKind({ mimeType }: { mimeType: string }) {
+  return <span className="octo-file-icon"><Icon name="document" size={17} /></span>;
+}
+
+function EmptyState({ title, copy, action }: { title: string; copy: string; action?: React.ReactNode }) {
+  return (
+    <div className="octo-empty">
+      <span className="octo-empty__mark"><Icon name="files" size={19} /></span>
+      <h3 className="octo-empty__title">{title}</h3>
+      <p className="octo-empty__copy">{copy}</p>
+      {action}
+    </div>
+  );
+}
 
 export const Dashboard: React.FC<DashboardProps> = ({
   principal,
@@ -174,26 +201,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onRevokeShare,
   isLoading = false,
 }) => {
-  const [selectedWsId, setSelectedWsId] = useState<string>(
-    activeContext?.workspace.id ?? workspaces[0]?.id ?? ''
-  );
-  const [isAdminOpen, setIsAdminOpen] = useState(false);
-
-  useEffect(() => {
-    if (activeContext?.workspace.id) {
-      setSelectedWsId(activeContext.workspace.id);
-    }
-  }, [activeContext?.workspace.id]);
-
+  const [selectedWsId, setSelectedWsId] = useState(activeContext?.workspace.id ?? workspaces[0]?.id ?? '');
+  const [view, setView] = useState<DashboardView>('overview');
+  const [designSystem, setDesignSystem] = useState<OctoDesignSystemId>(() => {
+    if (typeof window === 'undefined') return 'midnight';
+    return window.localStorage.getItem('octo-design-system') === 'paper' ? 'paper' : 'midnight';
+  });
   const [createdShareUrl, setCreatedShareUrl] = useState<string | null>(null);
   const [shareExpiry, setShareExpiry] = useState<number>(0);
-
-  // Workspace create/delete state (Slice 13).
+  const [shareError, setShareError] = useState<string | null>(null);
   const [isCreateWsOpen, setIsCreateWsOpen] = useState(false);
   const [newWsName, setNewWsName] = useState('');
   const [newWsDescription, setNewWsDescription] = useState('');
   const [newWsRetention, setNewWsRetention] = useState<number>(0);
   const [createdWsSecret, setCreatedWsSecret] = useState<{ name: string; secret: string } | null>(null);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [isDeleteWsOpen, setIsDeleteWsOpen] = useState(false);
   const [deleteSecret, setDeleteSecret] = useState('');
   const [deleteSlug, setDeleteSlug] = useState('');
@@ -201,51 +223,64 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [setupSecret, setSetupSecret] = useState('');
   const [setupCurrentSecret, setSetupCurrentSecret] = useState('');
   const [setupError, setSetupError] = useState<string | null>(null);
-
   const [uploadFileName, setUploadFileName] = useState('');
   const [uploadFileContent, setUploadFileContent] = useState('');
+  const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [fileActionError, setFileActionError] = useState<string | null>(null);
+  const binaryInputRef = useRef<HTMLInputElement>(null);
+  const theme = useMemo(() => createOctoTheme(designSystem), [designSystem]);
+
+  useEffect(() => {
+    if (activeContext?.workspace.id) setSelectedWsId(activeContext.workspace.id);
+  }, [activeContext?.workspace.id]);
+
+  useEffect(() => {
+    document.documentElement.dataset.octoSystem = designSystem;
+    window.localStorage.setItem('octo-design-system', designSystem);
+  }, [designSystem]);
 
   const runFileAction = async (action: () => Promise<void>, fallback: string) => {
     setFileActionError(null);
     try {
       await action();
-    } catch (e) {
-      setFileActionError(e instanceof Error ? e.message : fallback);
+    } catch (error) {
+      setFileActionError(error instanceof Error ? error.message : fallback);
     }
   };
 
-  const handleWorkspaceChange = (newId: string) => {
-    setSelectedWsId(newId);
-    onSelectWorkspace(newId);
+  const handleWorkspaceChange = (workspaceId: string) => {
+    setSelectedWsId(workspaceId);
+    onSelectWorkspace(workspaceId);
   };
 
   const handleCreateShare = async () => {
     if (!onCreateShare) return;
+    setShareError(null);
     try {
-      const res = await onCreateShare(shareExpiry > 0 ? shareExpiry : null);
-      setCreatedShareUrl(`${window.location.origin}/share/${res.rawToken}`);
-    } catch (e) {
-      console.error(e);
+      const result = await onCreateShare(shareExpiry > 0 ? shareExpiry : null);
+      setCreatedShareUrl(window.location.origin + '/share/' + result.rawToken);
+    } catch (error) {
+      setShareError(error instanceof Error ? error.message : 'Could not create this share link.');
     }
   };
 
   const handleCreateWorkspace = async () => {
     if (!newWsName.trim() || !onCreateWorkspace) return;
+    setWorkspaceError(null);
     try {
-      const res = await onCreateWorkspace({
+      const result = await onCreateWorkspace({
         name: newWsName.trim(),
         description: newWsDescription.trim() || undefined,
         retentionDays: newWsRetention > 0 ? newWsRetention : null,
       });
-      setCreatedWsSecret({ name: res.workspace.name, secret: res.rawSecret });
+      setCreatedWsSecret({ name: result.workspace.name, secret: result.rawSecret });
       setNewWsName('');
       setNewWsDescription('');
       setNewWsRetention(0);
       setIsCreateWsOpen(false);
-    } catch (e) {
-      setDeleteError(e instanceof Error ? e.message : 'Failed to create workspace');
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : 'Could not create the workspace.');
     }
   };
 
@@ -257,8 +292,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
       setIsDeleteWsOpen(false);
       setDeleteSecret('');
       setDeleteSlug('');
-    } catch (e) {
-      setDeleteError(e instanceof Error ? e.message : 'Failed to delete workspace');
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Could not delete the workspace.');
     }
   };
 
@@ -269,1074 +304,615 @@ export const Dashboard: React.FC<DashboardProps> = ({
       await onSetConfirmSecret(setupSecret, setupCurrentSecret || undefined);
       setSetupSecret('');
       setSetupCurrentSecret('');
-    } catch (e) {
-      setSetupError(e instanceof Error ? e.message : 'Failed to set confirmation secret');
+    } catch (error) {
+      setSetupError(error instanceof Error ? error.message : 'Could not update the confirmation secret.');
     }
   };
 
   const handleUpload = async () => {
     if (!uploadFileName.trim() || !onUploadFile) return;
+    setFileActionError(null);
+    setIsUploading(true);
     try {
-      setIsUploading(true);
       await onUploadFile(uploadFileName.trim(), 'text/plain', uploadFileContent);
       setUploadFileName('');
       setUploadFileContent('');
-    } catch (e) {
-      setFileActionError(e instanceof Error ? e.message : 'File upload failed');
+      setIsUploadDialogOpen(false);
+    } catch (error) {
+      setFileActionError(error instanceof Error ? error.message : 'File upload failed.');
     } finally {
       setIsUploading(false);
     }
   };
 
-  // 1. Unauthenticated View (Google Sign-In + Guest Login)
-  if (!principal) {
+  const handleBinaryFile = async (file?: File) => {
+    if (!file || !onUploadBinaryFile) return;
+    setIsUploading(true);
+    await runFileAction(() => onUploadBinaryFile(file), 'File upload failed.');
+    setIsUploading(false);
+  };
+
+  const activeWorkspaceName = activeContext?.workspace.name ?? 'Workspace';
+  const failedJobs = jobs.filter((job) => job.state === 'failed');
+  const pageSubtitle: Record<DashboardView, string> = {
+    overview: 'A clear view of what is in this workspace and what needs your attention.',
+    files: 'Find, add, and manage the files that belong to this workspace.',
+    gallery: 'Browse the images and video stored in this workspace.',
+    operations: 'Review background work and resolve jobs that need another try.',
+    access: 'Manage the people and machine credentials that can use this workspace.',
+  };
+
+  const uploadActions = (
+    <>
+      {onUploadBinaryFile && (
+        <Button
+          className="octo-button"
+          variant="contained"
+          onClick={() => binaryInputRef.current?.click()}
+          disabled={isUploading || !activeContext?.capabilities.canUploadFiles}
+          startIcon={<Icon name="upload" size={15} />}
+        >
+          Upload files
+        </Button>
+      )}
+      {onUploadFile && activeContext?.capabilities.canUploadFiles && (
+        <Button className="octo-button octo-button--quiet" variant="outlined" onClick={() => setIsUploadDialogOpen(true)}>
+          New text file
+        </Button>
+      )}
+    </>
+  );
+
+  const renderOverview = () => {
+    const recentFiles = files.slice(0, 5);
+    const recentMedia = galleryItems.slice(0, 3);
+    const latestActivity = activity.slice(0, 3);
+
     return (
-      <ThemeProvider theme={octoTheme}>
-        <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
-          <AppBar position="static">
-            <Toolbar sx={{ px: 3 }}>
-              <Typography variant="h6" component="div" sx={{ flexGrow: 1, fontWeight: 700 }}>
-                🐙 Octo
-              </Typography>
-              <Chip label="v0.1.0" size="small" variant="outlined" />
-            </Toolbar>
-          </AppBar>
+      <>
+        <section className="octo-overview-hero">
+          <div className="octo-overview-hero__content">
+            <div className="octo-overview-hero__meta">
+              <span className="octo-status-dot" />
+              <span>{activeContext?.role ?? 'Workspace'} workspace</span>
+              {principal?.isGuest && <span>Guest Sandbox</span>}
+            </div>
+            <h1 className="octo-overview-hero__title">{activeWorkspaceName}</h1>
+            <p className="octo-overview-hero__description">
+              {activeContext?.workspace.description || 'Your files and workspace activity, together in one place.'}
+            </p>
+            <div className="octo-overview-hero__actions">
+              {uploadActions}
+              <Button className="octo-button octo-button--quiet" variant="outlined" onClick={() => setView('files')} endIcon={<Icon name="arrow" size={15} />}>
+                Browse files
+              </Button>
+            </div>
+          </div>
+        </section>
 
-          <Container maxWidth="sm" sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', py: 4 }}>
-            <Card sx={{ p: 4, borderRadius: 3, boxShadow: '0 4px 20px -2px rgba(0,0,0,0.06)' }}>
-              <LoginHeroIllustration />
+        {failedJobs.length > 0 && (
+          <section className="octo-access-block">
+            <div className="octo-attention">
+              <span className="octo-attention__icon"><Icon name="alert" size={17} /></span>
+              <div style={{ flex: 1 }}>
+                <p className="octo-attention__title">
+                  {failedJobs.length} {failedJobs.length === 1 ? 'job needs' : 'jobs need'} attention
+                </p>
+                <p className="octo-attention__copy">
+                  {failedJobs[0]?.errorSummary || 'A background job failed and can be reviewed in Operations.'}
+                </p>
+              </div>
+              <Button className="octo-button octo-button--quiet" variant="outlined" onClick={() => setView('operations')}>
+                Review jobs
+              </Button>
+            </div>
+          </section>
+        )}
 
-              <Typography variant="h5" align="center" gutterBottom sx={{ fontWeight: 700 }}>
-                Welcome to Octo
-              </Typography>
-              <Typography variant="body2" color="text.secondary" align="center" sx={{ mb: 4, px: 2 }}>
-                Connect your database, manage private files in Cloudflare R2, and create scoped API keys for agents.
-              </Typography>
+        <div className="octo-data-grid">
+          <section className="octo-panel">
+            <div className="octo-panel__header">
+              <div>
+                <h2 className="octo-panel__title">File Catalog</h2>
+                <p className="octo-panel__subtitle">{files.length} {files.length === 1 ? 'file' : 'files'} in this workspace</p>
+              </div>
+              <button className="octo-text-link" onClick={() => setView('files')}>View all</button>
+            </div>
+            <div className="octo-panel__body">
+              {recentFiles.length === 0 ? (
+                <EmptyState title="Nothing here yet" copy="Add a file to start building this workspace." />
+              ) : (
+                <div className="octo-list">
+                  {recentFiles.map((file) => (
+                    <div className="octo-file-row" key={file.id}>
+                      <div className="octo-file-row__main">
+                        <FileKind mimeType={file.mimeType} />
+                        <div style={{ minWidth: 0 }}>
+                          <div className="octo-file-row__name">{file.name}</div>
+                          <div className="octo-file-row__meta">{formatBytes(file.sizeBytes)} · {file.mimeType}</div>
+                        </div>
+                      </div>
+                      <span className="octo-file-row__date">{formatDate(file.updatedAt || file.createdAt)}</span>
+                      <span className={'octo-status' + (file.archiveState === 'archived_drive' ? '' : ' octo-status--good')}>
+                        {file.archiveState === 'archived_drive' ? 'Archived' : 'Ready'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
 
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <Button
-                  variant="contained"
-                  size="large"
-                  fullWidth
-                  onClick={onSignInWithGoogle}
-                  disabled={isLoading || !googleAuthEnabled}
-                  aria-label={
-                    googleAuthEnabled
-                      ? 'Sign in with Google'
-                      : 'Google sign-in not configured'
-                  }
-                  sx={{ py: 1.5, fontSize: '0.95rem' }}
-                >
-                  {googleAuthEnabled ? 'Sign in with Google' : 'Google sign-in not configured'}
-                </Button>
-                {!googleAuthEnabled && (
-                  <Typography variant="caption" color="text.secondary" align="center">
-                    Set GOOGLE_OAUTH_CLIENT_ID to enable Google sign-in. Guest access works now.
-                  </Typography>
+          <div className="octo-page-stack">
+            <section className="octo-panel">
+              <div className="octo-panel__header">
+                <div>
+                  <h2 className="octo-panel__title">Gallery</h2>
+                  <p className="octo-panel__subtitle">{galleryItems.length} visual {galleryItems.length === 1 ? 'item' : 'items'}</p>
+                </div>
+                <button className="octo-text-link" onClick={() => setView('gallery')}>Open</button>
+              </div>
+              <div className="octo-panel__body">
+                {recentMedia.length === 0 ? (
+                  <EmptyState title="Your gallery is waiting" copy="Images and videos appear here after they are added to the workspace." />
+                ) : (
+                  <button className="octo-media-preview" onClick={() => setView('gallery')} aria-label="Open workspace gallery">
+                    {recentMedia.map((item) => (
+                      <span className="octo-media-preview__item" key={item.id}>
+                        <img src={item.thumbnailUrl} alt="" />
+                        <span className="octo-media-preview__shade" />
+                        <span className="octo-media-preview__name">{item.name}</span>
+                      </span>
+                    ))}
+                  </button>
                 )}
+              </div>
+            </section>
 
-                {onSignInAsGuest && (
-                  <Button
-                    variant="outlined"
-                    size="large"
-                    fullWidth
-                    onClick={onSignInAsGuest}
-                    disabled={isLoading}
-                    sx={{ py: 1.5, fontSize: '0.95rem' }}
-                  >
-                    Continue as Guest (Instant Access)
+            <section className="octo-panel">
+              <div className="octo-panel__header">
+                <div>
+                  <h2 className="octo-panel__title">Recent activity</h2>
+                  <p className="octo-panel__subtitle">What changed in this workspace</p>
+                </div>
+                <button className="octo-text-link" onClick={() => setView('operations')}>All activity</button>
+              </div>
+              <div className="octo-panel__body">
+                {latestActivity.length === 0 ? (
+                  <p className="octo-panel__subtitle">Activity will appear here as workspace jobs run.</p>
+                ) : (
+                  <div className="octo-list">
+                    {latestActivity.map((event) => (
+                      <div className="octo-file-row" key={event.id}>
+                        <span className="octo-file-icon"><Icon name="clock" size={16} /></span>
+                        <div style={{ minWidth: 0 }}>
+                          <div className="octo-file-row__name">{event.summary}</div>
+                          <div className="octo-file-row__meta">{formatDate(event.createdAt)}</div>
+                        </div>
+                        <span />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+        </div>
+      </>
+    );
+  };
+
+  const renderFiles = () => (
+    <div className="octo-page-stack">
+      {fileActionError && <p className="octo-error" role="alert">{fileActionError}</p>}
+      {activeContext?.capabilities.canUploadFiles && (
+        <section className="octo-upload-box">
+          <div>
+            <h2 className="octo-upload-box__title">Add something to this workspace</h2>
+            <p className="octo-upload-box__copy">Upload a file from this device or create a plain text file.</p>
+          </div>
+          <div className="octo-actions">{uploadActions}</div>
+        </section>
+      )}
+      <section className="octo-panel">
+        <div className="octo-panel__header">
+          <div>
+            <h2 className="octo-panel__title">All files</h2>
+            <p className="octo-panel__subtitle">{files.length} {files.length === 1 ? 'item' : 'items'}</p>
+          </div>
+        </div>
+        {files.length === 0 ? (
+          <div className="octo-panel__body">
+            <EmptyState title="Your workspace is empty" copy="Add a file and it will be ready to find here." />
+          </div>
+        ) : (
+          <div className="octo-table-wrap">
+            <table className="octo-table">
+              <thead>
+                <tr><th>Name</th><th>Type</th><th>Size</th><th>Added</th><th>Status</th><th aria-label="Actions" /></tr>
+              </thead>
+              <tbody>
+                {files.map((file) => {
+                  const archived = file.archiveState === 'archived_drive';
+                  const inProgress = file.archiveState === 'archiving' || file.archiveState === 'restoring';
+                  const issue = file.archiveState === 'reconciliation_required';
+                  const status = issue ? 'Needs attention' : inProgress ? 'In progress' : archived ? 'Archived' : 'Ready';
+                  const statusClass = issue ? ' octo-status--danger' : inProgress ? ' octo-status--warning' : archived ? '' : ' octo-status--good';
+                  return (
+                    <tr key={file.id}>
+                      <td>
+                        <div className="octo-file-row__main">
+                          <FileKind mimeType={file.mimeType} />
+                          <span>{file.name}</span>
+                        </div>
+                      </td>
+                      <td>{file.mimeType}</td>
+                      <td>{formatBytes(file.sizeBytes)}</td>
+                      <td>{formatDate(file.createdAt)}</td>
+                      <td><span className={'octo-status' + statusClass}>{status}</span></td>
+                      <td>
+                        <div className="octo-inline-actions">
+                          {onDownloadFile && (
+                            <Button className="octo-button octo-button--quiet" size="small" variant="outlined" onClick={() => void runFileAction(() => onDownloadFile(file.id), 'File download failed.')}>
+                              Download
+                            </Button>
+                          )}
+                          {!inProgress && (archived ? onRestoreFile : onArchiveFile) && (
+                            <Button
+                              className="octo-button octo-button--quiet"
+                              size="small"
+                              variant="outlined"
+                              onClick={() => void runFileAction(() => archived ? onRestoreFile!(file.id) : onArchiveFile!(file.id), archived ? 'File restore failed.' : 'File archive failed.')}
+                            >
+                              {archived ? 'Restore' : 'Archive'}
+                            </Button>
+                          )}
+                          {onDeleteFile && activeContext?.capabilities.canDeleteWorkspace && (
+                            <Button className="octo-button octo-button--danger" size="small" variant="outlined" onClick={() => void runFileAction(() => onDeleteFile(file.id), 'File deletion failed.')}>
+                              Remove
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+
+  const renderAccess = () => {
+    const retentionDays = workspaces.find((workspace) => workspace.id === activeContext?.workspace.id)?.retentionDays;
+    return (
+    <div className="octo-page-stack">
+      {activeContext && (
+        <div className="octo-settings-grid">
+          <section className="octo-panel">
+            <div className="octo-panel__header">
+              <div>
+                <h2 className="octo-panel__title">Workspace details</h2>
+                <p className="octo-panel__subtitle">Your place in this workspace</p>
+              </div>
+            </div>
+            <div className="octo-panel__body">
+              <div className="octo-settings-row"><span className="octo-settings-row__label">Workspace</span><span className="octo-settings-row__value">{activeContext.workspace.name}</span></div>
+              <div className="octo-settings-row"><span className="octo-settings-row__label">Your role</span><span className="octo-settings-row__value">{activeContext.role}</span></div>
+              <div className="octo-settings-row"><span className="octo-settings-row__label">Automatic archive</span><span className="octo-settings-row__value">{retentionDays ? 'After ' + retentionDays + ' days' : 'Off'}</span></div>
+              <div className="octo-settings-row"><span className="octo-settings-row__label">Description</span><span className="octo-settings-row__value">{activeContext.workspace.description || 'Not set'}</span></div>
+              {onDeleteWorkspace && activeContext.capabilities.canDeleteWorkspace && (
+                <div className="octo-settings-row">
+                  <span className="octo-settings-row__label">Workspace</span>
+                  <Button className="octo-button octo-button--danger" variant="outlined" size="small" onClick={() => { setDeleteError(null); setIsDeleteWsOpen(true); }}>Delete workspace</Button>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="octo-panel">
+            <div className="octo-panel__header">
+              <div>
+                <h2 className="octo-panel__title">Share links</h2>
+                <p className="octo-panel__subtitle">Read-only access to this workspace gallery</p>
+              </div>
+            </div>
+            <div className="octo-panel__body">
+              {createdShareUrl && (
+                <Alert severity="success" sx={{ mb: 2, wordBreak: 'break-all' }}>
+                  Copy this link now. Octo only shows the secret once: {createdShareUrl}
+                </Alert>
+              )}
+              {shareError && <p className="octo-error" role="alert">{shareError}</p>}
+              {onCreateShare && activeContext.capabilities.canManageSettings && (
+                <div className="octo-actions" style={{ marginBottom: 15 }}>
+                  <select className="octo-input" aria-label="Share link expiration" value={shareExpiry} onChange={(event) => setShareExpiry(Number(event.target.value))} style={{ width: 180 }}>
+                    <option value={0}>No expiry</option>
+                    <option value={1}>1 hour</option>
+                    <option value={24}>24 hours</option>
+                    <option value={168}>7 days</option>
+                  </select>
+                  <Button className="octo-button" variant="contained" onClick={() => void handleCreateShare()}>Create link</Button>
+                </div>
+              )}
+              {shares.length === 0 ? (
+                <p className="octo-panel__subtitle">No share links for this workspace.</p>
+              ) : (
+                <div className="octo-list">
+                  {shares.map((share) => (
+                    <div className="octo-settings-row" key={share.id}>
+                      <span className={'octo-status' + (share.active ? ' octo-status--good' : '')}>{share.active ? 'Active' : share.revokedAt ? 'Revoked' : 'Expired'}</span>
+                      <span className="octo-settings-row__value">{share.permission} · {share.validUntil ? 'Until ' + formatDate(share.validUntil) : 'No expiry'} · {share.accessCount} views</span>
+                      {onRevokeShare && share.active && (
+                        <Button className="octo-button octo-button--danger" variant="outlined" size="small" onClick={() => void onRevokeShare(share.id)}>Revoke</Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      <div className="octo-access-block">
+        <KeyManager
+          apiKeys={apiKeys}
+          workspaceName={activeWorkspaceName}
+          isPlatformOwner={Boolean(principal?.isPlatformOwner)}
+          onCreateApiKey={onCreateApiKey}
+          onRevokeApiKey={onRevokeApiKey}
+        />
+      </div>
+    </div>
+    );
+  };
+
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      {!principal ? (
+        <div className="octo-login">
+          <section className="octo-login__story">
+            <Brand />
+            <div>
+              <h1 className="octo-login__headline">Your work,<br /><span>within reach.</span></h1>
+              <p className="octo-login__copy">A calm home for the files and activity that matter to your workspace.</p>
+            </div>
+            <span className="octo-login__footnote">PRIVATE WORKSPACE · OCTO</span>
+          </section>
+          <section className="octo-login__action">
+            <div className="octo-login__card">
+              <span className="octo-login__eyebrow">Sign in to continue</span>
+              <h2 className="octo-login__title">Welcome to Octo</h2>
+              <p className="octo-login__description">Choose how you want to enter your workspace.</p>
+              <div className="octo-login__buttons">
+                {googleAuthEnabled ? (
+                  <Button className="octo-button" variant="contained" fullWidth onClick={onSignInWithGoogle} disabled={isLoading}>
+                    Sign in with Google
+                  </Button>
+                ) : (
+                  <Button className="octo-button" variant="contained" fullWidth disabled aria-label="Google sign-in not configured">
+                    Google sign-in not configured
                   </Button>
                 )}
-              </Box>
-            </Card>
-          </Container>
-        </Box>
-      </ThemeProvider>
-    );
-  }
-
-  // 2. Authenticated Control Dashboard
-  return (
-    <ThemeProvider theme={octoTheme}>
-      <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', pb: 6 }}>
-        {/* Navigation Bar */}
-        <AppBar position="static">
-          <Toolbar sx={{ justifyContent: 'space-between', px: { xs: 2, sm: 4 } }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-              <Typography variant="h6" sx={{ fontWeight: 700, letterSpacing: '-0.02em' }}>
-                🐙 Octo
-              </Typography>
-              <Chip
-                label="Control Plane"
-                size="small"
-                variant="outlined"
-                sx={{ fontSize: '0.75rem', borderColor: 'divider' }}
-              />
-              {principal.isPlatformOwner && (
-                <Chip
-                  label="👑 Platform Owner"
-                  size="small"
-                  color="primary"
-                  variant="filled"
-                  sx={{ fontSize: '0.75rem', fontWeight: 700 }}
-                />
+                {onSignInAsGuest && (
+                  <Button className="octo-button octo-button--quiet" variant="outlined" fullWidth onClick={onSignInAsGuest} disabled={isLoading}>
+                    Continue as Guest
+                  </Button>
+                )}
+              </div>
+              {!googleAuthEnabled && (
+                <p className="octo-login__note">Google sign-in is not configured for this environment. Guest access remains available.</p>
               )}
-              {principal.isGuest && (
-                <Chip
-                  label="Guest Sandbox"
-                  size="small"
-                  color="warning"
-                  variant="filled"
-                  sx={{ fontSize: '0.75rem', fontWeight: 600 }}
-                />
-              )}
-            </Box>
-
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              {principal.isPlatformOwner && (
-                <Button
-                  variant="contained"
-                  color="primary"
-                  size="small"
-                  onClick={() => setIsAdminOpen(true)}
-                  sx={{ textTransform: 'none', fontWeight: 600 }}
-                >
-                  ⚡ Platform Admin
-                </Button>
-              )}
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Avatar
-                  src={principal.avatarUrl ?? undefined}
-                  alt={principal.displayName ?? principal.email}
-                  sx={{ width: 34, height: 34, bgcolor: 'primary.main', fontSize: '0.875rem' }}
-                >
-                  {principal.email.charAt(0).toUpperCase()}
-                </Avatar>
-                <Box sx={{ display: { xs: 'none', sm: 'block' }, textAlign: 'left' }}>
-                  <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.2 }}>
-                    {principal.displayName ?? principal.email}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1 }}>
-                    {principal.email}
-                  </Typography>
-                </Box>
-              </Box>
-
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={onSignOut}
-                disabled={isLoading}
-                sx={{ textTransform: 'none' }}
-              >
-                Sign out
-              </Button>
-            </Box>
-          </Toolbar>
-        </AppBar>
-
-        <Container maxWidth="lg" sx={{ py: 4 }}>
-          {/* Workspace Selection & Header */}
-          <Box
-            sx={{
-              display: 'flex',
-              flexDirection: { xs: 'column', sm: 'row' },
-              justifyContent: 'space-between',
-              alignItems: { xs: 'flex-start', sm: 'center' },
-              gap: 2,
-              mb: 4,
-            }}
-          >
-            <div>
-              <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                Workspace Control Dashboard
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Inspect files, active Cloudflare R2 storage, and machine API keys.
-              </Typography>
             </div>
+          </section>
+        </div>
+      ) : (
+        <div className="octo-app">
+          <div className="octo-shell">
+            <aside className="octo-sidebar">
+              <div className="octo-sidebar__brand">
+                <Brand />
+                <span className="octo-sidebar__product">Workspace Control Dashboard</span>
+              </div>
+              <label className="octo-eyebrow" htmlFor="workspace-select" style={{ padding: '0 10px 8px' }}>Workspace</label>
+              <div className="octo-workspace-select">
+                <span className="octo-workspace-select__icon">{activeWorkspaceName.slice(0, 1).toUpperCase()}</span>
+                <span className="octo-workspace-select__copy">
+                  <span className="octo-workspace-select__name">{activeWorkspaceName}</span>
+                  <span className="octo-workspace-select__meta">{activeContext?.role ?? 'Choose a workspace'}</span>
+                </span>
+                <Icon name="chevron" size={15} />
+                <select
+                  id="workspace-select"
+                  aria-label="Select workspace"
+                  value={selectedWsId}
+                  onChange={(event) => handleWorkspaceChange(event.target.value)}
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer', zIndex: 2 }}
+                >
+                  {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
+                </select>
+              </div>
 
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-              {workspaces.length > 0 && (
-                <>
-                  <Typography variant="body2" color="text.secondary">
-                    Active Workspace:
-                  </Typography>
-                  <Select
-                    size="small"
-                    value={selectedWsId || (workspaces[0]?.id ?? '')}
-                    onChange={(e) => handleWorkspaceChange(e.target.value)}
-                    sx={{ minWidth: 220, bgcolor: 'background.paper', borderRadius: 1.5 }}
+              <nav className="octo-nav" aria-label="Workspace">
+                {NAV_ITEMS.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className="octo-nav__item"
+                    aria-current={view === item.id ? 'page' : undefined}
+                    aria-label={VIEW_LABELS[item.id]}
+                    title={VIEW_LABELS[item.id]}
+                    onClick={() => setView(item.id)}
                   >
-                    {workspaces.map((ws) => (
-                      <MenuItem key={ws.id} value={ws.id}>
-                        {ws.name} ({ws.role})
-                      </MenuItem>
-                    ))}
-                  </Select>
+                    <Icon name={item.icon} size={17} />
+                    <span className="octo-nav__label">{VIEW_LABELS[item.id]}</span>
+                    {item.id === 'operations' && failedJobs.length > 0 && <span className="octo-nav__count">{failedJobs.length}</span>}
+                  </button>
+                ))}
+              </nav>
+
+              {onCreateWorkspace && (
+                <button className="octo-nav__item" type="button" style={{ marginTop: 14 }} onClick={() => { setWorkspaceError(null); setIsCreateWsOpen(true); }}>
+                  <Icon name="plus" size={17} /><span className="octo-nav__label">New Workspace</span>
+                </button>
+              )}
+
+              <div className="octo-sidebar__bottom">
+                <button className="octo-nav__item" type="button" onClick={() => setDesignSystem(designSystem === 'midnight' ? 'paper' : 'midnight')} aria-label={'Switch to ' + (designSystem === 'midnight' ? 'light' : 'dark') + ' appearance'}>
+                  <Icon name={designSystem === 'midnight' ? 'sun' : 'moon'} size={17} />
+                  <span className="octo-nav__label">Appearance</span>
+                  <span className="octo-nav__count">{designSystem === 'midnight' ? 'Dark' : 'Light'}</span>
+                </button>
+                <div className="octo-user">
+                  <span className="octo-user__avatar">
+                    {principal.avatarUrl ? <img src={principal.avatarUrl} alt="" /> : principal.email.charAt(0).toUpperCase()}
+                  </span>
+                  <span className="octo-user__copy">
+                    <span className="octo-user__name">{principal.displayName || principal.email}</span>
+                    <span className="octo-user__email">{principal.isGuest ? 'Guest session' : principal.email}</span>
+                  </span>
+                  <button className="octo-text-link" onClick={onSignOut} aria-label="Sign out" disabled={isLoading}><Icon name="signout" size={16} /></button>
+                </div>
+              </div>
+            </aside>
+
+            <main className="octo-main">
+              <header className="octo-topbar">
+                <div className="octo-breadcrumb"><span>{activeWorkspaceName}</span><span>/</span><strong>{VIEW_LABELS[view]}</strong></div>
+                <div className="octo-topbar__actions">
+                  <button className="octo-theme-toggle MuiButton-root" type="button" onClick={() => setDesignSystem(designSystem === 'midnight' ? 'paper' : 'midnight')} aria-label={'Switch to ' + (designSystem === 'midnight' ? 'light' : 'dark') + ' appearance'} title={'Switch to ' + (designSystem === 'midnight' ? 'light' : 'dark') + ' appearance'}>
+                    <Icon name={designSystem === 'midnight' ? 'sun' : 'moon'} />
+                  </button>
+                </div>
+              </header>
+
+              <div className="octo-content">
+                {workspaces.length === 0 ? (
+                  <section className="octo-panel">
+                    <div className="octo-panel__body">
+                      <EmptyState
+                        title="No workspace yet"
+                        copy="Create a workspace to start storing files and sharing them with the people or agents you choose."
+                        action={onCreateWorkspace && <Button className="octo-button" variant="contained" onClick={() => setIsCreateWsOpen(true)}>Create workspace</Button>}
+                      />
+                    </div>
+                  </section>
+                ) : !activeContext ? (
+                  <section className="octo-panel"><div className="octo-panel__body"><EmptyState title="Loading workspace" copy="Your workspace details are on their way." /></div></section>
+                ) : (
+                  <>
+                    {view !== 'overview' && view !== 'gallery' && view !== 'operations' && (
+                      <header className="octo-page-header">
+                        <div>
+                          <span className="octo-eyebrow">{activeWorkspaceName}</span>
+                          <h1 className="octo-page-header__title">{VIEW_LABELS[view]}</h1>
+                          <p className="octo-page-header__subtitle">{pageSubtitle[view]}</p>
+                        </div>
+                      </header>
+                    )}
+                    {fileActionError && view !== 'files' && <p className="octo-error" role="alert">{fileActionError}</p>}
+                    {view === 'overview' && renderOverview()}
+                    {view === 'files' && renderFiles()}
+                    {view === 'gallery' && <Gallery items={galleryItems} workspaceName={activeWorkspaceName} />}
+                    {view === 'operations' && (
+                      <OperationsPage jobs={jobs} activity={activity} onRetryJob={onRetryJob} onRunWorker={onRunWorker} />
+                    )}
+                    {view === 'access' && renderAccess()}
+                  </>
+                )}
+              </div>
+            </main>
+          </div>
+        </div>
+      )}
+
+      <input
+        ref={binaryInputRef}
+        type="file"
+        hidden
+        aria-label="Upload file"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          void handleBinaryFile(file);
+          event.target.value = '';
+        }}
+      />
+
+      <Dialog open={isUploadDialogOpen} onClose={() => setIsUploadDialogOpen(false)} maxWidth="sm" fullWidth PaperProps={{ className: 'octo-dialog-paper' }}>
+        <DialogTitle>Create a text file</DialogTitle>
+        <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
+          <TextField label="File name" placeholder="notes.txt" value={uploadFileName} onChange={(event) => setUploadFileName(event.target.value)} fullWidth />
+          <TextField label="Content" placeholder="Write something useful…" value={uploadFileContent} onChange={(event) => setUploadFileContent(event.target.value)} multiline minRows={5} fullWidth />
+          {fileActionError && <Alert severity="error">{fileActionError}</Alert>}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button onClick={() => setIsUploadDialogOpen(false)}>Cancel</Button>
+          <Button variant="contained" disabled={!uploadFileName.trim() || isUploading} onClick={() => void handleUpload()}>Save file</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={isCreateWsOpen} onClose={() => setIsCreateWsOpen(false)} maxWidth="sm" fullWidth PaperProps={{ className: 'octo-dialog-paper' }}>
+        <DialogTitle>New Workspace</DialogTitle>
+        <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
+          <TextField label="Name" value={newWsName} onChange={(event) => setNewWsName(event.target.value)} fullWidth />
+          <TextField label="Description" value={newWsDescription} onChange={(event) => setNewWsDescription(event.target.value)} fullWidth />
+          <TextField label="Automatic archive after (days)" type="number" value={newWsRetention || ''} onChange={(event) => setNewWsRetention(Number(event.target.value) || 0)} fullWidth helperText="Leave empty to keep automatic archive off." />
+          {workspaceError && <Alert severity="error">{workspaceError}</Alert>}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button onClick={() => setIsCreateWsOpen(false)}>Cancel</Button>
+          <Button variant="contained" disabled={!newWsName.trim()} onClick={() => void handleCreateWorkspace()}>Create Workspace</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(createdWsSecret)} onClose={() => setCreatedWsSecret(null)} maxWidth="sm" fullWidth PaperProps={{ className: 'octo-dialog-paper' }}>
+        <DialogTitle>Workspace created</DialogTitle>
+        <DialogContent>
+          <p className="octo-panel__subtitle">Save this key for {createdWsSecret?.name}. It will not be shown again.</p>
+          <pre style={{ overflowX: 'auto', padding: 15, borderRadius: 10, color: 'var(--octo-text)', background: 'var(--octo-raised)' }}>{createdWsSecret?.secret}</pre>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button variant="contained" onClick={() => setCreatedWsSecret(null)}>Done</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={isDeleteWsOpen} onClose={() => setIsDeleteWsOpen(false)} maxWidth="sm" fullWidth PaperProps={{ className: 'octo-dialog-paper' }}>
+        <DialogTitle>Delete {activeContext?.workspace.name}?</DialogTitle>
+        <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
+          <Alert severity="warning">This permanently deletes the workspace and its files, keys, shares, memberships, and jobs.</Alert>
+          {!confirmSecretSet ? (
+            <>
+              <p className="octo-panel__subtitle">Set a confirmation secret before deleting a workspace.</p>
+              {onSetConfirmSecret && (
+                <>
+                  <TextField label="New confirmation secret (8 characters minimum)" type="password" value={setupSecret} onChange={(event) => setSetupSecret(event.target.value)} fullWidth />
+                  <TextField label="Current secret, if changing one" type="password" value={setupCurrentSecret} onChange={(event) => setSetupCurrentSecret(event.target.value)} fullWidth />
+                  {setupError && <Alert severity="error">{setupError}</Alert>}
+                  <Button variant="contained" disabled={setupSecret.length < 8} onClick={() => void handleSetConfirmSecret()}>Set confirmation secret</Button>
                 </>
               )}
-              {onCreateWorkspace && (
-                <Button
-                  variant="contained"
-                  size="small"
-                  onClick={() => setIsCreateWsOpen(true)}
-                  sx={{ textTransform: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}
-                >
-                  ＋ New Workspace
-                </Button>
-              )}
-            </Box>
-          </Box>
-
-          {/* Empty / Unauthorized State */}
-          {workspaces.length === 0 ? (
-            <Card sx={{ p: 4, textAlign: 'center', borderRadius: 2 }}>
-              <Typography variant="h6" gutterBottom>
-                No Authorized Workspaces
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: onCreateWorkspace ? 3 : 0 }}>
-                Your account ({principal.email}) does not belong to any active workspaces yet.
-              </Typography>
-              {onCreateWorkspace && (
-                <Button variant="contained" onClick={() => setIsCreateWsOpen(true)} sx={{ textTransform: 'none' }}>
-                  ＋ Create your first workspace
-                </Button>
-              )}
-            </Card>
-          ) : activeContext ? (
-            <Box>
-              {/* Active Workspace Metadata */}
-              <Card sx={{ mb: 4, borderRadius: 2 }}>
-                <CardContent sx={{ pb: 1 }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
-                    <div>
-                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                        {activeContext.workspace.name}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Slug: <code>{activeContext.workspace.slug}</code>
-                      </Typography>
-                    </div>
-                    <Chip
-                      label={`Role: ${activeContext.role.toUpperCase()}`}
-                      color={activeContext.role === 'owner' ? 'primary' : 'default'}
-                      size="small"
-                      sx={{ fontWeight: 600 }}
-                    />
-                  </Box>
-
-                  {activeContext.workspace.description && (
-                    <Typography variant="body2" sx={{ mb: 2, color: 'text.secondary' }}>
-                      {activeContext.workspace.description}
-                    </Typography>
-                  )}
-
-                  <Typography variant="body2" color="text.secondary">
-                    Cold archive policy:{' '}
-                    {workspaces.find((w) => w.id === activeContext.workspace.id)?.retentionDays ? (
-                      <>
-                        active files older than{' '}
-                        <strong>
-                          {workspaces.find((w) => w.id === activeContext.workspace.id)?.retentionDays} days
-                        </strong>{' '}
-                        auto-archive to Google Drive. Recalled on demand on the next read.
-                      </>
-                    ) : (
-                      'no automatic archive (files stay in R2 until you archive them).'
-                    )}
-                  </Typography>
-
-                  <Divider sx={{ my: 2 }} />
-
-                  <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
-                    Workspace Capabilities:
-                  </Typography>
-                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <Chip
-                      label="Upload Files (R2)"
-                      size="small"
-                      variant={activeContext.capabilities.canUploadFiles ? 'filled' : 'outlined'}
-                      color={activeContext.capabilities.canUploadFiles ? 'success' : 'default'}
-                    />
-                    <Chip
-                      label="Manage Members"
-                      size="small"
-                      variant={activeContext.capabilities.canManageMembers ? 'filled' : 'outlined'}
-                      color={activeContext.capabilities.canManageMembers ? 'success' : 'default'}
-                    />
-                    <Chip
-                      label="Manage Settings"
-                      size="small"
-                      variant={activeContext.capabilities.canManageSettings ? 'filled' : 'outlined'}
-                      color={activeContext.capabilities.canManageSettings ? 'success' : 'default'}
-                    />
-                    <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
-                    {onDeleteWorkspace && activeContext.capabilities.canDeleteWorkspace ? (
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        color="error"
-                        onClick={() => {
-                          setDeleteError(null);
-                          setIsDeleteWsOpen(true);
-                        }}
-                        sx={{ textTransform: 'none' }}
-                      >
-                        Delete Workspace
-                      </Button>
-                    ) : (
-                      <Chip label="Delete Workspace" size="small" variant="outlined" color="error" />
-                    )}
-                  </Box>
-                </CardContent>
-              </Card>
-
-              {/* File Catalog (Slice 2) */}
-              <Card sx={{ mb: 4, borderRadius: 2 }}>
-                <CardContent>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                    <div>
-                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                        📁 File Catalog
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Logical file records backed by the configured storage tier.
-                      </Typography>
-                    </div>
-                  </Box>
-
-                  {fileActionError && (
-                    <Alert severity="error" sx={{ mb: 2 }} onClose={() => setFileActionError(null)}>
-                      {fileActionError}
-                    </Alert>
-                  )}
-
-                  {/* Upload Form */}
-                  {onUploadFile && activeContext.capabilities.canUploadFiles && (
-                    <Box
-                      sx={{
-                        display: 'flex',
-                        gap: 1.5,
-                        alignItems: 'center',
-                        mb: 3,
-                        flexWrap: 'wrap',
-                      }}
-                    >
-                      <TextField
-                        size="small"
-                        label="File Name"
-                        placeholder="notes.txt"
-                        value={uploadFileName}
-                        onChange={(e) => setUploadFileName(e.target.value)}
-                        sx={{ width: 200 }}
-                      />
-                      <TextField
-                        size="small"
-                        label="Content"
-                        placeholder="File body content..."
-                        value={uploadFileContent}
-                        onChange={(e) => setUploadFileContent(e.target.value)}
-                        sx={{ flex: '1 1 260px', minWidth: 220 }}
-                      />
-                      <Button
-                        variant="contained"
-                        size="medium"
-                        onClick={handleUpload}
-                        disabled={isUploading || !uploadFileName.trim()}
-                        sx={{ whiteSpace: 'nowrap' }}
-                      >
-                        Upload Text File
-                      </Button>
-
-                      {onUploadBinaryFile && (
-                        <Button
-                          variant="outlined"
-                          size="medium"
-                          component="label"
-                          disabled={isUploading}
-                          sx={{ whiteSpace: 'nowrap' }}
-                        >
-                          Upload File
-                          <input
-                            type="file"
-                            hidden
-                            aria-label="Upload file"
-                            onChange={async (e) => {
-                              const chosen = e.target.files?.[0];
-                              if (chosen) {
-                                setIsUploading(true);
-                                try {
-                                  await runFileAction(() => onUploadBinaryFile(chosen), 'File upload failed');
-                                } finally {
-                                  setIsUploading(false);
-                                  e.target.value = '';
-                                }
-                              }
-                            }}
-                          />
-                        </Button>
-                      )}
-                    </Box>
-                  )}
-
-                  {files.length === 0 ? (
-                    <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
-                      No files uploaded yet in this workspace.
-                    </Typography>
-                  ) : (
-                    <TableContainer>
-                      <Table size="small">
-                        <TableHead>
-                          <TableRow>
-                            <TableCell sx={{ fontWeight: 600, width: '24%' }}>Name</TableCell>
-                            <TableCell sx={{ fontWeight: 600, width: '10%' }}>Size</TableCell>
-                            <TableCell sx={{ fontWeight: 600, width: '14%' }}>MIME Type</TableCell>
-                            <TableCell sx={{ fontWeight: 600, width: '16%' }}>Storage Tier</TableCell>
-                            <TableCell sx={{ fontWeight: 600 }}>Storage Key</TableCell>
-                            <TableCell sx={{ fontWeight: 600, width: '24%' }} align="right">
-                              Actions
-                            </TableCell>
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {files.map((f) => (
-                            <TableRow key={f.id}>
-                              <TableCell sx={{ fontWeight: 500 }}>{f.name}</TableCell>
-                              <TableCell sx={{ whiteSpace: 'nowrap' }}>{f.sizeBytes} B</TableCell>
-                              <TableCell sx={{ whiteSpace: 'nowrap' }}>{f.mimeType}</TableCell>
-                              <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                                <Chip
-                                  size="small"
-                                  label={
-                                    f.archiveState === 'archived_drive'
-                                      ? 'Drive (Cold)'
-                                      : f.archiveState === 'archiving'
-                                      ? 'Archiving...'
-                                      : f.archiveState === 'restoring'
-                                      ? 'Restoring...'
-                                      : f.archiveState === 'reconciliation_required'
-                                      ? 'Needs Reconcile'
-                                      : 'Active'
-                                  }
-                                  color={
-                                    f.archiveState === 'archived_drive'
-                                      ? 'info'
-                                      : f.archiveState === 'reconciliation_required'
-                                      ? 'error'
-                                      : f.archiveState === 'archiving' || f.archiveState === 'restoring'
-                                      ? 'warning'
-                                      : 'success'
-                                  }
-                                  variant="outlined"
-                                />
-                              </TableCell>
-                              <TableCell
-                                sx={{
-                                  maxWidth: 220,
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                }}
-                                title={f.storageKey}
-                              >
-                                <code>{f.storageKey}</code>
-                              </TableCell>
-                              <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
-                                {onDownloadFile && (
-                                  <Button
-                                    size="small"
-                                    variant="outlined"
-                                    onClick={() => void runFileAction(() => onDownloadFile(f.id), 'File download failed')}
-                                    sx={{ mr: 1 }}
-                                  >
-                                    Download
-                                  </Button>
-                                )}
-                                {f.archiveState === 'archived_drive' ? (
-                                  onRestoreFile && (
-                                    <Button
-                                      size="small"
-                                      variant="outlined"
-                                      color="info"
-                                      onClick={() => void runFileAction(() => onRestoreFile(f.id), 'File restore failed')}
-                                      sx={{ mr: 1 }}
-                                    >
-                                      Restore
-                                    </Button>
-                                  )
-                                ) : (
-                                  onArchiveFile && (
-                                    <Button
-                                      size="small"
-                                      variant="outlined"
-                                      color="secondary"
-                                      onClick={() => void runFileAction(() => onArchiveFile(f.id), 'File archive failed')}
-                                      sx={{ mr: 1 }}
-                                    >
-                                      Archive
-                                    </Button>
-                                  )
-                                )}
-                                {onDeleteFile && activeContext.capabilities.canDeleteWorkspace && (
-                                  <Button
-                                    size="small"
-                                    variant="outlined"
-                                    color="error"
-                                    onClick={() => void runFileAction(() => onDeleteFile(f.id), 'File deletion failed')}
-                                  >
-                                    Delete
-                                  </Button>
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </TableContainer>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Workspace Gallery (Slice 3) */}
-              <Card sx={{ mb: 4, borderRadius: 2 }}>
-                <CardContent sx={{ pb: 1 }}>
-                  <Gallery
-                    items={galleryItems}
-                    workspaceName={activeContext.workspace.name}
-                  />
-                </CardContent>
-              </Card>
-
-              {/* Operations (Slice 6) */}
-              <Card sx={{ mb: 4, borderRadius: 2 }}>
-                <CardContent>
-                  <OperationsPage
-                    jobs={jobs}
-                    activity={activity}
-                    onRetryJob={onRetryJob}
-                    onRunWorker={onRunWorker}
-                  />
-                </CardContent>
-              </Card>
-
-              {/* Scoped Share Links (Slice 4) */}
-              <Card sx={{ mb: 4, borderRadius: 2 }}>
-                <CardContent>
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                      🔗 Scoped Share Links
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      Read-only links that expose exactly this gallery. Anyone with the link can view it;
-                      revoking takes effect immediately.
-                    </Typography>
-                  </Box>
-
-                  {createdShareUrl && (
-                    <Card sx={{ p: 2, mb: 3, bgcolor: '#f0fdf4', borderColor: '#86efac', borderRadius: 2 }}>
-                      <Typography variant="subtitle2" sx={{ color: '#166534', fontWeight: 600 }}>
-                        Share link created (copy now — it is not stored and cannot be shown again):
-                      </Typography>
-                      <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all', mt: 0.5 }}>
-                        {createdShareUrl}
-                      </Typography>
-                    </Card>
-                  )}
-
-                  {onCreateShare && activeContext.capabilities.canManageSettings && (
-                    <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', mb: 3, flexWrap: 'wrap' }}>
-                      <Select
-                        size="small"
-                        value={shareExpiry}
-                        onChange={(e) => setShareExpiry(Number(e.target.value))}
-                        sx={{ minWidth: 230 }}
-                      >
-                        <MenuItem value={0}>No expiry</MenuItem>
-                        <MenuItem value={1}>Expires in 1 hour</MenuItem>
-                        <MenuItem value={24}>Expires in 24 hours</MenuItem>
-                        <MenuItem value={168}>Expires in 7 days</MenuItem>
-                      </Select>
-                      <Button
-                        variant="contained"
-                        size="medium"
-                        onClick={handleCreateShare}
-                        disabled={!onCreateShare}
-                        sx={{ whiteSpace: 'nowrap' }}
-                      >
-                        Create Share Link
-                      </Button>
-                    </Box>
-                  )}
-
-                  {shares.length === 0 ? (
-                    <Typography variant="body2" color="text.secondary">
-                      No share links created yet.
-                    </Typography>
-                  ) : (
-                    <TableContainer>
-                      <Table size="small">
-                        <TableHead>
-                          <TableRow>
-                            <TableCell sx={{ fontWeight: 600, width: '14%' }}>Status</TableCell>
-                            <TableCell sx={{ fontWeight: 600, width: '14%' }}>Permission</TableCell>
-                            <TableCell sx={{ fontWeight: 600 }}>Expires</TableCell>
-                            <TableCell sx={{ fontWeight: 600, width: '14%' }}>Views</TableCell>
-                            <TableCell sx={{ fontWeight: 600, width: '14%' }} align="right">
-                              Actions
-                            </TableCell>
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {shares.map((sh) => (
-                            <TableRow key={sh.id}>
-                              <TableCell>
-                                <Chip
-                                  label={sh.active ? 'Active' : sh.revokedAt ? 'Revoked' : 'Expired'}
-                                  size="small"
-                                  color={sh.active ? 'success' : 'default'}
-                                />
-                              </TableCell>
-                              <TableCell sx={{ whiteSpace: 'nowrap' }}>{sh.permission}</TableCell>
-                              <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                                {sh.validUntil ? new Date(sh.validUntil).toLocaleString() : 'Never'}
-                              </TableCell>
-                              <TableCell>{sh.accessCount}</TableCell>
-                              <TableCell align="right">
-                                {onRevokeShare && sh.active && (
-                                  <Button
-                                    size="small"
-                                    variant="outlined"
-                                    color="error"
-                                    onClick={() => onRevokeShare(sh.id)}
-                                    sx={{ whiteSpace: 'nowrap' }}
-                                  >
-                                    Revoke
-                                  </Button>
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </TableContainer>
-                  )}
-                </CardContent>
-              </Card>
-
-              <KeyManager
-                apiKeys={apiKeys}
-                workspaceName={activeContext.workspace.name}
-                isPlatformOwner={principal.isPlatformOwner}
-                onCreateApiKey={onCreateApiKey}
-                onRevokeApiKey={onRevokeApiKey}
-              />
-            </Box>
+            </>
           ) : (
-            <Card sx={{ p: 4, textAlign: 'center' }}>
-              <Typography variant="body2" color="text.secondary">
-                Loading workspace details...
-              </Typography>
-            </Card>
+            <>
+              <TextField label={'Type ' + (activeContext?.workspace.slug ?? '') + ' to confirm'} value={deleteSlug} onChange={(event) => setDeleteSlug(event.target.value)} fullWidth />
+              <TextField label="Confirmation secret" type="password" value={deleteSecret} onChange={(event) => setDeleteSecret(event.target.value)} fullWidth />
+              {deleteError && <Alert severity="error">{deleteError}</Alert>}
+            </>
           )}
-        </Container>
-
-        {/* New Workspace Dialog (Slice 13) */}
-        <Dialog
-          open={isCreateWsOpen}
-          onClose={() => setIsCreateWsOpen(false)}
-          maxWidth="sm"
-          fullWidth
-          aria-labelledby="new-workspace-dialog-title"
-        >
-          <DialogTitle id="new-workspace-dialog-title" sx={{ fontWeight: 700 }}>
-            ＋ New Workspace
-          </DialogTitle>
-          <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-            <Typography variant="body2" color="text.secondary">
-              A workspace is a database: its own files, gallery, and one auto-provisioned API key.
-              The key secret is shown once, right after creation.
-            </Typography>
-            <TextField
-              label="Name"
-              placeholder="e.g. Inventory DB"
-              value={newWsName}
-              onChange={(e) => setNewWsName(e.target.value)}
-              fullWidth
-              size="small"
-              autoFocus
-            />
-            <TextField
-              label="Description (optional)"
-              value={newWsDescription}
-              onChange={(e) => setNewWsDescription(e.target.value)}
-              fullWidth
-              size="small"
-            />
-            <Box>
-              <TextField
-                label="Retention (days, optional)"
-                type="number"
-                value={newWsRetention || ''}
-                onChange={(e) => setNewWsRetention(Number(e.target.value))}
-                size="small"
-                sx={{ width: 220 }}
-                inputProps={{ min: 0 }}
-              />
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                Active files older than this auto-archive to Google Drive (cold). Blank = never
-                auto-archive.
-              </Typography>
-            </Box>
-          </DialogContent>
-          <DialogActions sx={{ px: 3, py: 1.5 }}>
-            <Button onClick={() => setIsCreateWsOpen(false)} sx={{ textTransform: 'none' }}>
-              Cancel
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button onClick={() => setIsDeleteWsOpen(false)}>Cancel</Button>
+          {confirmSecretSet && (
+            <Button color="error" variant="contained" disabled={!deleteSecret || deleteSlug !== activeContext?.workspace.slug} onClick={() => void handleDeleteWorkspace()}>
+              Delete workspace
             </Button>
-            <Button
-              variant="contained"
-              onClick={handleCreateWorkspace}
-              disabled={!newWsName.trim()}
-              sx={{ textTransform: 'none' }}
-            >
-              Create Workspace
-            </Button>
-          </DialogActions>
-        </Dialog>
-
-        {/* Auto-provisioned workspace key (shown once) */}
-        <Dialog
-          open={Boolean(createdWsSecret)}
-          onClose={() => setCreatedWsSecret(null)}
-          maxWidth="sm"
-          fullWidth
-          aria-labelledby="ws-key-dialog-title"
-        >
-          <DialogTitle id="ws-key-dialog-title" sx={{ fontWeight: 700 }}>
-            ✅ Workspace created
-          </DialogTitle>
-          <DialogContent dividers>
-            <Typography variant="body2" sx={{ mb: 2 }}>
-              <strong>{createdWsSecret?.name}</strong> is ready. Its workspace API key was
-              auto-provisioned. Copy it now — it is not stored and cannot be shown again.
-            </Typography>
-            <Card sx={{ p: 2, bgcolor: '#f0fdf4', borderColor: '#86efac', borderRadius: 2 }}>
-              <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                {createdWsSecret?.secret}
-              </Typography>
-            </Card>
-          </DialogContent>
-          <DialogActions sx={{ px: 3, py: 1.5 }}>
-            <Button variant="contained" onClick={() => setCreatedWsSecret(null)} sx={{ textTransform: 'none' }}>
-              Done
-            </Button>
-          </DialogActions>
-        </Dialog>
-
-        {/* Delete Workspace Dialog (destructive: human session + secret + typed slug) */}
-        <Dialog
-          open={isDeleteWsOpen}
-          onClose={() => setIsDeleteWsOpen(false)}
-          maxWidth="sm"
-          fullWidth
-          aria-labelledby="delete-workspace-dialog-title"
-        >
-          <DialogTitle id="delete-workspace-dialog-title" sx={{ fontWeight: 700, color: 'error.main' }}>
-            ⚠️ Delete Workspace
-          </DialogTitle>
-          <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <Typography variant="body2">
-              This permanently deletes <strong>{activeContext?.workspace.name}</strong> and all of
-              its files, keys, shares, memberships, and jobs. This cannot be undone.
-            </Typography>
-
-            {!confirmSecretSet ? (
-              <Card sx={{ p: 2, bgcolor: '#fffbeb', borderColor: '#fde68a', borderRadius: 2 }}>
-                <Typography variant="body2" sx={{ color: '#92400e', fontWeight: 600, mb: 1 }}>
-                  No confirmation secret is set. Destructive commands are disabled until you set one.
-                </Typography>
-                {onSetConfirmSecret && (
-                  <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <TextField
-                      label="New confirmation secret (min 8 chars)"
-                      type="password"
-                      value={setupSecret}
-                      onChange={(e) => setSetupSecret(e.target.value)}
-                      size="small"
-                      sx={{ flex: '1 1 240px' }}
-                    />
-                    <Button
-                      variant="contained"
-                      onClick={handleSetConfirmSecret}
-                      disabled={setupSecret.length < 8}
-                      sx={{ textTransform: 'none' }}
-                    >
-                      Set Secret
-                    </Button>
-                  </Box>
-                )}
-                {setupError && (
-                  <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
-                    {setupError}
-                  </Typography>
-                )}
-              </Card>
-            ) : (
-              <>
-                <TextField
-                  label={`Type the slug "${activeContext?.workspace.slug}" to confirm`}
-                  value={deleteSlug}
-                  onChange={(e) => setDeleteSlug(e.target.value)}
-                  size="small"
-                  fullWidth
-                />
-                <TextField
-                  label="Confirmation secret"
-                  type="password"
-                  value={deleteSecret}
-                  onChange={(e) => setDeleteSecret(e.target.value)}
-                  size="small"
-                  fullWidth
-                />
-                {deleteError && (
-                  <Typography variant="body2" color="error">
-                    {deleteError}
-                  </Typography>
-                )}
-              </>
-            )}
-          </DialogContent>
-          <DialogActions sx={{ px: 3, py: 1.5 }}>
-            <Button onClick={() => setIsDeleteWsOpen(false)} sx={{ textTransform: 'none' }}>
-              Cancel
-            </Button>
-            {confirmSecretSet && (
-              <Button
-                variant="contained"
-                color="error"
-                onClick={handleDeleteWorkspace}
-                disabled={!deleteSecret || !deleteSlug}
-                sx={{ textTransform: 'none' }}
-              >
-                Delete Workspace
-              </Button>
-            )}
-          </DialogActions>
-        </Dialog>
-
-        {/* Platform Admin Dialog */}
-        <Dialog
-          open={isAdminOpen}
-          onClose={() => setIsAdminOpen(false)}
-          maxWidth="md"
-          fullWidth
-          aria-labelledby="platform-admin-dialog-title"
-        >
-          <DialogTitle
-            id="platform-admin-dialog-title"
-            sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1 }}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                ⚡ Platform Admin Console
-              </Typography>
-              <Chip label="👑 Platform Owner" size="small" color="primary" sx={{ fontWeight: 600 }} />
-            </Box>
-            <Button size="small" onClick={() => setIsAdminOpen(false)} sx={{ textTransform: 'none' }}>
-              Close
-            </Button>
-          </DialogTitle>
-          <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            {/* 1. Infrastructure & Storage Tier Status */}
-            <Box>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>
-                📡 Live Platform Infrastructure & Storage Tier Status
-              </Typography>
-              <Grid container spacing={2}>
-                <Grid item xs={12} sm={6}>
-                  <Card variant="outlined" sx={{ p: 2, height: '100%' }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontWeight: 600 }}>
-                      Primary Relational & Vector DB
-                    </Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                      <Chip label="ONLINE" size="small" color="success" sx={{ height: 20, fontSize: '0.7rem' }} />
-                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                        Postgres with pgvector
-                      </Typography>
-                    </Box>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                      Schema `octo` • pgvector embeddings active
-                    </Typography>
-                  </Card>
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <Card variant="outlined" sx={{ p: 2, height: '100%' }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontWeight: 600 }}>
-                      Active Storage Tier
-                    </Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                      <Chip label="OPERATIONAL" size="small" color="success" sx={{ height: 20, fontSize: '0.7rem' }} />
-                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                        Cloudflare R2 active bucket
-                      </Typography>
-                    </Box>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                      High-throughput hot media & document storage
-                    </Typography>
-                  </Card>
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <Card variant="outlined" sx={{ p: 2, height: '100%' }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontWeight: 600 }}>
-                      Cold Archive Tier
-                    </Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                      <Chip label="CONNECTED" size="small" color="info" sx={{ height: 20, fontSize: '0.7rem' }} />
-                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                        Google Drive 5TB cold archive quota
-                      </Typography>
-                    </Box>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                      Long-term compressed cold storage lifecycle
-                    </Typography>
-                  </Card>
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <Card variant="outlined" sx={{ p: 2, height: '100%' }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontWeight: 600 }}>
-                      Host Deployment Node
-                    </Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                      <Chip label="ACTIVE" size="small" color="success" sx={{ height: 20, fontSize: '0.7rem' }} />
-                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                        gravebuster host status
-                      </Typography>
-                    </Box>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                      Production autodeploy systemd service active
-                    </Typography>
-                  </Card>
-                </Grid>
-              </Grid>
-            </Box>
-
-            {/* 2. Direct Launcher Links to External Consoles */}
-            <Box>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
-                🚀 External Admin Consoles
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                Direct access to cloud infrastructure consoles and identity gateways:
-              </Typography>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  href="https://one.dash.cloudflare.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  sx={{ textTransform: 'none' }}
-                >
-                  🌐 Cloudflare Zero Trust ↗
-                </Button>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  href="https://console.cloud.google.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  sx={{ textTransform: 'none' }}
-                >
-                  ☁️ Google Cloud Console ↗
-                </Button>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  href="https://supabase.com/dashboard"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  sx={{ textTransform: 'none' }}
-                >
-                  ⚡ Supabase Studio ↗
-                </Button>
-              </Box>
-            </Box>
-
-            {/* 3. System-wide Workspaces Registry */}
-            <Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
-                <div>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-                    🏢 System-wide Workspaces Registry
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    All tenant workspaces across the Octo instance ({workspaces.length} registered)
-                  </Typography>
-                </div>
-              </Box>
-              <TableContainer component={Card} variant="outlined">
-                <Table size="small">
-                  <TableHead sx={{ bgcolor: 'action.hover' }}>
-                    <TableRow>
-                      <TableCell sx={{ fontWeight: 700 }}>Name</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }}>Slug</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }}>Role</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 700 }}>Action</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {workspaces.map((ws) => {
-                      const isCurrent = (activeContext?.workspace.id ?? selectedWsId) === ws.id;
-                      return (
-                        <TableRow key={ws.id} selected={isCurrent}>
-                          <TableCell>
-                            <Typography variant="body2" sx={{ fontWeight: isCurrent ? 700 : 500 }}>
-                              {ws.name}
-                            </Typography>
-                            {ws.description && (
-                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                                {ws.description}
-                              </Typography>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <Chip label={ws.slug} size="small" variant="outlined" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }} />
-                          </TableCell>
-                          <TableCell>
-                            <Chip
-                              label={ws.role}
-                              size="small"
-                              color={ws.role === 'owner' ? 'primary' : 'default'}
-                              sx={{ fontSize: '0.75rem' }}
-                            />
-                          </TableCell>
-                          <TableCell align="right">
-                            <Button
-                              size="small"
-                              variant={isCurrent ? 'outlined' : 'contained'}
-                              disabled={isCurrent}
-                              onClick={() => {
-                                handleWorkspaceChange(ws.id);
-                                setIsAdminOpen(false);
-                              }}
-                              sx={{ textTransform: 'none', fontSize: '0.75rem' }}
-                            >
-                              {isCurrent ? 'Active' : 'Switch Workspace'}
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </Box>
-          </DialogContent>
-          <DialogActions sx={{ px: 3, py: 1.5 }}>
-            <Button onClick={() => setIsAdminOpen(false)}>Close</Button>
-          </DialogActions>
-        </Dialog>
-      </Box>
+          )}
+        </DialogActions>
+      </Dialog>
     </ThemeProvider>
   );
 };

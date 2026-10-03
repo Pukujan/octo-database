@@ -21,8 +21,7 @@ import { auditPage } from './vision-audit';
 
 /** Selects a workspace by name from the dashboard's workspace switcher. */
 async function selectWorkspace(page: Page, name: string): Promise<void> {
-  await page.getByRole('combobox').first().click();
-  await page.getByRole('option', { name: new RegExp(name) }).click();
+  await page.locator('#workspace-select').selectOption({ label: name });
 }
 
 test.describe('Workspace data plane', () => {
@@ -54,9 +53,11 @@ test.describe('Workspace data plane', () => {
 
     // 3. Switch to the new workspace and upload a file.
     await selectWorkspace(page, wsName);
+    await page.getByRole('button', { name: 'New text file' }).click();
     await page.fill('input[placeholder="notes.txt"]', 'lifecycle.txt');
-    await page.fill('input[placeholder="File body content..."]', 'round-trip payload');
-    await page.click('button:has-text("Upload Text File")');
+    await page.fill('textarea[placeholder="Write something useful…"]', 'round-trip payload');
+    await page.getByRole('button', { name: 'Save file' }).click();
+    await page.getByRole('button', { name: 'Files', exact: true }).click();
     await expect(page.getByRole('cell', { name: 'lifecycle.txt', exact: true })).toBeVisible();
 
     // 4. Archive it: queue the job and run the worker.
@@ -80,7 +81,8 @@ test.describe('Workspace data plane', () => {
       // re-selection below fire a refresh of the new workspace's file list.
       await page.reload();
       await selectWorkspace(page, wsName);
-      await expect(page.getByText('Drive (Cold)').first()).toBeVisible({ timeout: 30000 });
+      await page.getByRole('button', { name: 'Files', exact: true }).click();
+      await expect(page.getByText('Archived').first()).toBeVisible({ timeout: 30000 });
 
       const restoreStatus = await page.evaluate(async (workspaceId: string) => {
         const token = localStorage.getItem('octo_token');
@@ -98,7 +100,8 @@ test.describe('Workspace data plane', () => {
 
       await page.reload();
       await selectWorkspace(page, wsName);
-      await expect(page.getByText('Active').first()).toBeVisible({ timeout: 30000 });
+      await page.getByRole('button', { name: 'Files', exact: true }).click();
+      await expect(page.getByText('Ready').first()).toBeVisible({ timeout: 30000 });
     } else {
       // Cold tier absent (CI): the route fails closed with a clear contract.
       expect(archiveStatus).toBe(503);
@@ -112,16 +115,17 @@ test.describe('Workspace data plane', () => {
     }
 
     // 6. Delete the workspace through the confirmation-secret gate.
+    await page.getByRole('button', { name: 'Access', exact: true }).click();
     await page.click('button:has-text("Delete Workspace")');
-    await expect(page.getByRole('dialog').getByText('Delete Workspace').first()).toBeVisible();
+    await expect(page.getByRole('dialog').getByRole('heading', { name: `Delete ${wsName}?` })).toBeVisible();
 
     // First run: no secret is set, so the dialog prompts to create one.
     const setupField = page.getByRole('dialog').getByLabel(/New confirmation secret/);
     if (await setupField.isVisible().catch(() => false)) {
       await setupField.fill('e2e-confirm-secret');
-      await page.getByRole('dialog').getByRole('button', { name: 'Set Secret' }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Set confirmation secret' }).click();
     }
-    await expect(page.getByRole('dialog').getByLabel(/Type the slug/)).toBeVisible();
+    await expect(page.getByRole('dialog').getByLabel(/to confirm/)).toBeVisible();
 
     const slug = await page.evaluate(async (workspaceId: string) => {
       const token = localStorage.getItem('octo_token');
@@ -130,9 +134,9 @@ test.describe('Workspace data plane', () => {
       ).json();
       return (list as { id: string; slug: string }[]).find((w) => w.id === workspaceId)!.slug;
     }, wsId);
-    await page.getByRole('dialog').getByLabel(/Type the slug/).fill(slug);
+    await page.getByRole('dialog').getByLabel(/to confirm/).fill(slug);
     await page.getByRole('dialog').getByLabel('Confirmation secret').fill('e2e-confirm-secret');
-    await page.getByRole('dialog').getByRole('button', { name: 'Delete Workspace' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Delete workspace' }).click();
 
     await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: 15000 });
   });

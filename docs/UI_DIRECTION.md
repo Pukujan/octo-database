@@ -1,34 +1,42 @@
 # Octo UI direction
 
-The owner requests a simple, aesthetic control dashboard (#3), workspace gallery (#5), and operations page (#8).
-Use a maintained template or standard MUI components with minimal customization.
-Share one small theme for spacing, typography, color, and component defaults.
-Supabase and provider consoles handle deeper infrastructure administration; link them where useful.
+Owner correction recorded on [issue #74](https://github.com/Pukujan/octo-database/issues/74#issuecomment-5965479948), 2026-10-03.
 
-## Views
+## Product surface
 
-| View | Required experience |
+Octo is a workspace portal for people and agents working with durable files and workspace activity. Its frontend focuses on the jobs that need an Octo-specific surface:
+
+- workspace overview and selection;
+- file browsing, upload, download, archive, restore, and removal;
+- image and video gallery;
+- background job review and retry;
+- workspace API keys and share links.
+
+Provider and database administration stays in the provider's own console. Show real workspace data and available actions; do not invent infrastructure status or analytics.
+
+## Visual direction
+
+- Start fresh. The previous dashboard is only a record of existing behavior, not a layout, style, or component template to preserve.
+- Dark appearance is the default. Keep an alternate light appearance available.
+- Use clear hierarchy, generous spacing, one focused job per view, and imagery only where it helps browse actual workspace media.
+- Use the existing React/MUI runtime for this delivery, with application views consuming semantic design tokens through a small adapter. Keep the view composition and tokens independent of that adapter so the component foundation can be replaced without rewriting product behavior.
+- Keep color, radius, typography, borders, and surface values in src/ui/theme.ts; page CSS should consume the corresponding --octo-* variables.
+- The interface must work at desktop and mobile widths, with visible keyboard focus.
+
+## Workspace views
+
+| View | Primary job |
 | --- | --- |
-| Control dashboard | Google login, authorized workspace selection, clear entry into the selected workspace |
-| Workspace gallery | Album grid, thumbnails, image viewer, browser-supported video, responsive layout |
-| Operations | Job state, retry count, useful error summary, relevant activity and retry action |
+| Overview | Understand the current workspace, see recently added files and activity, and reach the next useful action. |
+| Files | Find, upload, download, archive, restore, or remove a file. |
+| Gallery | Browse actual workspace images and video in a visual layout. |
+| Operations | Find failed jobs, understand the failure, retry, and review recent activity. |
+| Access | Manage workspace API keys, share links, and workspace details. |
 
-Keep configuration and standard components ahead of custom CSS or a bespoke design system.
-Implement Octo-specific data and interactions only as their slice requires them.
-Do not add charts, role panels, or infrastructure controls without a current user need.
+## Behavior boundary
 
-## CGM guidance
+Keep the existing API and storage callbacks as the data/action boundary. A visual rebuild may replace the previous page structure and decorative assets, but it must not change the server's authorization or provider behavior. Preserve the public read-only share route and its standalone viewer.
 
-Reviewed CGM 0.5.7 at `c069613ca8b3e02bcf5aba1960160583537f8a3a`:
-- [HSW](https://github.com/Pukujan/content-generation-modules/blob/c069613ca8b3e02bcf5aba1960160583537f8a3a/docs/HUMAN_SOUNDING_WRITING.md): plain concrete copy, useful labels, restrained charts.
-- [HTML demo](https://github.com/Pukujan/content-generation-modules/blob/c069613ca8b3e02bcf5aba1960160583537f8a3a/modules/html-demo/SKILL.md): reuse project tokens, visible focus, keyboard controls, useful alt text, mobile/tablet/desktop checks.
-- [Visual direction](https://github.com/Pukujan/content-generation-modules/blob/c069613ca8b3e02bcf5aba1960160583537f8a3a/modules/visual-direction/SKILL.md): clear focal point, negative space, restrained visual density.
+## Research workflow
 
-HSW governs writing. It does not prescribe MUI or a dashboard layout.
-The owner-directed Octo template/component approach controls the product UI.
-
-## Draft layout reference
-
-![Draft template-style workspace dashboard](assets/workspace-dashboard.svg)
-
-This sketch records the requested light visual treatment. It is not a working product screen or evidence that files/gallery/jobs have shipped. Implement those views using the selected template/components as their slices are built.
+Use design tooling when it is available, especially a code-native visual editor or editable design canvas. If it is unavailable, iterate directly on the real React code and browser preview. Use the same workspace data and actions across design iterations; owner taste decides visual quality.
