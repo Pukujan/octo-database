@@ -6,7 +6,12 @@ import { TooltipProvider } from "@v2/components/ui/tooltip";
 import { ThemeProvider } from "@v2/design/theme";
 import { OctoDataProvider } from "@v2/data/provider";
 import { AppRoutes } from "@v2/app";
+import { captureOAuthRedirect } from "@v2/auth/session";
 import "@v2/styles/globals.css";
+
+// Must run before the first render so the OAuth token from `#token=` is in
+// storage before the app's first `GET /api/me`.
+captureOAuthRedirect();
 
 const queryClient = new QueryClient({
   defaultOptions: {

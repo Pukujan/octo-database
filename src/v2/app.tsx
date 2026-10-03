@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Route, Routes } from "react-router-dom";
 import { AppShell } from "@v2/components/layout/app-shell";
+import { AuthGate } from "@v2/components/auth/auth-gate";
 import { ActiveWorkspaceProvider } from "@v2/data/workspace-context";
 import OverviewPage from "@v2/pages/overview";
 import StoragePage from "@v2/pages/storage";
@@ -12,9 +13,17 @@ import FleetPage from "@v2/pages/fleet";
 import SharePage from "@v2/pages/share";
 import NotFoundPage from "@v2/pages/not-found";
 
-/** Scopes workspace state to the authenticated shell only. */
+/**
+ * Scopes workspace state to the authenticated shell only.
+ *
+ * The gate wraps this, so no workspace query runs before a session exists.
+ */
 function WorkspaceScope({ children }: { children: React.ReactNode }) {
-  return <ActiveWorkspaceProvider>{children}</ActiveWorkspaceProvider>;
+  return (
+    <AuthGate>
+      <ActiveWorkspaceProvider>{children}</ActiveWorkspaceProvider>
+    </AuthGate>
+  );
 }
 
 export function AppRoutes() {

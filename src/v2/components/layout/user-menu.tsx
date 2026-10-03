@@ -10,10 +10,12 @@ import {
 } from "@v2/components/ui/dropdown-menu";
 import { Badge } from "@v2/components/ui/badge";
 import { useMe } from "@v2/data/hooks";
+import { useAuth } from "@v2/auth/use-auth";
 import { initials } from "@v2/lib/format";
 
 export function UserMenu() {
   const { data } = useMe();
+  const { signOut } = useAuth();
   const principal = data?.principal;
 
   return (
@@ -50,17 +52,7 @@ export function UserMenu() {
           Principal {principal?.id.slice(0, 12) ?? "—"}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          onSelect={() => {
-            try {
-              window.localStorage.removeItem("octo_token");
-              window.localStorage.removeItem("octo_principal");
-            } catch {
-              /* ignore */
-            }
-            window.location.reload();
-          }}
-        >
+        <DropdownMenuItem onSelect={signOut}>
           <LogOut className="size-4" />
           Sign out
         </DropdownMenuItem>
