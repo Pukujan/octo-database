@@ -422,13 +422,15 @@ export const App: React.FC = () => {
       }),
     });
 
-    if (res.ok) {
-      const newFile = await res.json();
-      setFiles((prev) => [newFile, ...prev]);
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error ?? 'File upload failed');
     }
+    const newFile = await res.json();
+    setFiles((prev) => [newFile, ...prev]);
   };
 
-  /** Uploads a real binary file (image/video) as base64 with its true MIME type. */
+  /** Uploads a binary file as base64 with its true MIME type. */
   const handleUploadBinaryFile = async (file: File) => {
     if (!sessionToken || !activeContext) return;
     const buffer = await file.arrayBuffer();
@@ -454,11 +456,37 @@ export const App: React.FC = () => {
       }),
     });
 
-    if (res.ok) {
-      const newFile = await res.json();
-      setFiles((prev) => [newFile, ...prev]);
-      await refreshGallery(activeContext.workspace.id);
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error ?? 'File upload failed');
     }
+    const newFile = await res.json();
+    setFiles((prev) => [newFile, ...prev]);
+    await refreshGallery(activeContext.workspace.id);
+  };
+
+  const handleDownloadFile = async (fileId: string) => {
+    if (!sessionToken || !activeContext) return;
+    const params = new URLSearchParams({
+      workspaceId: activeContext.workspace.id,
+      fileId,
+    });
+    const res = await fetch(`${API_BASE}/api/files/content?${params}`, {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error ?? 'File download failed');
+    }
+
+    const objectUrl = URL.createObjectURL(await res.blob());
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = files.find((file) => file.id === fileId)?.name ?? fileId;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   };
 
   const handleDeleteFile = async (fileId: string) => {
@@ -468,9 +496,11 @@ export const App: React.FC = () => {
       headers: { Authorization: `Bearer ${sessionToken}` },
     });
 
-    if (res.ok) {
-      setFiles((prev) => prev.filter((f) => f.id !== fileId));
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error ?? 'File deletion failed');
     }
+    setFiles((prev) => prev.filter((f) => f.id !== fileId));
   };
 
   const refreshFiles = async (workspaceId: string) => {
@@ -489,9 +519,11 @@ export const App: React.FC = () => {
       method: 'POST',
       headers: { Authorization: `Bearer ${sessionToken}` },
     });
-    if (res.ok) {
-      await refreshFiles(activeContext.workspace.id);
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error ?? 'File archive failed');
     }
+    await refreshFiles(activeContext.workspace.id);
   };
 
   const handleRestoreFile = async (fileId: string) => {
@@ -500,9 +532,11 @@ export const App: React.FC = () => {
       method: 'POST',
       headers: { Authorization: `Bearer ${sessionToken}` },
     });
-    if (res.ok) {
-      await refreshFiles(activeContext.workspace.id);
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error ?? 'File restore failed');
     }
+    await refreshFiles(activeContext.workspace.id);
   };
 
   const handleCreateApiKey = async (
@@ -647,6 +681,7 @@ export const App: React.FC = () => {
       onSelectWorkspace={handleSelectWorkspace}
       onUploadFile={handleUploadFile}
       onUploadBinaryFile={handleUploadBinaryFile}
+      onDownloadFile={handleDownloadFile}
       onDeleteFile={handleDeleteFile}
       onArchiveFile={handleArchiveFile}
       onRestoreFile={handleRestoreFile}

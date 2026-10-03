@@ -56,7 +56,7 @@ test.describe('Workspace data plane', () => {
     await selectWorkspace(page, wsName);
     await page.fill('input[placeholder="notes.txt"]', 'lifecycle.txt');
     await page.fill('input[placeholder="File body content..."]', 'round-trip payload');
-    await page.click('button:has-text("Upload Text to R2")');
+    await page.click('button:has-text("Upload Text File")');
     await expect(page.getByRole('cell', { name: 'lifecycle.txt', exact: true })).toBeVisible();
 
     // 4. Archive it: queue the job and run the worker.
@@ -98,7 +98,7 @@ test.describe('Workspace data plane', () => {
 
       await page.reload();
       await selectWorkspace(page, wsName);
-      await expect(page.getByText('R2 (Active)').first()).toBeVisible({ timeout: 30000 });
+      await expect(page.getByText('Active').first()).toBeVisible({ timeout: 30000 });
     } else {
       // Cold tier absent (CI): the route fails closed with a clear contract.
       expect(archiveStatus).toBe(503);
