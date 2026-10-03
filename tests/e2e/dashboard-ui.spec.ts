@@ -43,7 +43,7 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Personal (Guest)', exact: true })).toBeVisible();
     await expect(page.locator('text=Guest Sandbox')).toBeVisible();
-    await expect(page.locator('text=File Catalog (Cloudflare R2)')).toBeVisible();
+    await expect(page.locator('text=File Catalog')).toBeVisible();
     await expect(page.locator('text=API Keys (Account-Wide & Workspace-Scoped)')).toBeVisible();
     await expect(page.getByRole('heading', { name: /Gallery$/ })).toBeVisible();
 
@@ -57,7 +57,7 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     // 8. Test File Upload via UI
     await page.fill('input[placeholder="notes.txt"]', 'qa_report.txt');
     await page.fill('input[placeholder="File body content..."]', 'Live visual QA report verification text.');
-    await page.click('button:has-text("Upload Text to R2")');
+    await page.click('button:has-text("Upload Text File")');
 
     // Verify file appears in table
     await expect(page.getByRole('cell', { name: 'qa_report.txt', exact: true })).toBeVisible();
