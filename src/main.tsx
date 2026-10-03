@@ -430,7 +430,7 @@ export const App: React.FC = () => {
     setFiles((prev) => [newFile, ...prev]);
   };
 
-  /** Uploads a real binary file (image/video) as base64 with its true MIME type. */
+  /** Uploads a binary file as base64 with its true MIME type. */
   const handleUploadBinaryFile = async (file: File) => {
     if (!sessionToken || !activeContext) return;
     const buffer = await file.arrayBuffer();
