@@ -6,7 +6,7 @@ This map translates the program in `PROJECT.md` and issue #74 into bounded user 
 
 | Order | Slice | Main dependency | Robustness |
 |---|---|---|---|
-| 0 | Complete runtime/bootstrap prerequisites and make the online test deployment usable | Existing deployment; #75/#76 train work remains separately gated | Level 2 for durability claims |
+| 0 | Complete runtime/bootstrap prerequisites and make the online test deployment usable | Existing deployment; #75 baseline train sync and #78 local test bootstrap are merged; #76 tracks the next upstream train | Level 2 for durability claims |
 | 1 | Discover the operations a caller can use in a selected workspace, then invoke an advertised operation | Existing auth, API and PostgreSQL | Level 2: live authority and deployed API |
 | 2 | Complete the existing workspace file lifecycle: find, retrieve, archive, restore and share intended files | Slice 1; existing gallery, storage and jobs | Level 2: durable bytes and transitions |
 | 3 | Complete the same workspace/file jobs through the TypeScript SDK, CLI and MCP adapter | Slice 1; stabilized operations from Slice 2 | Level 2: client/server equivalence |
@@ -21,7 +21,7 @@ This map translates the program in `PROJECT.md` and issue #74 into bounded user 
 
 Existing pgvector/RAG behavior should be reused where relevant; a new vector implementation is not proposed. The current RAG path has concrete ingest/rebuild and source-link limitations. Any later client or graph slice that exposes retrieval depends on a bounded repair/verification packet grounded in issue #10. Graph is optional per workspace. Level 3 hardening has no blanket authorization; scale work remains conditional on demonstrated load or an owner request.
 
-The runtime/bootstrap lane and platform topology research proceed in parallel with product slices. They do not imply an architecture migration. Current production is reachable, but Gravebuster SSH is not reachable from this workstation; a temporary online test URL proves only the exact local runtime it serves.
+The runtime/bootstrap lane and platform topology research proceed in parallel with product slices. They do not imply an architecture migration. Production and the temporary test deployment both returned HTTP 200 from their health routes on 2026-10-03. Production reported Postgres, R2, and Google OAuth connected; the test deployment reported Postgres connected with R2 and Google OAuth disabled. The test deployment serves the local Docker Compose runtime through a Quick Tunnel. Gravebuster is online in the Tailscale network, but SSH authentication from this workstation was denied, so host-level deployment state remains unverified.
 
 ## Draft packet links
 
@@ -58,7 +58,7 @@ Escalate only for a contradictory packet, unavailable required provider, or miss
 - Current `GET /api/capabilities` filters by scope but does not account for workspace binding, live membership role, or provider configuration consistently; dependable client work depends on correcting that contract.
 - Recovery needs one owner-selected set of important files and an authority classification before sync behavior can be implemented.
 - Production PostgreSQL is a local named container volume; a repository backup/restore path is not present. External host backups have not been checked.
-- PR #75's first gate run failed the dashboard vision assertion. On its latest rerun, vision and train-manifest validation passed but the pinned ACS hot-loader check failed because it still requires CGM 0.5.7 while the PR adopts certified CGM 0.5.12 ([run](https://github.com/Pukujan/octo-database/actions/runs/37067546338)). Issue #76 explicitly depends on upstream train work.
-- Local test Compose previously failed to apply migrations on this host and did not persist local object bytes across API replacement. PR #78 addresses both; its CI is blocked by the same baseline/train dependency as main.
+- [PR #75](https://github.com/Pukujan/octo-database/pull/75) merged at `f1e67c4`; its [final `gates` run](https://github.com/Pukujan/octo-database/actions/runs/37081413169) passed after Octo updated the ACS and CGM validation checkouts to match the certified 0.5.12 train. [PR #78](https://github.com/Pukujan/octo-database/pull/78) merged at `11fcb85`; its [`gates` run](https://github.com/Pukujan/octo-database/actions/runs/37081681871) passed with the local database bootstrap and persistent local file volume. [PR #79](https://github.com/Pukujan/octo-database/pull/79) merged at `91b1388`; its [`gates` run](https://github.com/Pukujan/octo-database/actions/runs/37081683468) passed. These PRs complete the current bootstrap and planning-document work, not the product slices.
+- [Issue #76](https://github.com/Pukujan/octo-database/issues/76) remains open for the next helper train and depends on upstream ACS OIO hotload support and a published compatible train. It is separate from the current local test deployment, which is running.
 
 Each accepted slice ships with its own end-to-end flow and appropriate deployed smoke. A cross-slice journey can be recorded later as a summary, but is not a new gate for earlier completed slices.
