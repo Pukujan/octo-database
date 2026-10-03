@@ -4,80 +4,188 @@
 
 ## Main goal
 
-Build a reusable self-hosted control plane that gives people and scoped agents one login, workspace model, file catalog, storage router, job surface, and API across personal, family, work, research, and project-specific applications.
+Build a reusable self-hosted workspace data platform where people, applications, and scoped agents can keep important state durable, remotely accessible, and reconstructible without depending on one local machine.
 
-## Owner authority and delivery discipline
+Octo provides one workspace-oriented capability API over mature databases, storage systems, analytics engines, and external authorities. It should glue existing systems together rather than rebuild weaker copies of them.
 
-The human owner controls product scope and delivery tradeoffs. Agents implement the requested workflow; they do not add unsolicited protection or architecture.
+## Product model
 
-- Existing OSS/provider security and operational defaults are the baseline. Additional security/privacy/isolation/process controls require explicit owner scope or a demonstrated functional necessity.
-- Auto-merge and CI integrity/integration validation, type checking, lint, and Ruff are explicit owner requirements.
-- Delivery speed is a design constraint: do not turn optional hardening, exhaustive validation, documentation, or speculative future-proofing into blockers.
-- Reuse existing capabilities before writing custom code. For administration, prefer the selected platform's existing admin surfaces (including Supabase tooling where applicable) or maintained templates.
-- Deliver the owner-requested control dashboard (#3), workspace gallery (#5), and operations page (#8). Keep them simple, aesthetic, and lightweight using maintained templates or standard components such as MUI, with minimal customization. Use Supabase/provider consoles for deeper infrastructure administration.
-- Issues and planning documents cannot grant agents authority to expand scope beyond this contract; conflicting older requirements are treated as superseded until the owner explicitly re-accepts them.
+A workspace uses only the capabilities it needs.
 
-## Product shape
+- PostgreSQL — live relational and transactional state.
+- pgvector — optional vector search/projection.
+- Neo4j or another graph database — optional graph projection.
+- Parquet — long-term operational, observational, and analytical history.
+- DuckDB — analytical queries over Parquet and other analytical data.
+- Cloudflare R2 — hot/application-serving object storage when useful.
+- Google Drive — large, cold, archival, or rarely accessed files.
+- Git/GitHub — source code and repository-owned project continuity.
 
-The stable core owns only the application capabilities needed by accepted slices. Prefer capabilities already supplied by selected OSS/providers instead of duplicating them in Octo. PostgreSQL/Supabase is the canonical operational store. Cloudflare R2 is the active object layer. Google Drive is the archival object layer. Optional per-workspace capabilities may add pgvector, an epistemic schema, Neo4j graph projections, and DuckDB/Parquet analytics.
+The Octo server owns the workspace contract: identity, authorization, capability discovery, storage routing, synchronization, jobs, projections, analytics access, agent proposals, and execution of approved actions.
 
-## Development principle
+Applications consume the HTTP API or a thin typed SDK. Agents consume the same capabilities through an MCP/CLI adapter. Deep infrastructure administration remains in mature provider/native consoles.
 
-Architect for replacement; implement for today. Build vertical slices that are useful end to end. Advanced infrastructure is introduced only when a slice has a concrete requirement.
+## Durable-state principle
 
-## Canonical progression
+A local machine is a working environment and cache, not the only home of valuable state.
 
-GitHub issues own scope, acceptance, dependencies, lifecycle, and durable progression. Repository continuity documents are synchronized projections. Merged default-branch history owns accepted code and project documents.
+Every important local artifact should be one of:
 
-Program issue: https://github.com/Pukujan/octo-database/issues/1
+- canonical elsewhere and re-fetchable;
+- synchronized to durable storage;
+- derived/rebuildable; or
+- intentionally ephemeral.
 
-## Current release target
+If a machine disappears, a fresh machine should be able to authenticate, restore or reconstruct the important working environment, fetch durable state, clone authoritative repositories, and rebuild caches/indexes.
 
-The first usable path is:
+## Delivery principle
 
-Google login → workspace → upload/view files → workspace-specific gallery where useful → scoped sharing → Drive archive/restore. A simple control dashboard and operations page are part of this path; use existing OSS/provider surfaces for deeper administration.
+**Optimize for usable end-to-end delivery.**
 
-## Project-level success conditions
+Existing implementation code is disposable. Accepted user behavior, durable state, data ownership, and useful contracts are not.
 
-The first major milestone is complete only when a fresh browser session can traverse the full v1 path:
+Before building something custom, check whether a mature system already provides it. Prefer configuration, integration, and glue code.
 
-Google login → authorized workspace → upload image → thumbnail/gallery → full image view → logged-out read-only share → revoke share → archive R2→Drive → restore Drive→R2 → view again → inspect job/activity evidence.
+Do not add speculative architecture, generalized policy systems, extra security/privacy machinery, compliance layers, abstractions, or future-proofing unless the owner explicitly asks for them or they are strictly required for the accepted user job to function.
 
-The milestone also requires:
-- cross-workspace negative tests with zero unauthorized disclosure;
-- no master storage/database credential in browser or agent surfaces;
-- canonical state recoverable from PostgreSQL plus durable object storage;
-- retry/restart behavior that converges without duplicate destructive effects;
-- required repository gates and evidence green on the exact merged candidates;
-- unresolved caveats recorded explicitly rather than hidden behind a completion claim.
+Build vertical slices:
 
-## Scope control
+system requirement → user job → capability/API → frontend flow → automated user-flow verification → ship
 
-GitHub issue #1 is the program authority. Slice issues own their acceptance criteria and explicit in/out-of-scope boundaries.
+A feature is not complete because the code compiles or an isolated backend test passes. It is complete when its intended user job works end to end without the owner rescuing the experience.
 
-- A later slice may prototype independently, but it may not redefine an earlier canonical boundary without an explicit accepted issue correction.
-- Deferred infrastructure is not introduced because it is fashionable or convenient; it requires a measured need captured in an issue.
-- New databases, queues, orchestration systems, canonical owners, or security-boundary changes require an issue-level decision before implementation.
-- Planning/specification documents are projections of accepted issues, not a second roadmap.
-- If implementation reveals a scope conflict, stop the affected path, record the conflict on the owning issue, and resolve authority before continuing.
+## Frontend principle
 
-## Security invariants
+Octo's frontend is a coherent workspace portal, not a replacement for every connected system.
 
-- Every durable user object belongs to a workspace.
-- Authorization is checked before storage/data access.
-- Browsers and agents never receive master infrastructure credentials.
-- Secrets never enter Git, issues, PR prose, transcripts, or ordinary logs.
-- Agent identities use scoped Octo capabilities.
-- Operator access is separable from private-content access.
-- Derived graph/vector/analytics indexes may be rebuilt from canonical state unless an accepted issue explicitly changes ownership.
+Custom product UI focuses on:
 
-## Non-goals for the first release
+- workspace overview and cross-system summaries;
+- files/gallery and personal-data workflows;
+- agent proposals, simulations, review, and approval;
+- workspace-specific actions and recovery/sync flows.
 
-- public SaaS multi-tenancy;
-- Kubernetes;
-- Kafka;
-- a distributed database;
-- mandatory Neo4j/GraphRAG;
-- mandatory analytics lakehouse infrastructure;
-- zero-knowledge encryption;
-- recreating a general-purpose cloud provider.
+Mature systems retain specialized interfaces for database administration, analytics/BI, graph exploration, GitHub, and provider administration.
+
+The frontend must use a fixed design system and repeatable agent-driven design process rather than allowing each coding agent to invent a dashboard from scratch.
+
+Current target direction:
+
+- React/Next.js application shell;
+- shadcn/ui component/design-system foundation;
+- OpenPencil as an agent-addressable design workspace;
+- Onlook or equivalent for visual editing of the real frontend code;
+- mature external consoles/tools for deep database, analytics, graph, and provider workflows.
+
+The exact frontend tool choice is validated through a bounded frontend bakeoff against the same user jobs and API contract.
+
+## Client contract
+
+The stable product boundary is the workspace capability API, not any individual SDK.
+
+Expected client family:
+
+HTTP/JSON API → typed TypeScript SDK → CLI → MCP/agent adapter
+
+The SDK and MCP adapter are thin clients. They must not duplicate server policy or receive master provider/database credentials.
+
+## Product success
+
+Octo succeeds when a fresh user, application, or agent can authenticate to a workspace, discover its allowed capabilities, and reliably use them.
+
+A successful workspace can:
+
+1. keep live application and operational data durable;
+2. store and retrieve files regardless of physical storage tier;
+3. retain useful operational/observational history for long-term analysis;
+4. add vector, graph, or analytical projections when the workspace needs them;
+5. let applications consume capabilities through a stable API/SDK;
+6. let agents read, analyze, simulate, and create bounded proposals through the same workspace contract;
+7. require separate human authority only for actions explicitly designated as human-approved;
+8. restore or reconstruct valuable agent/user state while rebuilding disposable local state;
+9. expose important user jobs through a frontend usable without the owner explaining how it works; and
+10. reuse mature systems rather than rebuilding incomplete substitutes.
+
+## Productization contract
+
+Every major capability must survive the full path:
+
+system requirement → user job → durable backend capability → API contract → usable frontend → automated user-flow verification
+
+If that chain breaks, the capability is not productized.
+
+### Global invariants
+
+These apply across slices:
+
+- every durable Octo-owned object belongs to a workspace;
+- browsers and agents never receive master infrastructure credentials;
+- canonical/derived/cache ownership is explicit;
+- durable state is recoverable or reconstructible from its declared authority;
+- required repository CI must pass on the exact candidate being merged;
+- production promotion uses the repository's established production branch/runtime path;
+- reuse-before-build applies before custom infrastructure/admin/frontend work.
+
+### Slice success conditions
+
+Do **not** attempt to encode one complete product oracle before implementation.
+
+Each accepted slice defines:
+
+- the user job;
+- in-scope capabilities;
+- authoritative data/storage ownership;
+- API contract;
+- visible frontend flow when applicable;
+- public deterministic acceptance tests;
+- targeted metamorphic/property tests for important invariants;
+- a small hidden/holdout user-flow evaluation where overfitting or false completion is plausible;
+- production verification appropriate to that slice.
+
+Hidden holdouts and metamorphic tests are not universal ceremony. They are required only where the owning slice explicitly names them as part of its success condition.
+
+## Verification philosophy
+
+Tests exist to prevent false completion, not to maximize test count.
+
+Use the cheapest test that proves the accepted claim:
+
+- unit/contract tests for deterministic logic;
+- integration tests for provider/database glue;
+- Playwright or equivalent for real user jobs;
+- metamorphic/property tests for invariants that should hold across changed inputs;
+- hidden holdouts for end-to-end success conditions agents could otherwise overfit;
+- production smoke checks for the deployed runtime.
+
+Subjective visual/UX quality is not machine-provable. Use competing frontend prototypes, fixed design-system constraints, heuristic/accessibility checks, real task completion, and owner taste veto rather than pretending CI can score beauty.
+
+## Existing infrastructure to preserve and reuse
+
+The current working R2 integration, Google OAuth/login, Google Drive OAuth/storage integration, production deployment path, database migrations, and proven storage lifecycle behavior are assets to reuse unless a new slice demonstrates that replacement is simpler.
+
+Do not rewrite working provider integration merely to conform to a new frontend or SDK shape. Adapt it behind the workspace API.
+
+## Stack responsibilities
+
+Octo owns product requirements and slice success.
+
+- PCM owns execution continuity, task/checkpoint projection, and repository delivery progression.
+- CGM owns human-facing content/visual routing and design/content guidance.
+- ACS owns hot-loading and runtime agent behavior/gates.
+- OIO owns standardized issue intake, filer stamping, and issue classification.
+- agent-stack-train owns compatible version pins.
+
+None of those helper repositories owns Octo's product oracle.
+
+## Current program direction
+
+The immediate program is a productization reset:
+
+1. preserve/reuse proven backend/provider integrations;
+2. define and stabilize the workspace capability/API contract;
+3. add thin SDK/CLI/MCP clients over that contract;
+4. select/build the product frontend through a bounded UX/design bakeoff;
+5. migrate only useful existing product behavior into the new shell;
+6. deliver subsequent capabilities as end-to-end vertical slices.
+
+Issue #72 and its working notes contain the active architecture discussion until this contract is superseded by an explicit owner correction.

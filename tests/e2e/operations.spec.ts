@@ -30,6 +30,7 @@ test.describe('Operations page', () => {
     );
     await page.setInputFiles('input[type="file"]', photo);
     await expect(page.getByText('ops-e2e-photo.png').first()).toBeVisible();
+    await page.getByRole('button', { name: 'Operations', exact: true }).click();
 
     // The operations section is present with its counters.
     await expect(page.getByRole('heading', { name: /Operations/ })).toBeVisible();

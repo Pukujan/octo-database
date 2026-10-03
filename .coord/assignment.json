@@ -1,8 +1,8 @@
 {
   "schema_version": "0.1.0",
   "project": "Octo single-owner bootstrap",
-  "recorded_at": "2026-09-30T21:44:00Z",
-  "notes": "ACS hot-loader adopter state. Live join/continue order wins. Previous bootstrap lease expired; current orchestrator claimed the vacant seat under FIFO rules. FULL PCM + FULL CGM 0.5.7 required.",
+  "recorded_at": "2026-10-02T21:23:00Z",
+  "notes": "ACS hot-loader adopter state. Live join/continue order wins. Previous bootstrap lease expired; current orchestrator claimed the vacant seat under FIFO rules. FULL PCM + FULL CGM 0.5.12 required; release-train sync applied.",
   "role_fill": {
     "mode": "join_continue_order",
     "seed_is_hint_only": true,
@@ -74,7 +74,7 @@
   "pins": {
     "acs": {
       "repo": "https://github.com/Pukujan/agent-custom-setup",
-      "revision": "fa57bae9a5229b454b57ea0b3f3e4dac0bbc8b4e",
+      "revision": "3a381eba11c6262c702f5d696878c371342e859a",
       "module": "modules/coordination/multi-agent-hotload/v0.1.0",
       "version": "0.1.0"
     },
@@ -97,8 +97,8 @@
     },
     "cgm": {
       "repo": "https://github.com/Pukujan/content-generation-modules",
-      "revision": "c069613ca8b3e02bcf5aba1960160583537f8a3a",
-      "version": "0.5.7",
+      "revision": "6831f91e165b62d719c05eb492f7375fa932b560",
+      "version": "0.5.12",
       "role": "full_stack",
       "modules": [
         "brand-foundation",

@@ -130,7 +130,7 @@ jobs:
         run: |
           set -euo pipefail
           git clone --quiet https://github.com/Pukujan/content-generation-modules.git "$VALIDATION_ROOT/cgm"
-          git -C "$VALIDATION_ROOT/cgm" checkout --quiet c069613ca8b3e02bcf5aba1960160583537f8a3a
+          git -C "$VALIDATION_ROOT/cgm" checkout --quiet 6831f91e165b62d719c05eb492f7375fa932b560
           "$VALIDATION_ROOT/venv/bin/python" "$VALIDATION_ROOT/cgm/scripts/validate_content_system.py" \
             --root "$VALIDATION_ROOT/cgm" \
             --adapter .content-system \
@@ -141,7 +141,7 @@ jobs:
         run: |
           set -euo pipefail
           git clone --quiet https://github.com/Pukujan/agent-custom-setup.git "$VALIDATION_ROOT/acs"
-          git -C "$VALIDATION_ROOT/acs" checkout --quiet fa57bae9a5229b454b57ea0b3f3e4dac0bbc8b4e
+          git -C "$VALIDATION_ROOT/acs" checkout --quiet 3a381eba11c6262c702f5d696878c371342e859a
           "$VALIDATION_ROOT/venv/bin/python" "$VALIDATION_ROOT/acs/modules/coordination/multi-agent-hotload/v0.1.0/scripts/hotload_check.py" \
             --root "$VALIDATION_ROOT/acs/modules/coordination/multi-agent-hotload/v0.1.0" \
             --assignment "$GITHUB_WORKSPACE/.coord/assignment.json" \
