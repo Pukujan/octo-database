@@ -1229,16 +1229,26 @@ export const server = createServer(async (req, res) => {
       const sizeBytes = payload.byteLength;
       const etag: string | null = `stored-${payload.byteLength}`;
       // Commit record into PostgreSQL octo.files
-      const fileRecord = await dbInsertFile(
-        fileId,
-        workspaceId,
-        auth.principal.id,
-        name,
-        mimeType ?? 'application/octet-stream',
-        sizeBytes,
-        storageKey,
-        etag?.replace(/"/g, '') ?? null
-      );
+      let fileRecord;
+      try {
+        fileRecord = await dbInsertFile(
+          fileId,
+          workspaceId,
+          auth.principal.id,
+          name,
+          mimeType ?? 'application/octet-stream',
+          sizeBytes,
+          storageKey,
+          etag?.replace(/"/g, '') ?? null
+        );
+      } catch (err) {
+        try {
+          await objectStore.delete(storageKey);
+        } catch (cleanupError) {
+          console.error(`File upload cleanup failed for ${fileId}:`, cleanupError);
+        }
+        throw err;
+      }
 
       await attributeAgentAction(
         auth,
