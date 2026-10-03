@@ -19,7 +19,12 @@ export const queryKeys = {
 
 export function useMe() {
   const { api } = useOctoData();
-  return useQuery({ queryKey: queryKeys.me, queryFn: () => api.getMe(), retry: false });
+  return useQuery({
+    queryKey: queryKeys.me,
+    queryFn: () => api.getMe(),
+    retry: false,
+    staleTime: 30_000,
+  });
 }
 
 export function useWorkspaces() {
@@ -91,8 +96,10 @@ export function useHealth() {
   return useQuery({
     queryKey: queryKeys.health,
     queryFn: () => api.getHealth(),
-    refetchInterval: 60_000,
+    // A point-in-time connectivity check, not a polled metric: no interval, so
+    // an offline backend cannot produce a steady stream of failed requests.
     retry: false,
+    staleTime: 60_000,
   });
 }
 

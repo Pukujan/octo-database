@@ -21,6 +21,17 @@ import {
 
 const TOKEN_KEY = "octo_token";
 
+const UNREACHABLE_MESSAGE =
+  "Cannot reach the Octo server. Start it with `npm run server` or switch to Demo data.";
+
+/**
+ * How long to stop opening sockets after a connection failure.
+ *
+ * Without this, a view that re-renders while the backend is down produces a
+ * tight loop of failing requests, each one logged by the dev-server proxy.
+ */
+const OFFLINE_COOLDOWN_MS = 5_000;
+
 /**
  * Adapter over the real Octo HTTP API.
  *
@@ -31,6 +42,9 @@ const TOKEN_KEY = "octo_token";
 export class LiveOctoApi implements OctoApi {
   readonly mode = "live" as const;
 
+  /** Set after a connection failure so repeat calls fail fast and silently. */
+  private offlineUntil = 0;
+
   private token(): string | null {
     try {
       return window.localStorage.getItem(TOKEN_KEY);
@@ -40,6 +54,12 @@ export class LiveOctoApi implements OctoApi {
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    // Fail fast while the backend is known to be down, so a re-render cannot
+    // become a request storm (and a wall of proxy errors).
+    if (Date.now() < this.offlineUntil) {
+      throw new OctoApiError({ status: 0, message: UNREACHABLE_MESSAGE });
+    }
+
     const token = this.token();
     const headers = new Headers(init.headers);
     if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -48,11 +68,10 @@ export class LiveOctoApi implements OctoApi {
     let response: Response;
     try {
       response = await fetch(path, { ...init, headers });
+      this.offlineUntil = 0;
     } catch {
-      throw new OctoApiError({
-        status: 0,
-        message: "Cannot reach the Octo server. Start it with `npm run server` or switch to Demo data.",
-      });
+      this.offlineUntil = Date.now() + OFFLINE_COOLDOWN_MS;
+      throw new OctoApiError({ status: 0, message: UNREACHABLE_MESSAGE });
     }
 
     if (response.status === 401) {

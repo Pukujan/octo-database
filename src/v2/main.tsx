@@ -16,9 +16,12 @@ captureOAuthRedirect();
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 10_000,
-      retry: 1,
+      staleTime: 30_000,
+      // Never retry automatically. A backend that is down must not turn into a
+      // retry storm; every view surfaces its own error state with a Retry action.
+      retry: 0,
       refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
     },
   },
 });
