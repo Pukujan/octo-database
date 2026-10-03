@@ -10,7 +10,7 @@
 >
 > Make the platform-owner view and tenant workspace view visibly distinct. A tenant user may browse only workspaces returned for their authenticated identity; within a workspace show its role, files, recorded storage use, jobs, and recent activity. The platform owner may compare authorized workspaces in a fleet view and drill into one workspace. A platform-owner identity is not itself a larger storage plan or quota.
 >
-> Use dark mode as the default. Keep colors, typography, spacing, borders, radii, and elevation behind semantic design tokens so Octo can replace the visual system without rewriting page behavior. Keep focused Overview, Storage, Files, Gallery, Operations, and Access views. Make the information hierarchy calm and legible: clear page title, workspace selector, a small number of high-value summary cards, useful tables, and charts only where trustworthy time-series data exists. Make mobile and keyboard use work.
+> Use dark mode as the default and keep the visual system interchangeable. Choose any frontend framework, libraries, design tools, and visual approach that best serve the result; do not assume the current frontend stack is a requirement. Include the Octo workspace jobs described below, and use charts only where trustworthy time-series data exists.
 >
 > Use current Octo types and endpoints when available. Do not invent a live quota, remaining bucket capacity, API latency, throughput, uptime history, or storage trend. For the visual prototype, any illustrative sample values must carry a visible “Demo data” label and must be kept in replaceable fixtures. For unsupported metrics use an honest state such as “Quota not configured” or “Telemetry not collected”. Do not show those values as zero or unlimited.
 >
@@ -100,7 +100,7 @@ The browser calls the same-origin API with `Authorization: Bearer <sessionToken>
 | Inspect callable surface | `GET /api/capabilities?workspaceId=<id>` | Capability descriptors filtered for the credential and requested workspace. Treat as affordance guidance; each operation still enforces authorization server-side. |
 | Check service connectivity | `GET /health` | `{ status, version, database: { connected, version }, r2: { connected, bucket }, googleAuthEnabled }`; service-level, not tenant-level. |
 
-Current mutation endpoints the existing React client uses include `POST /api/files/upload`, `GET /api/files/content?workspaceId=&fileId=`, `DELETE /api/files/<fileId>?workspaceId=`, `POST /api/files/<fileId>/archive|restore?workspaceId=`, `POST /api/jobs/<jobId>/retry?workspaceId=`, `POST /api/jobs/run?workspaceId=`, and key/share mutations. Preserve their current request formats if a prototype is connected; do not guess new payloads from a chart mock.
+Current mutation endpoints the current Octo client uses include `POST /api/files/upload`, `GET /api/files/content?workspaceId=&fileId=`, `DELETE /api/files/<fileId>?workspaceId=`, `POST /api/files/<fileId>/archive|restore?workspaceId=`, `POST /api/jobs/<jobId>/retry?workspaceId=`, `POST /api/jobs/run?workspaceId=`, and key/share mutations. Preserve their current request formats if a prototype is connected; do not guess new payloads from a chart mock.
 
 ### Existing action payloads
 

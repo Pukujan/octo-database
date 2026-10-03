@@ -30,7 +30,7 @@ The runtime/bootstrap lane and platform topology research proceed in parallel wi
 
 ## Frontend bakeoff timing
 
-Run after Slice 1 establishes the stable API contract and Slice 2 provides representative file/job fixtures, alongside client work. Until then, keep the current dashboard as a prototype and verify Slice 1's API through its existing screen without expanding that UI. Compare a direct Next.js + shadcn/ui baseline with a workflow using OpenPencil for design and Onlook for real-code editing. Dyad or a similar rapid builder can replace that workflow if it cannot run. Use the same tasks, API, data, content direction and design rules; limit each candidate to the same flows and one revision. Compare completed tasks, owner interventions, erroneous actions, keyboard access, visual consistency and maintenance effort. Owner taste can veto. Choose one production workflow; do not keep competing shells.
+Use the same Octo jobs, API contract, and representative data when comparing frontend approaches. Do not require a particular framework, component library, design tool, or visual system; the owner may choose any of them. Dyad is available as one prototyping option. Owner taste decides the visual direction.
 
 ## Luna work-order template
 

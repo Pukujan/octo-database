@@ -16,7 +16,7 @@
       "purpose": "show one control plane connecting workspaces, active cloud storage, and cold archival storage"
     },
     "ui-reference": {
-      "purpose": "Simple template/component workspace dashboard layout; implementation uses MUI or a maintained template."
+      "purpose": "Workspace dashboard visual direction; frontend framework, components, and design tools are selected by the owner."
     }
   },
   "reject_when": [

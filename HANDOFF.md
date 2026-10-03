@@ -6,7 +6,7 @@ Read AGENTS.md and PROJECT.md, then the live issue and current branch/check stat
 
 PR #17 contains the bootstrap contracts. They are not installed on main until merged.
 Finish real PCM, CGM, and ACS validation through the public GitHub-hosted workflow.
-Then begin #3: Google login, workspace entry, and a simple aesthetic control dashboard built from templates or MUI components.
+Then begin #3: Google login, workspace entry, and a simple, aesthetic control dashboard using the frontend approach selected by the owner.
 
 ## Delivery
 
@@ -25,7 +25,7 @@ Use multiple Luna workers for independent work where available; the main agent i
 
 ## Product scope
 
-Keep the control dashboard (#3), gallery (#5), and operations page (#8). Use maintained templates and standard components with light theme configuration. Supabase/provider consoles complement these views.
+Keep the control dashboard (#3), gallery (#5), and operations page (#8). Do not prescribe a frontend framework, library, template, or design tool; the owner chooses the implementation and visual direction. Dark mode is preferred by default, with interchangeable design systems. Supabase/provider consoles complement these views.
 Transcript capture (#15) and planning projections (#18) are supporting work, not blockers for #3.
 Provider onboarding (#16) uses normal runtime configuration when #4/#7 need it. Keep credentials out of Git and browser output; do not add a secret-management subsystem or scanner requirement.
 
