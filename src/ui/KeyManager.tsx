@@ -14,7 +14,9 @@ import {
   Checkbox,
   Chip,
   Divider,
+  FormControl,
   FormControlLabel,
+  InputLabel,
   MenuItem,
   Select,
   Table,
@@ -55,9 +57,9 @@ function UsagePanel({ isPlatformOwner }: { isPlatformOwner: boolean }) {
     '  "https://<your-octo-host>/api/files?workspaceId=<workspace-id>"';
 
   return (
-    <Box sx={{ mt: 3 }}>
-      <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
-        📖 Using your key
+    <Box>
+      <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5, color: 'text.primary' }}>
+        Use an API key
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
         Send the secret as a Bearer token. A workspace key is pinned to its own workspace; an
@@ -68,24 +70,26 @@ function UsagePanel({ isPlatformOwner }: { isPlatformOwner: boolean }) {
         sx={{
           m: 0,
           mb: 2,
-          p: 1.5,
-          bgcolor: '#0f172a',
-          color: '#e2e8f0',
-          borderRadius: 1.5,
+          p: 2,
+          bgcolor: 'background.default',
+          color: 'text.primary',
+          border: 1,
+          borderColor: 'divider',
+          borderRadius: 2,
           fontSize: '0.78rem',
           overflowX: 'auto',
         }}
       >
         {curlExample}
       </Box>
-      <TableContainer>
+      <TableContainer sx={{ border: 1, borderColor: 'divider', borderRadius: 2 }}>
         <Table size="small">
           <TableHead>
-            <TableRow>
-              <TableCell sx={{ fontWeight: 600, width: '22%' }}>Action</TableCell>
-              <TableCell sx={{ fontWeight: 600, width: '12%' }}>Method</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>Path</TableCell>
-              <TableCell sx={{ fontWeight: 600, width: '14%' }}>Scope</TableCell>
+            <TableRow sx={{ bgcolor: 'action.hover' }}>
+              <TableCell sx={{ fontWeight: 600, width: '22%', color: 'text.secondary' }}>Action</TableCell>
+              <TableCell sx={{ fontWeight: 600, width: '12%', color: 'text.secondary' }}>Method</TableCell>
+              <TableCell sx={{ fontWeight: 600, color: 'text.secondary' }}>Path</TableCell>
+              <TableCell sx={{ fontWeight: 600, width: '14%', color: 'text.secondary' }}>Scope</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -143,6 +147,7 @@ export const KeyManager: React.FC<KeyManagerProps> = ({
   const handleCreateKey = async () => {
     if (!newKeyName.trim() || !onCreateApiKey) return;
     setError(null);
+    setCreatedSecret(null);
     try {
       const res = await onCreateApiKey(newKeyName.trim(), newKeyIsAccountWide, {
         scopes: effectiveScopes,
@@ -166,132 +171,158 @@ export const KeyManager: React.FC<KeyManagerProps> = ({
   };
 
   return (
-    <Card sx={{ mb: 4, borderRadius: 2 }}>
-      <Box sx={{ p: 3 }}>
-        <Typography variant="h6" sx={{ fontWeight: 700 }}>
-          🔑 API Keys (Account-Wide & Workspace-Scoped)
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Machine credentials for your app or agent. Hashed with SHA-256; the secret is shown once.
-          One account-wide key per account, one workspace key per workspace.
-        </Typography>
+    <Card sx={{ mb: 4, borderRadius: 3, bgcolor: 'background.paper', borderColor: 'divider' }}>
+      <Box sx={{ p: { xs: 2, sm: 3 } }}>
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="overline" color="primary.main" sx={{ fontWeight: 700, letterSpacing: '0.12em' }}>
+            Access
+          </Typography>
+          <Typography variant="h6" sx={{ fontWeight: 700, color: 'text.primary' }}>
+            API keys
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 680 }}>
+            Give an app or agent access to a workspace or your account. Each secret is shown once when
+            you create it.
+          </Typography>
+        </Box>
 
         {createdSecret && (
-          <Card sx={{ p: 2, mb: 3, bgcolor: '#f0fdf4', borderColor: '#86efac', borderRadius: 2 }}>
-            <Typography variant="subtitle2" sx={{ color: '#166534', fontWeight: 600 }}>
-              New API Key Minted (Copy Now - will not be displayed again):
+          <Card sx={{ p: 2, mb: 3, bgcolor: 'action.hover', borderColor: 'success.main', borderRadius: 2 }}>
+            <Typography variant="subtitle2" color="success.main" sx={{ fontWeight: 700 }}>
+              New key created. Copy this secret now; it will not be shown again.
             </Typography>
-            <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all', mt: 0.5 }}>
+            <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all', mt: 1, color: 'text.primary' }}>
               {createdSecret}
             </Typography>
           </Card>
         )}
 
         {error && (
-          <Card sx={{ p: 1.5, mb: 2, bgcolor: '#fef2f2', borderColor: '#fecaca', borderRadius: 2 }}>
-            <Typography variant="body2" sx={{ color: '#991b1b' }}>
+          <Card sx={{ p: 1.5, mb: 2, bgcolor: 'action.hover', borderColor: 'error.main', borderRadius: 2 }}>
+            <Typography variant="body2" color="error.main">
               {error}
             </Typography>
           </Card>
         )}
 
         {onCreateApiKey && (
-          <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', mb: 2, flexWrap: 'wrap' }}>
-            <TextField
-              size="small"
-              label="Key Name"
-              placeholder="e.g. Ingest Agent"
-              value={newKeyName}
-              onChange={(e) => setNewKeyName(e.target.value)}
-              sx={{ width: 200 }}
-            />
-            <Select
-              size="small"
-              value={newKeyIsAccountWide ? 'account' : 'workspace'}
-              onChange={(e) => setNewKeyIsAccountWide(e.target.value === 'account')}
-              sx={{ width: 190 }}
-            >
-              <MenuItem value="workspace">Workspace-Scoped{workspaceName ? ` (${workspaceName})` : ''}</MenuItem>
-              <MenuItem value="account">Account-Wide</MenuItem>
-            </Select>
-            <Select
-              size="small"
-              value={presetId}
-              onChange={(e) => setPresetId(e.target.value)}
-              sx={{ width: 180 }}
-            >
-              {SCOPE_PRESETS.map((p) => (
-                <MenuItem key={p.id} value={p.id}>
-                  {p.label}
-                </MenuItem>
-              ))}
-              <MenuItem value="custom">Custom…</MenuItem>
-            </Select>
-            <Select
-              size="small"
-              value={expiresInDays}
-              onChange={(e) => setExpiresInDays(Number(e.target.value))}
-              sx={{ width: 170 }}
-            >
-              <MenuItem value={0}>No expiry</MenuItem>
-              <MenuItem value={30}>Expires in 30 days</MenuItem>
-              <MenuItem value={90}>Expires in 90 days</MenuItem>
-              <MenuItem value={365}>Expires in 1 year</MenuItem>
-            </Select>
+          <Box sx={{ p: { xs: 2, sm: 2.5 }, mb: 3, border: 1, borderColor: 'divider', borderRadius: 2, bgcolor: 'background.default' }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2, color: 'text.primary' }}>
+              Create a key
+            </Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>
+              <TextField
+                size="small"
+                label="Key name"
+                placeholder="e.g. Ingest agent"
+                value={newKeyName}
+                onChange={(e) => setNewKeyName(e.target.value)}
+                fullWidth
+              />
+              <FormControl size="small" fullWidth>
+                <InputLabel id="key-access-label">Access</InputLabel>
+                <Select
+                  labelId="key-access-label"
+                  label="Access"
+                  value={newKeyIsAccountWide ? 'account' : 'workspace'}
+                  onChange={(e) => setNewKeyIsAccountWide(e.target.value === 'account')}
+                >
+                  <MenuItem value="workspace">Workspace{workspaceName ? ` (${workspaceName})` : ''}</MenuItem>
+                  <MenuItem value="account">Account-wide</MenuItem>
+                </Select>
+              </FormControl>
+              <FormControl size="small" fullWidth>
+                <InputLabel id="key-permissions-label">Permissions</InputLabel>
+                <Select
+                  labelId="key-permissions-label"
+                  label="Permissions"
+                  value={presetId}
+                  onChange={(e) => setPresetId(e.target.value)}
+                >
+                  {SCOPE_PRESETS.map((p) => (
+                    <MenuItem key={p.id} value={p.id}>
+                      {p.label}
+                    </MenuItem>
+                  ))}
+                  <MenuItem value="custom">Custom scopes</MenuItem>
+                </Select>
+              </FormControl>
+              <FormControl size="small" fullWidth>
+                <InputLabel id="key-expiry-label">Expiry</InputLabel>
+                <Select
+                  labelId="key-expiry-label"
+                  label="Expiry"
+                  value={expiresInDays}
+                  onChange={(e) => setExpiresInDays(Number(e.target.value))}
+                >
+                  <MenuItem value={0}>No expiry</MenuItem>
+                  <MenuItem value={30}>Expires in 30 days</MenuItem>
+                  <MenuItem value={90}>Expires in 90 days</MenuItem>
+                  <MenuItem value={365}>Expires in 1 year</MenuItem>
+                </Select>
+              </FormControl>
+            </Box>
+            {isCustom && (
+              <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', mt: 2, flexWrap: 'wrap' }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mr: 1 }}>
+                  Custom scopes
+                </Typography>
+                {ALL_SCOPES.map((scope) => (
+                  <FormControlLabel
+                    key={scope}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={customScopes.includes(scope)}
+                        onChange={() =>
+                          setCustomScopes((prev) =>
+                            prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev, scope]
+                          )
+                        }
+                      />
+                    }
+                    label={<Typography variant="body2">{scope}</Typography>}
+                  />
+                ))}
+              </Box>
+            )}
             <Button
               variant="contained"
               size="medium"
               onClick={handleCreateKey}
               disabled={!newKeyName.trim() || (isCustom && customScopes.length === 0)}
-              sx={{ whiteSpace: 'nowrap' }}
+              sx={{ mt: 2, whiteSpace: 'nowrap' }}
             >
-              Generate API Key
+              Create API key
             </Button>
           </Box>
         )}
 
-        {isCustom && (
-          <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', mb: 2, flexWrap: 'wrap' }}>
-            <Typography variant="body2" color="text.secondary" sx={{ mr: 1 }}>
-              Custom scopes:
-            </Typography>
-            {ALL_SCOPES.map((scope) => (
-              <FormControlLabel
-                key={scope}
-                control={
-                  <Checkbox
-                    size="small"
-                    checked={customScopes.includes(scope)}
-                    onChange={() =>
-                      setCustomScopes((prev) =>
-                        prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev, scope]
-                      )
-                    }
-                  />
-                }
-                label={<Typography variant="body2">{scope}</Typography>}
-              />
-            ))}
-          </Box>
-        )}
-
-        {apiKeys.length === 0 ? (
-          <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
-            No API keys generated yet.
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5, gap: 1 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, color: 'text.primary' }}>
+            Current keys
           </Typography>
+          <Chip label={apiKeys.length} size="small" variant="outlined" />
+        </Box>
+        {apiKeys.length === 0 ? (
+          <Box sx={{ p: 2.5, border: 1, borderColor: 'divider', borderRadius: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              No API keys yet. Create one to connect an app or agent.
+            </Typography>
+          </Box>
         ) : (
-          <TableContainer>
+          <TableContainer sx={{ border: 1, borderColor: 'divider', borderRadius: 2 }}>
             <Table size="small">
               <TableHead>
-                <TableRow>
-                  <TableCell sx={{ fontWeight: 600 }}>Name</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>Prefix</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>Scope</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>Scopes</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>Expires</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>Last Used</TableCell>
+                <TableRow sx={{ bgcolor: 'action.hover' }}>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary' }}>Name</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary' }}>Prefix</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary' }}>Access</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary' }}>Scopes</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary' }}>Expires</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary' }}>Last used</TableCell>
                   {onRevokeApiKey && (
-                    <TableCell sx={{ fontWeight: 600 }} align="right">
+                    <TableCell sx={{ fontWeight: 600, color: 'text.secondary' }} align="right">
                       Actions
                     </TableCell>
                   )}
@@ -300,15 +331,16 @@ export const KeyManager: React.FC<KeyManagerProps> = ({
               <TableBody>
                 {apiKeys.map((k) => (
                   <TableRow key={k.id}>
-                    <TableCell sx={{ fontWeight: 500 }}>{k.name}</TableCell>
-                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                    <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{k.name}</TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
                       <code>{k.prefix}...</code>
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
                       <Chip
-                        label={k.isAccountWide ? 'Account-Wide' : 'Workspace-Scoped'}
+                        label={k.isAccountWide ? 'Account-wide' : 'Workspace'}
                         size="small"
                         color={k.isAccountWide ? 'primary' : 'default'}
+                        variant="outlined"
                       />
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>{k.scopes.join(', ')}</TableCell>
@@ -338,7 +370,7 @@ export const KeyManager: React.FC<KeyManagerProps> = ({
           </TableContainer>
         )}
 
-        <Divider sx={{ my: 3 }} />
+        <Divider sx={{ my: 3, borderColor: 'divider' }} />
         <UsagePanel isPlatformOwner={isPlatformOwner} />
       </Box>
     </Card>

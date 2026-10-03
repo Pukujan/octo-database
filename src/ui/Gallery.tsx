@@ -1,22 +1,12 @@
-/**
- * Octo Workspace Gallery (Slice 3)
- *
- * Polished visual grid for workspace images and videos with responsive lightbox viewer.
- * Follows CGM visual direction guidelines (restrained density, clear focal points, accessible contrast).
- */
+/** Workspace media gallery with an image-led grid and focused viewer. */
 
 import React, { useState } from 'react';
 import {
   Box,
-  Card,
   CardActionArea,
-  CardContent,
-  CardMedia,
-  Chip,
   Dialog,
   DialogContent,
   DialogTitle,
-  Grid,
   IconButton,
   Typography,
 } from '@mui/material';
@@ -27,132 +17,235 @@ export interface GalleryProps {
   workspaceName?: string;
 }
 
+const formatSize = (bytes: number) =>
+  bytes >= 1024 * 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
 export const Gallery: React.FC<GalleryProps> = ({ items, workspaceName }) => {
   const [selectedItem, setSelectedItem] = useState<GalleryItem | null>(null);
-
-  const imagesCount = items.filter((i) => i.kind === 'image').length;
-  const videosCount = items.filter((i) => i.kind === 'video').length;
+  const photos = items.filter((item) => item.kind === 'image').length;
+  const videos = items.length - photos;
 
   return (
     <Box>
-      {/* Gallery Header */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <div>
-          <Typography variant="h6" sx={{ fontWeight: 700 }}>
-            🖼️ {workspaceName ? `${workspaceName} Gallery` : 'Workspace Gallery'}
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: { xs: 'flex-start', sm: 'flex-end' },
+          justifyContent: 'space-between',
+          flexDirection: { xs: 'column', sm: 'row' },
+          gap: 1.5,
+          mb: 3,
+        }}
+      >
+        <Box>
+          <Typography variant="overline" sx={{ color: 'text.secondary', letterSpacing: '.14em' }}>
+            Workspace media
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {items.length === 0
-              ? 'No media items uploaded yet in this workspace.'
-              : `${imagesCount} photo${imagesCount === 1 ? '' : 's'}, ${videosCount} video${videosCount === 1 ? '' : 's'}`}
+          <Typography variant="h5" sx={{ fontWeight: 650, letterSpacing: '-.035em', lineHeight: 1.15 }}>
+            {workspaceName ? `${workspaceName} gallery` : 'Gallery'}
           </Typography>
-        </div>
+        </Box>
+        <Typography variant="body2" color="text.secondary">
+          {items.length === 0
+            ? 'A home for the images and videos in this workspace.'
+            : `${items.length} items · ${photos} photos · ${videos} videos`}
+        </Typography>
       </Box>
 
-      {/* Empty State */}
       {items.length === 0 ? (
-        <Card sx={{ p: 4, textAlign: 'center', bgcolor: 'background.paper', borderRadius: 2 }}>
-          <Typography variant="body1" sx={{ fontWeight: 500, mb: 1 }}>
-            Gallery is empty
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Upload images (JPEG, PNG, WebP) or videos (MP4, WebM) to see them displayed here.
-          </Typography>
-        </Card>
+        <Box
+          sx={(theme) => ({
+            minHeight: 220,
+            display: 'grid',
+            placeItems: 'center',
+            textAlign: 'center',
+            px: 3,
+            border: '1px dashed',
+            borderColor: 'divider',
+            borderRadius: 3,
+            bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,.025)' : 'rgba(15,23,42,.018)',
+          })}
+        >
+          <Box>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
+              Nothing here yet
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Images and videos added to this workspace will show up here.
+            </Typography>
+          </Box>
+        </Box>
       ) : (
-        /* Responsive Media Grid */
-        <Grid container spacing={2}>
-          {items.map((item) => (
-            <Grid item xs={12} sm={6} md={4} lg={3} key={item.id}>
-              <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', borderRadius: 2 }}>
-                <CardActionArea onClick={() => setSelectedItem(item)}>
+        <Box
+          sx={{
+            columns: { xs: 1, sm: 2, lg: 3 },
+            columnGap: { xs: 1.5, sm: 2 },
+            '& > *': { breakInside: 'avoid', mb: { xs: 1.5, sm: 2 } },
+          }}
+        >
+          {items.map((item, index) => (
+            <Box
+              key={item.id}
+              sx={(theme) => ({
+                overflow: 'hidden',
+                borderRadius: 2.5,
+                bgcolor: theme.palette.background.paper,
+                border: '1px solid',
+                borderColor: 'divider',
+                transition: 'transform 180ms ease, border-color 180ms ease',
+                '&:hover': {
+                  transform: 'translateY(-2px)',
+                  borderColor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,.3)' : 'rgba(15,23,42,.26)',
+                },
+              })}
+            >
+              <CardActionArea
+                onClick={() => setSelectedItem(item)}
+                aria-label={`Open ${item.kind}: ${item.name}`}
+                sx={{ display: 'block', textAlign: 'left' }}
+              >
+                <Box
+                  sx={{
+                    position: 'relative',
+                    overflow: 'hidden',
+                    aspectRatio: item.kind === 'video' ? '4 / 3' : index % 5 === 1 ? '4 / 5' : '4 / 3',
+                    bgcolor: 'action.hover',
+                    '& img': { transition: 'transform 350ms ease' },
+                    '&:hover img': { transform: 'scale(1.035)' },
+                  }}
+                >
                   {item.kind === 'image' ? (
-                    <CardMedia
+                    <Box
                       component="img"
-                      height="180"
-                      image={item.thumbnailUrl}
+                      src={item.thumbnailUrl}
                       alt={item.name}
-                      sx={{ objectFit: 'cover', bgcolor: '#f1f5f9' }}
+                      loading="lazy"
+                      sx={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover' }}
                     />
                   ) : (
                     <Box
-                      sx={{
-                        height: 180,
-                        bgcolor: '#0f172a',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: '#ffffff',
-                      }}
+                      sx={(theme) => ({
+                        height: '100%',
+                        display: 'grid',
+                        placeItems: 'center',
+                        background: theme.palette.mode === 'dark'
+                          ? 'linear-gradient(145deg, #253347, #111821 72%)'
+                          : 'linear-gradient(145deg, #dbe5ec, #9aabb8 72%)',
+                      })}
                     >
-                      <Typography sx={{ fontSize: 36, mb: 1 }}>▶️</Typography>
-                      <Typography variant="caption" sx={{ color: '#94a3b8' }}>
-                        Video Preview
+                      <Box
+                        aria-hidden="true"
+                        sx={{
+                          width: 52,
+                          height: 52,
+                          display: 'grid',
+                          placeItems: 'center',
+                          borderRadius: '50%',
+                          color: '#fff',
+                          bgcolor: 'rgba(8,15,23,.64)',
+                          backdropFilter: 'blur(8px)',
+                          '&::after': {
+                            content: '""',
+                            width: 0,
+                            height: 0,
+                            ml: '4px',
+                            borderTop: '7px solid transparent',
+                            borderBottom: '7px solid transparent',
+                            borderLeft: '10px solid currentColor',
+                          },
+                        }}
+                      />
+                      <Typography
+                        variant="caption"
+                        sx={{ position: 'absolute', bottom: 12, left: 14, color: 'rgba(255,255,255,.85)' }}
+                      >
+                        VIDEO
                       </Typography>
                     </Box>
                   )}
-                  <CardContent sx={{ p: 1.5 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                      <Typography
-                        variant="body2"
-                        noWrap
-                        sx={{ fontWeight: 600, maxWidth: 160 }}
-                        title={item.name}
-                      >
-                        {item.name}
-                      </Typography>
-                      <Chip
-                        label={item.kind === 'video' ? 'VIDEO' : 'PHOTO'}
-                        size="small"
-                        color={item.kind === 'video' ? 'secondary' : 'primary'}
-                        sx={{ fontSize: '0.65rem', height: 20 }}
-                      />
-                    </Box>
-                    <Typography variant="caption" color="text.secondary">
-                      {(item.sizeBytes / 1024).toFixed(1)} KB
+                  {item.kind === 'image' && (
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        position: 'absolute',
+                        left: 12,
+                        bottom: 10,
+                        px: 1,
+                        py: 0.35,
+                        borderRadius: 1,
+                        color: '#fff',
+                        bgcolor: 'rgba(8,15,23,.58)',
+                        backdropFilter: 'blur(8px)',
+                      }}
+                    >
+                      PHOTO
                     </Typography>
-                  </CardContent>
-                </CardActionArea>
-              </Card>
-            </Grid>
+                  )}
+                </Box>
+                <Box sx={{ px: 1.5, py: 1.35 }}>
+                  <Typography title={item.name} noWrap sx={{ fontSize: '.9rem', fontWeight: 550 }}>
+                    {item.name}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {formatSize(item.sizeBytes)}
+                  </Typography>
+                </Box>
+              </CardActionArea>
+            </Box>
           ))}
-        </Grid>
+        </Box>
       )}
 
-      {/* Lightbox Modal Dialog */}
       <Dialog
         open={Boolean(selectedItem)}
         onClose={() => setSelectedItem(null)}
-        maxWidth="md"
+        maxWidth="xl"
         fullWidth
+        PaperProps={{
+          sx: (theme) => ({
+            overflow: 'hidden',
+            borderRadius: 3,
+            bgcolor: theme.palette.mode === 'dark' ? '#10151b' : '#111820',
+            color: '#f6f8fa',
+          }),
+        }}
       >
         {selectedItem && (
           <>
-            <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2 }}>
-              <Box>
-                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, py: 1.75, px: 2.5 }}>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography noWrap sx={{ fontSize: '.95rem', fontWeight: 600 }}>
                   {selectedItem.name}
                 </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {selectedItem.mimeType} • {(selectedItem.sizeBytes / 1024).toFixed(1)} KB
+                <Typography variant="caption" sx={{ color: 'rgba(246,248,250,.64)' }}>
+                  {selectedItem.mimeType} · {formatSize(selectedItem.sizeBytes)}
                 </Typography>
               </Box>
-              <IconButton onClick={() => setSelectedItem(null)} size="small" aria-label="close">
-                ✕
+              <IconButton
+                onClick={() => setSelectedItem(null)}
+                aria-label="Close viewer"
+                sx={{ color: 'inherit', border: '1px solid rgba(255,255,255,.18)', borderRadius: 1.5 }}
+              >
+                <Box component="span" sx={{ fontSize: 22, lineHeight: 1, fontWeight: 300 }}>×</Box>
               </IconButton>
             </DialogTitle>
-            <DialogContent sx={{ p: 0, bgcolor: '#000000', display: 'flex', justifyContent: 'center' }}>
+            <DialogContent
+              sx={{
+                p: { xs: 1.5, sm: 2 },
+                minHeight: { xs: 240, sm: 420 },
+                display: 'grid',
+                placeItems: 'center',
+                bgcolor: '#080b0f',
+              }}
+            >
               {selectedItem.kind === 'image' ? (
                 <Box
                   component="img"
                   src={selectedItem.fullUrl}
                   alt={selectedItem.name}
-                  sx={{
-                    maxHeight: '75vh',
-                    maxWidth: '100%',
-                    objectFit: 'contain',
-                  }}
+                  sx={{ maxHeight: '78vh', maxWidth: '100%', objectFit: 'contain' }}
                 />
               ) : (
                 <Box
@@ -160,10 +253,7 @@ export const Gallery: React.FC<GalleryProps> = ({ items, workspaceName }) => {
                   controls
                   autoPlay
                   src={selectedItem.fullUrl}
-                  sx={{
-                    maxHeight: '75vh',
-                    maxWidth: '100%',
-                  }}
+                  sx={{ maxHeight: '78vh', maxWidth: '100%' }}
                 >
                   Your browser does not support video playback.
                 </Box>
