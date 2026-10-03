@@ -390,20 +390,56 @@ export async function dbUpdateArchiveState(
 
   if (sets.length === 0) return;
   params.push(fileId);
-  await query(
-    `UPDATE octo.files SET ${sets.join(', ')}, updated_at = now() WHERE id = $${params.length}`,
+  const updated = await query<{ id: string }>(
+    `UPDATE octo.files SET ${sets.join(', ')}, updated_at = now() WHERE id = $${params.length} RETURNING id`,
     params
   );
+  if (updated.length === 0) {
+    throw new Error(`File ${fileId} no longer exists`);
+  }
 }
 
-export async function dbDeleteFile(workspaceId: string, fileId: string): Promise<{ storageKey: string } | null> {
-  const sql = `
-    DELETE FROM octo.files
-    WHERE id = $1 AND workspace_id = $2
-    RETURNING storage_key AS "storageKey";
-  `;
-  const rows = await query<{ storageKey: string }>(sql, [fileId, workspaceId]);
-  return rows[0] ?? null;
+/** Deletes a file only when no archive/restore transition is queued or running. */
+export async function dbDeleteFileIfIdle(
+  workspaceId: string,
+  fileId: string
+): Promise<
+  | { status: 'deleted'; storageKey: string }
+  | { status: 'missing' }
+  | { status: 'busy' }
+> {
+  return withTransaction(async (client) => {
+    const files = await client.query(
+      `SELECT id, storage_key AS "storageKey", archive_state AS "archiveState"
+       FROM octo.files WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+      [fileId, workspaceId]
+    );
+    const file = files.rows[0] as { id: string; storageKey: string; archiveState: string } | undefined;
+    if (!file) return { status: 'missing' };
+
+    const transitions = await client.query(
+      `SELECT id FROM octo.jobs
+       WHERE workspace_id = $1 AND job_type IN ('archive_file', 'restore_file')
+         AND payload->>'fileId' = $2 AND state IN ('queued', 'running')
+       FOR UPDATE`,
+      [workspaceId, fileId]
+    );
+    if (
+      transitions.rows.length > 0 ||
+      file.archiveState === 'archiving' ||
+      file.archiveState === 'restoring'
+    ) {
+      return { status: 'busy' };
+    }
+
+    const deleted = await client.query(
+      `DELETE FROM octo.files WHERE id = $1 AND workspace_id = $2
+       RETURNING storage_key AS "storageKey"`,
+      [fileId, workspaceId]
+    );
+    const row = deleted.rows[0] as { storageKey: string } | undefined;
+    return row ? { status: 'deleted', storageKey: row.storageKey } : { status: 'missing' };
+  });
 }
 
 // 3. API Key Operations
@@ -676,6 +712,131 @@ export async function dbEnqueueJob(
     [workspaceId, jobType, idempotencyKey]
   );
   return { job: existing[0]!, created: false };
+}
+
+/** Queues one archive/restore transition while serialized with file deletion. */
+export async function dbEnqueueFileTransition(
+  id: string,
+  workspaceId: string,
+  direction: 'archive' | 'restore',
+  idempotencyPrefix: string,
+  payload: Record<string, unknown>,
+  createdBy: string | null
+): Promise<
+  | { status: 'missing' }
+  | { status: 'busy' }
+  | { status: 'queued'; job: DbJobRow; created: boolean }
+> {
+  const fileId = String(payload['fileId'] ?? '');
+  const jobType = direction === 'archive' ? 'archive_file' : 'restore_file';
+
+  return withTransaction(async (client) => {
+    const files = await client.query(
+      `SELECT id, archive_state AS "archiveState" FROM octo.files
+       WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+      [fileId, workspaceId]
+    );
+    const file = files.rows[0] as { id: string; archiveState: string } | undefined;
+    if (!file) return { status: 'missing' };
+
+    const open = await client.query(
+      `SELECT ${JOB_COLUMNS} FROM octo.jobs
+       WHERE workspace_id = $1 AND job_type IN ('archive_file', 'restore_file')
+         AND payload->>'fileId' = $2 AND state IN ('queued', 'running')
+       ORDER BY created_at DESC FOR UPDATE`,
+      [workspaceId, fileId]
+    );
+    const activeJob = open.rows[0] as DbJobRow | undefined;
+    if (activeJob) {
+      return activeJob.jobType === jobType
+        ? { status: 'queued', job: activeJob, created: false }
+        : { status: 'busy' };
+    }
+    if (file.archiveState === 'archiving' || file.archiveState === 'restoring') {
+      return { status: 'busy' };
+    }
+
+    const count = await client.query(
+      `SELECT count(*)::int AS count FROM octo.jobs
+       WHERE workspace_id = $1 AND job_type = $2 AND payload->>'fileId' = $3`,
+      [workspaceId, jobType, fileId]
+    );
+    const cycle = Number((count.rows[0] as { count: number } | undefined)?.count ?? 0);
+    const inserted = await client.query(
+      `INSERT INTO octo.jobs
+         (id, workspace_id, job_type, idempotency_key, payload, created_by, max_attempts)
+       VALUES ($1, $2, $3, $4, $5, $6, 3)
+       ON CONFLICT (workspace_id, job_type, idempotency_key) DO NOTHING
+       RETURNING ${JOB_COLUMNS}`,
+      [id, workspaceId, jobType, `${idempotencyPrefix}:${cycle}`, JSON.stringify(payload), createdBy]
+    );
+    if (inserted.rows[0]) {
+      return { status: 'queued', job: inserted.rows[0] as DbJobRow, created: true };
+    }
+
+    const existing = await client.query(
+      `SELECT ${JOB_COLUMNS} FROM octo.jobs
+       WHERE workspace_id = $1 AND job_type = $2 AND idempotency_key = $3`,
+      [workspaceId, jobType, `${idempotencyPrefix}:${cycle}`]
+    );
+    return { status: 'queued', job: existing.rows[0] as DbJobRow, created: false };
+  });
+}
+
+/** Requeues a failed transition only while its file still exists and is idle. */
+export async function dbRetryJob(
+  jobId: string,
+  workspaceId: string
+): Promise<'requeued' | 'busy' | 'not_retryable'> {
+  return withTransaction(async (client) => {
+    const jobs = await client.query(
+      `SELECT id, job_type AS "jobType", state, payload FROM octo.jobs
+       WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+      [jobId, workspaceId]
+    );
+    const job = jobs.rows[0] as {
+      id: string;
+      jobType: string;
+      state: string;
+      payload: Record<string, unknown>;
+    } | undefined;
+    if (!job || job.state !== 'failed') return 'not_retryable';
+
+    if (job.jobType === 'archive_file' || job.jobType === 'restore_file') {
+      const fileId = typeof job.payload?.['fileId'] === 'string' ? job.payload['fileId'] : '';
+      const files = await client.query(
+        `SELECT id, archive_state AS "archiveState" FROM octo.files
+         WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+        [fileId, workspaceId]
+      );
+      const file = files.rows[0] as { id: string; archiveState: string } | undefined;
+      if (!file) return 'not_retryable';
+
+      const open = await client.query(
+        `SELECT id FROM octo.jobs
+         WHERE workspace_id = $1 AND job_type IN ('archive_file', 'restore_file')
+           AND payload->>'fileId' = $2 AND state IN ('queued', 'running')
+         FOR UPDATE`,
+        [workspaceId, fileId]
+      );
+      if (
+        open.rows.length > 0 ||
+        file.archiveState === 'archiving' ||
+        file.archiveState === 'restoring'
+      ) {
+        return 'busy';
+      }
+    }
+
+    const requeued = await client.query(
+      `UPDATE octo.jobs
+       SET state = 'queued', attempt = 0, available_at = now(),
+           error_code = NULL, error_summary = NULL, completed_at = NULL, updated_at = now()
+       WHERE id = $1 AND workspace_id = $2 AND state = 'failed' RETURNING id`,
+      [jobId, workspaceId]
+    );
+    return requeued.rows.length > 0 ? 'requeued' : 'not_retryable';
+  });
 }
 
 export async function dbListJobs(workspaceId: string, limit = 50): Promise<DbJobRow[]> {
@@ -1118,26 +1279,6 @@ export async function dbListAgedActiveFiles(workspaceId: string, retentionDays: 
 }
 
 /**
- * How many jobs of one type already exist for one file. Used as a monotonic
- * suffix on the archive/restore idempotency key: it is unchanged while a
- * transition is in flight (so a duplicate is deduped), and increments once the
- * transition completes (so a later cycle of the same transition is not
- * permanently swallowed by the unique constraint).
- */
-export async function dbCountFileJobs(
-  workspaceId: string,
-  jobType: string,
-  fileId: string
-): Promise<number> {
-  const rows = await query<{ count: number }>(
-    `SELECT count(*)::int AS count FROM octo.jobs
-     WHERE workspace_id = $1 AND job_type = $2 AND payload->>'fileId' = $3`,
-    [workspaceId, jobType, fileId]
-  );
-  return rows[0]?.count ?? 0;
-}
-
-/**
  * True when a job of this type for this file is still open (queued or running).
  * The retention sweep uses it to avoid double-queueing a file that is already
  * mid-transition.
@@ -1157,4 +1298,3 @@ export async function dbHasOpenFileJob(
   );
   return rows[0]?.open ?? false;
 }
-
