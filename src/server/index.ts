@@ -39,10 +39,10 @@ import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { hashApiKeySecret } from '../api/keys';
 import {
-  dbCountFileJobs,
   dbCountTransientFiles,
   dbCreateWorkspaceAtomic,
-  dbDeleteFile,
+  dbDeleteFileIfIdle,
+  dbEnqueueFileTransition,
   dbDeleteWorkspaceAtomic,
   dbGetArchiveRecord,
   dbGetAccountWideKeyId,
@@ -69,6 +69,7 @@ import {
   dbReplaceChunksAndEmbeddings,
   dbUpsertDocumentVersion,
   dbEnqueueJob,
+  dbRetryJob,
   dbFailJob,
   dbListActivity,
   dbListJobs,
@@ -460,14 +461,16 @@ async function enqueueFileTransition(
   workspaceId: string,
   file: { id: string; storageKey: string; mimeType: string },
   createdBy: string | null
-): Promise<{ job: Awaited<ReturnType<typeof dbEnqueueJob>>['job']; created: boolean }> {
-  const jobType = direction === 'archive' ? 'archive_file' : 'restore_file';
-  const cycle = await dbCountFileJobs(workspaceId, jobType, file.id);
-  return dbEnqueueJob(
+): Promise<
+  | { status: 'missing' }
+  | { status: 'busy' }
+  | { status: 'queued'; job: Awaited<ReturnType<typeof dbEnqueueJob>>['job']; created: boolean }
+> {
+  return dbEnqueueFileTransition(
     randomUUID(),
     workspaceId,
-    jobType,
-    `${direction}:${file.id}:${cycle}`,
+    direction,
+    `${direction}:${file.id}`,
     { fileId: file.id, storageKey: file.storageKey, mimeType: file.mimeType },
     createdBy
   );
@@ -490,13 +493,13 @@ async function runRetentionSweep(): Promise<number> {
       const file = await dbGetFile(workspace.id, fileId);
       if (!file) continue;
 
-      const { created } = await enqueueFileTransition(
+      const transition = await enqueueFileTransition(
         'archive',
         workspace.id,
         { id: file.id, storageKey: file.storageKey, mimeType: file.mimeType },
         null
       );
-      if (created) enqueued += 1;
+      if (transition.status === 'queued' && transition.created) enqueued += 1;
     }
   }
   return enqueued;
@@ -1444,13 +1447,17 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const deleted = await dbDeleteFile(workspaceId, fileId);
-      if (!deleted) {
+      const result = await dbDeleteFileIfIdle(workspaceId, fileId);
+      if (result.status === 'missing') {
         sendJson(res, 404, { error: 'FILE_NOT_FOUND' });
         return;
       }
+      if (result.status === 'busy') {
+        sendJson(res, 409, { error: 'FILE_BUSY: archive or restore is in progress' });
+        return;
+      }
 
-      await objectStore.delete(deleted.storageKey);
+      await objectStore.delete(result.storageKey);
 
       await attributeAgentAction(auth, workspaceId, 'file.deleted', `File ${fileId} deleted by agent principal`);
       sendJson(res, 200, { success: true, fileId });
@@ -1512,12 +1519,21 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const { job, created } = await enqueueFileTransition(
+      const transition = await enqueueFileTransition(
         direction,
         workspaceId,
         { id: file.id, storageKey: file.storageKey, mimeType: file.mimeType },
         auth.principal.id
       );
+      if (transition.status === 'missing') {
+        sendJson(res, 404, { error: 'FILE_NOT_FOUND' });
+        return;
+      }
+      if (transition.status === 'busy') {
+        sendJson(res, 409, { error: 'FILE_BUSY: another archive or restore is in progress' });
+        return;
+      }
+      const { job, created } = transition;
 
       if (created) {
         await dbRecordActivity(
@@ -2099,6 +2115,10 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId, jobType, and idempotencyKey are required' });
         return;
       }
+      if (jobType === 'archive_file' || jobType === 'restore_file') {
+        sendJson(res, 400, { error: 'JOB_TYPE_RESERVED: use the file archive or restore route' });
+        return;
+      }
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -2224,16 +2244,12 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const rows = await query<{ id: string }>(
-        `UPDATE octo.jobs
-         SET state = 'queued', attempt = 0, available_at = now(),
-             error_code = NULL, error_summary = NULL, completed_at = NULL, updated_at = now()
-         WHERE id = $1 AND workspace_id = $2 AND state = 'failed'
-         RETURNING id`,
-        [jobId, workspaceId]
-      );
-
-      if (rows.length === 0) {
+      const retry = await dbRetryJob(jobId, workspaceId);
+      if (retry === 'busy') {
+        sendJson(res, 409, { error: 'FILE_BUSY: archive or restore is in progress' });
+        return;
+      }
+      if (retry !== 'requeued') {
         sendJson(res, 404, { error: 'JOB_NOT_RETRYABLE: no failed job with that id in this workspace' });
         return;
       }
