@@ -33,9 +33,11 @@ function Splash() {
  * authenticated shell.
  */
 export function AuthGate({ children }: { children: React.ReactNode }) {
-  const { isDemo, isAuthenticated, isLoading } = useAuth();
+  const { isDemo, isAuthenticated, isLoading, isError } = useAuth();
 
   if (isDemo || isAuthenticated) return <>{children}</>;
-  if (isLoading) return <Splash />;
+  // Splash only while the session is first being resolved; never swap out a
+  // mounted login screen because a query went back to loading.
+  if (isLoading && !isError) return <Splash />;
   return <LoginPage />;
 }

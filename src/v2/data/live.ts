@@ -74,6 +74,13 @@ export class LiveOctoApi implements OctoApi {
       throw new OctoApiError({ status: 0, message: UNREACHABLE_MESSAGE });
     }
 
+    // The Vite dev proxy answers ECONNREFUSED with a 502, so `fetch` resolves
+    // instead of throwing. Treat gateway errors as "backend unreachable" too.
+    if (response.status === 502 || response.status === 503 || response.status === 504) {
+      this.offlineUntil = Date.now() + OFFLINE_COOLDOWN_MS;
+      throw new OctoApiError({ status: 0, message: UNREACHABLE_MESSAGE });
+    }
+
     if (response.status === 401) {
       try {
         window.localStorage.removeItem(TOKEN_KEY);

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { StorageSnapshot } from "@v2/types/octo";
 import type { CreateApiKeyInput, UploadFileInput } from "./adapter";
 import { useOctoData } from "./provider";
+import { getToken } from "@v2/auth/session";
 
 export const queryKeys = {
   me: ["me"] as const,
@@ -21,8 +22,16 @@ export function useMe() {
   const { api } = useOctoData();
   return useQuery({
     queryKey: queryKeys.me,
-    queryFn: () => api.getMe(),
+    // Live mode without a session token is simply signed out: resolve `null`
+    // instead of sending a request that can only fail.
+    queryFn: () =>
+      api.mode === "live" && !getToken() ? Promise.resolve(null) : api.getMe(),
     retry: false,
+    // A newly mounted observer (e.g. LoginPage) must not refetch an errored
+    // query. Without this, the refetch flips the query back to `pending`,
+    // AuthGate swaps LoginPage for the splash, and the two remount each other
+    // in a tight request loop while the backend is unreachable.
+    retryOnMount: false,
     staleTime: 30_000,
   });
 }
@@ -99,6 +108,7 @@ export function useHealth() {
     // A point-in-time connectivity check, not a polled metric: no interval, so
     // an offline backend cannot produce a steady stream of failed requests.
     retry: false,
+    retryOnMount: false,
     staleTime: 60_000,
   });
 }
