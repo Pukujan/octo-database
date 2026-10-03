@@ -1,199 +1,68 @@
-# Control-plane adoption research — checkpoint
+# Control-plane adoption research
 
-**Date:** 2026-10-02
-**Status:** research checkpoint, no decision taken
-**Issue:** octo-database #71
-**Author:** coding agent, at owner request
+**Date:** 2026-10-02 · **Status:** Research checkpoint; recommendations below do not authorize a migration.
+**Issue:** [octo-database #72](https://github.com/Pukujan/octo-database/issues/72)
 
-> **Tooling caveat.** Web search returned no results during this session (the
-> tool echoed its call and produced nothing). Everything below is from the
-> repository's actual code plus prior knowledge. Version-specific claims about
-> third-party products are marked *(verify)* and must be checked against current
-> documentation before any decision is made on them.
+## What this research answers
 
-## 1. Why this document exists
+Issue #72 asks whether Octo should adopt a mature database/control-plane product, what remains specific to Octo, how to handle non-Postgres projections, and how to make agents reuse mature software. This note compares documented product capabilities and proposes a default direction. It does not pick a provider or authorize a topology change.
 
-The owner reviewed the custom dashboard and asked whether Octo should have
-adopted a mature self-hosted control plane instead of hand-building one. The
-owner's questions, verbatim:
+The issue #72 working notes describe the broader goal: Octo is a workspace portal that connects project-specific workflows and existing tools. The dashboard, gallery, and operations experience remain product requirements under `AGENTS.md`; native consoles complement those views.
 
-> any alternative? what would give me great control, without having to make
-> everything myself, i wouldve preffered if our agents simply COPIED whats
-> lareayd out there instead of making everything from scratch and used glue
-> code, seems to be an agent behaviour to just like to code everything, and give
-> me more trouble with HALF BAKED system that doesnt provide as much feature as
-> a fully mature system does, why do agents do this reallly? or am i just trying
-> to justify myselkf? yes i said fast hosting speed and proper use case i can
-> use fast but holy shit this system is lacking so much???????????????
->
-> and what about our future cloud host for things like neo4j projections graph
-> db projections and other db projection not just postgres?
+## Current Octo boundary
 
-Three questions are bundled here and each needs a separate answer:
+The repository's Gravebuster compose file defines Octo's current Caddy, Node API, and PostgreSQL/pgvector services. It does not define Supabase Studio, Auth, PostgREST, or Supabase Storage. The application currently owns workspace membership and route authorization. Therefore, installing Supabase would be a platform change: the existing schema or application behavior should not be assumed to become Supabase-managed automatically.
 
-1. What are the mature alternatives to a hand-rolled control plane?
-2. Why do agents rebuild instead of adopting, and how is that prevented durably?
-3. How does a future host serve non-Postgres projections (Neo4j, pgvector,
-   DuckDB) without hand-building a console for each?
+The production URL was reachable during this research and `/health` reported PostgreSQL and R2 connected plus Google OAuth configured. The Gravebuster peer was visible on Tailscale, but SSH authentication was denied from this session. The compose observation is from the repository; the live service status is from the health response.
 
-## 2. Verified state of the current system
+## Candidate comparison
 
-Checked against the working tree, not inferred:
+“Console quality” below means the workflows documented by each vendor, not a visual-design score. Glue estimates are relative to Octo's existing PostgreSQL and workspace model.
 
-| Claim | Evidence |
-|---|---|
-| Octo does not run Supabase | `deploy/gravebuster/docker-compose.yml` has three services: `octo-web` (Caddy), `octo-api` (Node), `octo-db` (`pgvector/pgvector:pg16`). No GoTrue, PostgREST, Storage, Studio, Kong, or postgres-meta. |
-| The schema targets Supabase Auth | `octo.principals.auth_user_id UUID UNIQUE` mirrors `auth.users.id`. |
-| RLS policies expect Supabase | Every policy resolves identity through `octo.current_principal_id()` → `WHERE auth_user_id = auth.uid()`. |
-| **RLS is declared but not enforced** | All 70 policy statements use `ENABLE ROW LEVEL SECURITY`, never `FORCE`. The server connects as `postgres` (superuser) via `pg.Pool`; superusers bypass RLS. `grep` for `SET ROLE`, `SET LOCAL`, `request.jwt`, `current_setting` in `src/` returns nothing. |
-| Authorization lives in application code | `dbGetAuthorizedWorkspaces`, `dbGetWorkspaceMembership`, and per-route scope checks in `src/server/`. |
-| The dashboard duplicates a mature admin surface | `src/ui/Dashboard.tsx` (~1313 lines) contains a Platform Admin modal with infra-status cards, external-console launchers, and a tenant workspace registry. Issue #52 proposes expanding it. |
-| Auth is custom | Google OAuth + guest sessions implemented in `src/server/`; the session token is the principal's UUID. |
-
-**The load-bearing finding:** the schema was written *for* Supabase and the
-runtime quietly replaced it. RLS is the security model on paper; application
-code is the security model in practice. A move to the real Supabase stack would
-activate the RLS work already committed rather than discard it.
-
-## 3. The alternatives
-
-There is no single off-the-shelf product that delivers **self-hosted + many
-independent projects + mature per-project console** on one host. That exact
-combination is what Supabase Cloud is, and it is not documented for
-self-hosting. The realistic choices trade one property away.
-
-```
-              self-hosted
-                  /\
-                 /  \
-                /    \
-   many projects ---- mature / low-maintenance
-        (pick two, mostly)
-```
-
-### Path A — Supabase Cloud, one project per workspace
-
-- Mature, zero maintenance, per-project Studio, per-project auth and storage.
-- Loses: self-hosting. Costs per project; free tier is a small fixed number of
-  projects *(verify)*.
-- Best if "self-hosted" was a means to control and cost, not an end.
-
-### Path B — One self-hosted Supabase, workspaces as RLS tenancy
-
-- Mature, self-hosted, one stack to run, one login across workspaces.
-- Loses: per-workspace console isolation. Studio is one shared console; the
-  workspace boundary is RLS policies, which the schema already defines.
-- Smallest change from today. Finishes the migration the schema started.
-
-### Path C — A different mature multi-project platform
-
-- **Appwrite** — self-hosted, projects are first-class with a console project
-  switcher *(verify)*. Loses raw Postgres: its database is a document abstraction,
-  so pgvector and hand-written SQL/RLS do not carry over.
-- **Nhost** — Postgres + Hasura + GoTrue + Storage, self-hosted, with a console
-  *(verify)*. Closer to Supabase; smaller ecosystem.
-- **Hasura** alone — one instance can front multiple databases *(verify)*, but it
-  is a GraphQL layer, not a database provisioner or an admin console.
-- **Directus / NocoDB / Baserow** — data-admin over a database, not a
-  multi-database provisioner.
-
-### Path D — Real infrastructure, mature components, no hand-building
-
-- **Kubernetes + CloudNativePG** — the CNCF operator provisions and manages many
-  independent Postgres clusters on one host, each with its own credentials,
-  backups, and monitoring. Pair with **pgAdmin**, which natively registers many
-  Postgres servers in one console.
-- **Dokploy / Coolify / Porter** — PaaS layers that deploy and manage many
-  services and databases on one host from a console *(verify)*.
-- Delivers the most control with the least hand-written code, but you become an
-  infrastructure operator. Note: Kubernetes is an explicit Octo non-goal
-  (`PROJECT.md`), so this path requires the owner to lift that.
-
-### The cheap, boring option that is easy to miss
-
-**pgAdmin already manages many Postgres servers in one UI.** If the requirement
-is "one console, many Postgres databases, nothing hand-built," pgAdmin satisfies
-it today with zero custom code. It is not as polished as Studio, but it is
-mature and it is free. Worth weighing before any migration.
-
-## 4. The projection question (Neo4j, pgvector, DuckDB)
-
-A Supabase-based host covers **Postgres only**. The other projections do not fit
-inside it, and unifying them under one custom dashboard is precisely the
-over-build trap this document exists to avoid.
-
-| Projection | Where it lives | Console | Octo's role |
+| Product | Console and project model | PostgreSQL fidelity | Glue for Octo |
 |---|---|---|---|
-| pgvector | inside Postgres | Supabase Studio / pgAdmin | none needed |
-| Neo4j graph | separate database | Neo4j Browser / Bloom *(verify)* | link out |
-| DuckDB / Parquet | embedded / analytical | none by default; MotherDuck if hosted *(verify)* | link out or none |
+| **Self-hosted Supabase** | Mature Studio, but a self-hosted deployment represents one project; Studio has no multi-organization/project switcher. [Self-hosting](https://supabase.com/docs/guides/self-hosting) | Full PostgreSQL plus Supabase Auth, APIs, and related services when the full stack is deployed. | **Low** to run one stack; **medium/high** to adopt it from Octo's current runtime and map existing app behavior. **High** for one stack per Octo workspace, because Octo would also need to provision and operate a fleet. |
+| **Supabase Cloud** | Supabase's managed project platform and Studio; organizations contain projects. It avoids operating the stack, while each project remains a separately managed environment. [Organizations and projects](https://supabase.com/docs/guides/platform/billing-faq) | Full managed PostgreSQL/Supabase platform. | **Medium/high** to migrate Octo's current runtime; **high** for one project per workspace if Octo also automates project lifecycle. |
+| **Supabase Studio / `postgres-meta` alone** | Studio is a UI for the Supabase platform APIs; `postgres-meta` is a supporting metadata service, not the Studio product. The upstream repository explicitly says not to use `postgres-meta` standalone. [Studio](https://supabase.com/docs/guides/self-hosting/docker), [postgres-meta](https://github.com/supabase/postgres-meta) | Can inspect Postgres metadata; does not supply the rest of Supabase's project runtime. | **High**. It is not a drop-in general Postgres control plane. |
+| **pgAdmin** | Specialist Postgres administration UI with server groups and multiple registered servers. [Server groups](https://www.pgadmin.org/docs/pgadmin4/latest/server_group_dialog.html), [server connections](https://www.pgadmin.org/docs/pgadmin4/latest/connecting.html) | **Very high** for Postgres administration and development. It does not provision Octo workspaces or provide a cross-product portal. | **Low** to connect to existing databases; Octo supplies workspace context and links. |
+| **DBeaver** | Community/desktop editions organize connections in projects; Team Edition adds a server/web collaboration surface and can display multiple projects. It remains a database client, not Octo's workspace portal. [Projects](https://dbeaver.com/docs/dbeaver/Projects/), [Team Edition projects](https://dbeaver.com/docs/team-edition/Projects/) | **High** for interactive SQL and database inspection across supported engines. | **Low** for individual operators; Team Edition adds operating/setup and licensing considerations. Neither provides Octo's workspace entry or user-facing gallery/jobs. |
+| **Directus** | Rich Data Studio for a SQL-backed instance. Directus defines a project as an instance connected to a database; a fleet of separate projects therefore needs separate instances or custom provisioning/navigation. [Project glossary](https://docs.directus.io/user-guide/overview/glossary), [database config](https://docs.directus.io/self-hosted/config-options) | **High** for data-model and record workflows; not a complete Postgres server administration console. | **Medium** for a single existing database; **high** for Octo-managed per-workspace instances. |
+| **NocoDB** | Spreadsheet-style base UI; can connect a base to an external data source. Community Edition includes one workspace. [External sources](https://nocodb.com/docs/product/integrations/data-sources/connect-to-data-source), [edition comparison](https://nocodb.com/docs/product/account-settings/cloud-enterprise-edition/community-vs-paid-editions) | **Medium** for table/data/schema workflows; not server-level Postgres administration. | **Low to medium** to browse tables; higher for a fleet of independent Octo workspaces and non-table operations. |
+| **Baserow** | Workspace/database/app UI. Its PostgreSQL path is data synchronization, not a general admin console over arbitrary databases. [Workspaces](https://baserow.io/user-docs/intro-to-workspaces), [PostgreSQL sync](https://baserow.io/user-docs/data-sync-in-baserow) | **Low to medium** for external Postgres management; stronger for Baserow-managed workspaces and synced views. | **Medium** for synchronized views; high if the requirement is direct, full-fidelity Postgres administration. |
+| **Hasura** | GraphQL/API console and metadata/migration workflow; can expose multiple data sources but is not a fleet-wide database administrator. [Multiple sources](https://hasura.io/blog/a-hasura-2-0-engineering-overview), [migrations](https://hasura.io/learn/graphql/hasura-advanced/migrations-metadata/) | **High** for API-facing schema and data workflows; not a replacement for a native server console. | **Medium** for an API product; extra work to map many Octo workspaces to databases. |
+| **Nhost** | Cloud organizations contain projects, each managed as part of Nhost's application platform. Its local stack is aimed at developing an Nhost app, not attaching one console to Octo's existing database fleet. [Organizations](https://docs.nhost.io/platform/cloud/billing), [local development](https://docs.nhost.io/platform/cli/local-development) | **High** within an Nhost project. | **High** if retaining Octo's current backend: adoption means bringing in more of Nhost's platform, rather than adding only a Postgres console. |
+| **Appwrite** | Appwrite Cloud now documents managed native Postgres databases alongside its app-oriented data products. Projects organize those services. Self-hosted Appwrite's Postgres configuration describes Appwrite's own backend database. [Native databases](https://appwrite.io/docs/products/databases/postgresql/quick-start), [self-hosted backend](https://appwrite.io/docs/advanced/self-hosting/configuration/databases) | **High** for its Cloud native Postgres offering; do not confuse it with self-hosted Appwrite's internal database. | **High** if Octo stays self-hosted: the documented native Postgres service is in Appwrite Cloud, so using it would change hosting/provider. The database itself is standard PostgreSQL with direct driver access, not an Appwrite-only data API. |
 
-**The model that avoids hand-building:** Octo is a **launcher**, not a unified
-console. Each projection keeps its own native console; Octo links to it. The
-dashboard already has an "External Admin Consoles" section doing exactly this.
-Trying to render Neo4j, Postgres, and DuckDB through one custom UI is how the
-current over-build happened in the first place.
+## Recommendation and topology tradeoffs
 
-## 5. Why agents rebuild instead of adopting
+**Recommended working default:** keep Octo's existing workspace model and database topology while finishing accepted user workflows. Keep Octo's dashboard as the workspace entry point; use native consoles for the database-specific work they already handle well. Do not migrate to a provider merely to get a console before the owner has selected the desired project boundary.
 
-The owner's question — *"why do agents do this really? or am i just trying to
-justify myself?"* — deserves a direct answer. This is not the owner rationalizing;
-the duplication is verifiable (see §2). Several mechanisms produce it:
+If Supabase is selected later, a single self-hosted Supabase project is the lower-operations starting point: multiple Octo workspaces map inside that project, with Studio serving the project rather than switching between workspaces. One Supabase project per workspace gives cleaner provider-level separation and a project-specific Studio, but adds stacks, upgrades, backups, and provisioning glue. Supabase Cloud removes self-host operations but retains project lifecycle and cost tradeoffs. A shared project also does not itself settle Octo's authorization design; the existing app model needs to be deliberately mapped to the chosen platform.
 
-1. **Writing code is the path of least resistance.** A generative model can emit
-   a plausible implementation locally, with no dependency resolution and no
-   external system to stand up. Adopting mature OSS means understanding a large,
-   version-specific deployment surface and *verifying it actually runs* — which
-   the agent usually cannot do inside its sandbox.
-2. **A custom implementation looks finished; an integration looks unfinished.**
-   Progress is judged by visible artifacts. A new file reads as work; "we should
-   configure the existing product" reads as a deferral.
-3. **The agent does not carry the maintenance cost.** It writes once; the human
-   operates it forever. There is no feedback signal for the future burden, so
-   nothing penalizes the choice.
-4. **The issue text licensed it.** The original slices said *"build a control
-   dashboard"* (#3), *"build a gallery"* (#5), *"build an operations page"* (#8).
-   An agent given "build X" builds X. The anti-overengineering contract arrived
-   later, and its "reuse OSS first" rule is a principle, not a check.
-5. **Verification asymmetry.** "Does my new endpoint work?" is testable locally.
-   "Is this the right product to have used?" is not a test, so it is never asked.
+This is a default for continuing current work, not a recommendation to migrate. The open owner decision is whether a future Octo workspace must correspond to an independently provisioned database project. If that is not a product requirement, the current shared database boundary is the simpler fit.
 
-**What durably prevents it** is not another principle in `AGENTS.md` — the
-principle already exists and was ignored. It is a check the agent cannot pass by
-writing more code. Candidate mechanisms, to be chosen by the owner:
+## Non-Postgres projections
 
-- A required "adoption note" on any UI/infra slice: name the mature product that
-  already does this, and state why it was rejected. The default answer is to use
-  it.
-- A line-count or surface budget: new custom admin/infra UI requires an explicit
-  owner waiver.
-- Delete-first: remove the duplicated surface (e.g. the Platform Admin modal)
-  before adding anything new.
+Use each engine's native console for its own administration and keep Octo as the workspace-level navigation and workflow shell:
 
-## 6. Open decisions for the owner
+| Data/projection | Natural tool boundary |
+|---|---|
+| PostgreSQL and pgvector | pgAdmin or the selected Postgres platform's Studio. pgvector is an extension within PostgreSQL, not a separate database console. |
+| Neo4j projection | Neo4j's own browser/developer tooling; Octo can provide a workspace link and projection status. |
+| Parquet with DuckDB | Use the analytics job/query surface for accepted workspace questions and DuckDB's local UI (`duckdb -ui`) or another DuckDB client for specialist inspection. The local UI opens for the DuckDB process it was started from; DuckDB is often embedded in the analytics process rather than a separately hosted server. [DuckDB UI](https://duckdb.org/docs/stable/core_extensions/ui) |
 
-1. **Workspace ↔ project mapping.** One project per workspace (clean isolation,
-   more infrastructure) vs. one project with RLS tenancy (lightest, shared
-   console).
-2. **Is self-hosting a hard requirement** or a preference? Path A is by far the
-   least work if it is a preference.
-3. **Which path** — A, B, C, or D.
-4. **Which mechanism** (from §5) becomes the durable anti-rebuild rule.
-5. **Whether the Kubernetes non-goal** is lifted if Path D is chosen.
+Octo still needs workflow-specific UI for workspace selection, files/gallery, jobs, activity, and accepted proposals. It should not reproduce SQL editors, graph explorers, or general BI builders when a mature tool already owns that workflow. Deep links are the smallest integration; embedding should be evaluated only if the chosen product and workflow require it.
 
-## 7. What must survive any migration
+## Why agents rebuild, and the repository rule
 
-Not up for redesign in this work; listed so no path silently drops them:
+Agents tend to implement a local substitute because a small custom screen or endpoint is easy to generate and verify in isolation. Evaluating an existing product requires checking its deployment model, connecting it to real data, and proving the user task works through that integration. Issue wording such as “build a dashboard” can also encourage the agent to interpret the requested outcome as permission to implement the whole generic admin surface. The maintenance cost lands after the agent's turn, so local completion signals reward new code more readily than a working integration.
 
-- R2-active / Drive-cold archive lifecycle with hash-verified copy and
-  on-demand restore.
-- Workspace-scoped agent keys (`octo_live_ws_`) with the read/write/files/delete
-  presets.
-- The job scheduler and activity trail.
-- Gallery, thumbnails, and revocable read-only share links.
-- The human-confirmation gate on destructive commands.
+The durable reuse rule should be: **use the selected provider's native console or a maintained OSS tool for generic infrastructure administration, with Octo providing workspace context and links. Keep custom UI focused on Octo-specific workflows such as workspace files, gallery, jobs, activity, and accepted proposals.**
 
-## 8. Next action
+This rule is already reflected in `AGENTS.md`'s reuse-before-build instruction and the `Reuse` field in `docs/productization/SLICE_CONTRACT.md`. Agents should answer that existing field for each UI or infrastructure slice; it helps planning compare adoption with custom code without adding a CI check, review gate, or approval layer.
 
-Owner reviews this checkpoint and answers §6. No implementation follows until
-the mapping in §6.1 is settled.
+## Limits and open decision
+
+Vendor documentation describes capabilities, not comparative UX quality under Octo's user count, deployment budget, or operator habits. A bounded trial with Octo's actual workflows is needed before choosing a new platform. Current evidence favors native consoles for specialist administration and Octo's workspace-specific shell for cross-system workflows. It does not determine whether the owner wants each workspace to own a separate database project.
+
+**Owner decision requested by issue #72:** should one Octo workspace ever require its own independently provisioned database project, or should workspaces remain application-level contexts inside the current shared database environment? No migration should be inferred from this note.
