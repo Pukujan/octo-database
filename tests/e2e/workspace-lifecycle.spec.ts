@@ -21,8 +21,7 @@ import { auditPage } from './vision-audit';
 
 /** Selects a workspace by name from the dashboard's workspace switcher. */
 async function selectWorkspace(page: Page, name: string): Promise<void> {
-  await page.getByRole('combobox').first().click();
-  await page.getByRole('option', { name: new RegExp(name) }).click();
+  await page.locator('#workspace-select').selectOption({ label: name });
 }
 
 test.describe('Workspace data plane', () => {
@@ -56,7 +55,7 @@ test.describe('Workspace data plane', () => {
     await selectWorkspace(page, wsName);
     await page.getByRole('button', { name: 'New text file' }).click();
     await page.fill('input[placeholder="notes.txt"]', 'lifecycle.txt');
-    await page.fill('input[placeholder="Write something useful…"]', 'round-trip payload');
+    await page.fill('textarea[placeholder="Write something useful…"]', 'round-trip payload');
     await page.getByRole('button', { name: 'Save file' }).click();
     await page.getByRole('button', { name: 'Files', exact: true }).click();
     await expect(page.getByRole('cell', { name: 'lifecycle.txt', exact: true })).toBeVisible();

@@ -57,7 +57,7 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     await page.getByRole('button', { name: 'Files', exact: true }).click();
     await page.getByRole('button', { name: 'New text file' }).click();
     await page.fill('input[placeholder="notes.txt"]', 'qa_report.txt');
-    await page.fill('input[placeholder="Write something useful…"]', 'Live visual QA report verification text.');
+    await page.fill('textarea[placeholder="Write something useful…"]', 'Live visual QA report verification text.');
     await page.getByRole('button', { name: 'Save file' }).click();
 
     // Verify file appears in table
