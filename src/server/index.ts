@@ -86,6 +86,9 @@ import {
   dbUpdateArchiveState,
   dbVerifyApiKey,
   query,
+  queryService,
+  bindRequestIdentity,
+  runWithRequestIdentity,
   testDbConnection,
 } from './db';
 import { Principal, ROLE_HIERARCHY, WorkspaceRole } from '../types/auth';
@@ -292,7 +295,7 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
     if (!verified) return null;
 
     // Resolve principal
-    const rows = await query<{
+    const rows = await queryService<{
       id: string;
       auth_user_id: string;
       email: string;
@@ -320,6 +323,8 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
       updatedAt: new Date().toISOString(),
     };
 
+    bindRequestIdentity(pRow.id, verified.workspaceId ?? null);
+
     return {
       principal,
       apiKey: {
@@ -341,7 +346,7 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
     return null;
   }
 
-  const rows = await query<{
+  const rows = await queryService<{
     id: string;
     auth_user_id: string;
     email: string;
@@ -356,6 +361,8 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
 
   if (rows.length === 0) return null;
   const pRow = rows[0]!;
+
+  bindRequestIdentity(pRow.id, null);
 
   return {
     principal: {
@@ -408,6 +415,9 @@ async function authorizeMediaRequest(
     // Membership is still re-checked, so revoking access invalidates live tokens.
     const mem = await dbGetWorkspaceMembership(claims.workspaceId, claims.principalId);
     if (!mem) return null;
+    // The signature already names the principal and workspace, so bind them before the
+    // fenced file read that follows (image/video tags carry no Authorization header).
+    bindRequestIdentity(claims.principalId, claims.workspaceId);
     return {
       principalId: claims.principalId,
       workspaceId: claims.workspaceId,
@@ -419,6 +429,10 @@ async function authorizeMediaRequest(
   // link therefore also invalidates every media URL it signed.
   const share = await dbResolveShareById(claims.shareId);
   if (!share || share.workspaceId !== claims.workspaceId) return null;
+
+  // Bind the share creator so the fenced read is scoped to exactly the shared
+  // workspace; the creator is a member, so the membership predicate also passes.
+  bindRequestIdentity(share.createdBy, claims.workspaceId);
 
   return {
     principalId: share.createdBy,
@@ -506,13 +520,16 @@ async function runRetentionSweep(): Promise<number> {
     for (const fileId of await dbListAgedActiveFiles(workspace.id, workspace.retentionDays)) {
       if (await dbHasOpenFileJob(workspace.id, 'archive_file', fileId)) continue;
 
-      const file = await dbGetFile(workspace.id, fileId);
+      // The sweep runs with no caller identity (a background interval), so it reads
+      // through the trusted service pool: dbGetFile is RLS-fenced and would return
+      // nothing without a bound principal.
+      const file = await dbGetArchiveRecord(workspace.id, fileId);
       if (!file) continue;
 
       const transition = await enqueueFileTransition(
         'archive',
         workspace.id,
-        { id: file.id, storageKey: file.storageKey, mimeType: file.mimeType },
+        { id: file.fileId, storageKey: file.storageKey, mimeType: file.mimeType },
         null
       );
       if (transition.status === 'queued' && transition.created) enqueued += 1;
@@ -648,7 +665,7 @@ export function getGoogleClientCredentials(): { clientId: string | null; clientS
   return { clientId, clientSecret };
 }
 
-export const server = createServer(async (req, res) => {
+async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   // Handle CORS Preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -2047,6 +2064,10 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
+      // The token has authorized this workspace read; bind the share creator so the
+      // fenced file listing is scoped to exactly the shared workspace.
+      bindRequestIdentity(share.createdBy, share.workspaceId);
+
       const mediaFiles = (await dbListWorkspaceFiles(share.workspaceId)).filter(
         (f) => f.mimeType.startsWith('image/') || f.mimeType.startsWith('video/')
       );
@@ -2621,6 +2642,13 @@ export const server = createServer(async (req, res) => {
     const message = err instanceof Error ? err.message : String(err);
     sendJson(res, 500, { error: `INTERNAL_SERVER_ERROR: ${message}` });
   }
+}
+
+// Every request runs inside a fresh identity holder so concurrent requests can
+// never share RLS claims. `authenticateRequest` fills it in; `query()` binds it,
+// transaction-scoped, on the fenced app pool.
+export const server = createServer((req, res) => {
+  void runWithRequestIdentity(() => handleRequest(req, res));
 });
 
 // Start listening if run directly. Compare on the basename so the guard holds on

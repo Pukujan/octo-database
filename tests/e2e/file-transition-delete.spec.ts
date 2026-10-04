@@ -2,7 +2,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { expect, test, APIRequestContext } from '@playwright/test';
-import { dbEnqueueFileTransition, query } from '../../src/server/db';
+import { dbEnqueueFileTransition, queryService } from '../../src/server/db';
 
 async function createFileFixture(request: APIRequestContext) {
   const guestResponse = await request.post('/api/auth/guest', {
@@ -50,7 +50,7 @@ for (const { direction, state } of [
     if (queued.status !== 'queued') return;
     const jobId = queued.job.id;
     if (state === 'running') {
-      await query("UPDATE octo.jobs SET state = 'running' WHERE id = $1", [jobId]);
+      await queryService("UPDATE octo.jobs SET state = 'running' WHERE id = $1", [jobId]);
     }
 
     const headers = { Authorization: `Bearer ${fixture.sessionToken}` };
@@ -59,13 +59,13 @@ for (const { direction, state } of [
     expect(refused.status()).toBe(409);
     expect((await refused.json()).error).toContain('FILE_BUSY');
 
-    const stillPresent = await query<{ id: string }>(
+    const stillPresent = await queryService<{ id: string }>(
       'SELECT id FROM octo.files WHERE workspace_id = $1 AND id = $2',
       [fixture.workspace.id, fixture.file.id]
     );
     expect(stillPresent).toHaveLength(1);
 
-    await query("UPDATE octo.jobs SET state = 'completed' WHERE id = $1", [jobId]);
+    await queryService("UPDATE octo.jobs SET state = 'completed' WHERE id = $1", [jobId]);
     const deleted = await request.delete(url, { headers });
     expect(deleted.status()).toBe(200);
   });
@@ -73,14 +73,14 @@ for (const { direction, state } of [
 
 test('refuses file deletion while an on-demand restore is active', async ({ request }) => {
   const fixture = await createFileFixture(request);
-  await query("UPDATE octo.files SET archive_state = 'restoring' WHERE id = $1", [fixture.file.id]);
+  await queryService("UPDATE octo.files SET archive_state = 'restoring' WHERE id = $1", [fixture.file.id]);
 
   const headers = { Authorization: `Bearer ${fixture.sessionToken}` };
   const url = `/api/files/${fixture.file.id}?workspaceId=${fixture.workspace.id}`;
   const refused = await request.delete(url, { headers });
   expect(refused.status()).toBe(409);
 
-  await query("UPDATE octo.files SET archive_state = 'active_r2' WHERE id = $1", [fixture.file.id]);
+  await queryService("UPDATE octo.files SET archive_state = 'active_r2' WHERE id = $1", [fixture.file.id]);
   expect((await request.delete(url, { headers })).status()).toBe(200);
 });
 
@@ -113,7 +113,7 @@ test('manual retry requeues an archive only while its file still exists', async 
   );
   expect(queued.status).toBe('queued');
   if (queued.status !== 'queued') return;
-  await query("UPDATE octo.jobs SET state = 'failed' WHERE id = $1", [queued.job.id]);
+  await queryService("UPDATE octo.jobs SET state = 'failed' WHERE id = $1", [queued.job.id]);
 
   const headers = { Authorization: `Bearer ${fixture.sessionToken}` };
   const retry = await request.post(
@@ -145,7 +145,7 @@ test('requeues a failed archive whose file was deleted so the worker can clear i
   const headers = { Authorization: `Bearer ${fixture.sessionToken}` };
   // The job fails, then the file is deleted. The job is now moot, but leaving it
   // failed would strand an error the owner can neither retry nor dismiss.
-  await query("UPDATE octo.jobs SET state = 'failed' WHERE id = $1", [queued.job.id]);
+  await queryService("UPDATE octo.jobs SET state = 'failed' WHERE id = $1", [queued.job.id]);
   const deleted = await request.delete(
     `/api/files/${fixture.file.id}?workspaceId=${fixture.workspace.id}`,
     { headers }
@@ -158,7 +158,7 @@ test('requeues a failed archive whose file was deleted so the worker can clear i
   );
   expect(retry.status()).toBe(200);
 
-  const requeued = await query<{ state: string }>('SELECT state FROM octo.jobs WHERE id = $1', [
+  const requeued = await queryService<{ state: string }>('SELECT state FROM octo.jobs WHERE id = $1', [
     queued.job.id,
   ]);
   expect(requeued[0]!.state).toBe('queued');

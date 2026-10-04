@@ -6,21 +6,51 @@
  */
 
 import pg from 'pg';
+import { AsyncLocalStorage } from 'node:async_hooks';
 const { Pool } = pg;
 
+/**
+ * Two database roles, two pools (Slice 14 — key-scope isolation fence):
+ *
+ * - `appPool`  connects as `octo_app` (a non-superuser, non-owner role). Because it
+ *   is neither, Row-Level Security applies to it: the fence policies narrow every
+ *   request to the workspace its credential is scoped to. This is the pool the
+ *   authenticated data path runs on.
+ * - `servicePool` connects as `octo_service` (BYPASSRLS). It is the small trusted
+ *   surface that runs with no caller identity: login / bootstrap, the job worker,
+ *   the archive lifecycle, and the server-owned control writes (jobs/activity)
+ *   that intentionally have no client-side policy. Importing it is the grep-able
+ *   boundary for "this code holds bypass authority."
+ *
+ * If neither OCTO_DB_URL nor OCTO_SERVICE_URL is set, both fall back to
+ * DATABASE_URL, preserving the single-superuser connection used by local dev and
+ * CI until the scoped roles are provisioned.
+ */
 export interface DbConfig {
   connectionString: string;
 }
 
-const connectionString =
+const legacyUrl =
   process.env['DATABASE_URL'] ??
   process.env['POSTGRES_URL'] ??
   process.env['SUPABASE_DB_URL'] ??
   'postgresql://postgres:postgres@localhost:54329/postgres';
 
+// `||` (not `??`) so an empty value in a copied .env falls back rather than
+// producing an empty connection string.
+const appUrl = process.env['OCTO_DB_URL'] || legacyUrl;
+const serviceUrl = process.env['OCTO_SERVICE_URL'] || legacyUrl;
+
 export const dbPool = new Pool({
-  connectionString,
+  connectionString: appUrl,
   max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
+
+export const servicePool = new Pool({
+  connectionString: serviceUrl,
+  max: 6,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 });
@@ -32,9 +62,99 @@ export const dbPool = new Pool({
 dbPool.on('error', (err) => {
   console.error('[db] idle client error:', err.message);
 });
+servicePool.on('error', (err) => {
+  console.error('[db] idle service client error:', err.message);
+});
 
+/**
+ * The caller identity for the current request, populated by `authenticateRequest`
+ * and read by `query()` to set the RLS claims. `runWithRequestIdentity()` seeds it
+ * at the top of every request so each concurrent request carries its own object.
+ *
+ * `principalId` is bound directly (not derived from an auth-user lookup) so the
+ * fence helpers resolve the exact caller even for a request whose first fenced read
+ * would otherwise have to query `principals` — the chicken/egg the auth-bootstrap
+ * readers used to hit before their identity existed.
+ */
+export interface RequestIdentity {
+  principalId: string;
+  workspaceId: string | null;
+}
+export const requestIdentity = new AsyncLocalStorage<RequestIdentity>();
+
+/**
+ * Binds the caller's principal id and, for a workspace-scoped key, its workspace
+ * scope inside the current transaction via `set_config(..., is_local => true)`.
+ * `is_local` guarantees both GUCs are discarded at COMMIT/ROLLBACK, so identity can
+ * never survive on a client returned to the pool and be seen by the next caller —
+ * the exact cross-tenant leak this guards. `octo.principal_id` is what the fence
+ * helpers read; `request.workspace_id` is the key's scope (empty = unscoped).
+ */
+async function bindIdentity(client: pg.Client, id: RequestIdentity | undefined): Promise<void> {
+  // Bind only once authentication has resolved a principal. An app-pool query that
+  // runs before that leaves the claims unset, so RLS evaluates current_principal_id()
+  // as NULL and fails closed — pre-identity reads must use queryService, never the
+  // app pool.
+  if (!id || !id.principalId) return;
+  await client.query('SELECT set_config(\'octo.principal_id\', $1, true)', [id.principalId]);
+  await client.query('SELECT set_config(\'request.workspace_id\', $1, true)', [id.workspaceId ?? '']);
+}
+
+/**
+ * Fills in the current request's identity holder after authentication resolves.
+ * The dispatcher seeds an empty holder at the top of every request; the store
+ * object is mutated here so that every later `query()` on the app pool binds these
+ * claims inside its own transaction. `workspaceId` is the *key's* scope (NULL for
+ * an account-wide key or human session), which is what the fence restricts to.
+ */
+export function bindRequestIdentity(principalId: string, workspaceId: string | null): void {
+  const id = requestIdentity.getStore();
+  if (id) {
+    id.principalId = principalId;
+    id.workspaceId = workspaceId;
+  }
+}
+
+/**
+ * Runs `fn` with a fresh, empty identity holder bound to the async context, so
+ * concurrent requests never share claims. Callers fill it via `bindRequestIdentity`
+ * once authenticated. Without a wrapper, `query()` sees no store and binds nothing.
+ */
+export function runWithRequestIdentity<T>(fn: () => Promise<T>): Promise<T> {
+  return requestIdentity.run({ principalId: '', workspaceId: null }, fn);
+}
+
+/**
+ * Runs a single statement on the app pool, fenced. When a request identity is in
+ * scope it is bound inside a transaction (BEGIN + COMMIT/ROLLBACK) so RLS sees it
+ * and it cannot leak past this call. Pre-identity code that must run fenced passes
+ * through here only after `authenticateRequest` has populated the store.
+ */
 export async function query<T = unknown>(text: string, params: unknown[] = []): Promise<T[]> {
+  const id = requestIdentity.getStore();
   const client = await dbPool.connect();
+  try {
+    await client.query('BEGIN');
+    if (id) await bindIdentity(client, id);
+    const res = await client.query(text, params);
+    await client.query('COMMIT');
+    return res.rows as T[];
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Runs a single statement on the service pool (BYPASSRLS, no identity binding).
+ * Reserved for login / bootstrap, the job worker, the archive lifecycle, and the
+ * server-owned jobs/activity control writes — the surface that runs with no caller
+ * principal and must therefore not be fenced.
+ */
+export async function queryService<T = unknown>(text: string, params: unknown[] = []): Promise<T[]> {
+  const client = await servicePool.connect();
   try {
     const res = await client.query(text, params);
     return res.rows as T[];
@@ -48,13 +168,19 @@ export async function query<T = unknown>(text: string, params: unknown[] = []): 
  * rolls back on any throw, and always releases the client. Multi-write invariants
  * (workspace + owner membership + key) must use this rather than separate `query`
  * calls, which each check out their own connection and cannot roll back together.
+ *
+ * `pool` defaults to the app pool (identity bound at BEGIN). Control-plane and
+ * bootstrap transactions pass `servicePool` and are not fenced.
  */
 export async function withTransaction<T>(
-  fn: (client: { query: (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }> }) => Promise<T>
+  fn: (client: { query: (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }> }) => Promise<T>,
+  pool: pg.Pool = dbPool
 ): Promise<T> {
-  const client = await dbPool.connect();
+  const id = pool === dbPool ? requestIdentity.getStore() : undefined;
+  const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    if (id) await bindIdentity(client, id);
     const result = await fn({
       query: async (text: string, params: unknown[] = []) => {
         const res = await client.query(text, params);
@@ -94,7 +220,7 @@ export async function dbInsertGuestPrincipal(
     ON CONFLICT (auth_user_id) DO UPDATE SET updated_at = now()
     RETURNING id, email, display_name AS "displayName", is_guest AS "isGuest";
   `;
-  const rows = await query<{ id: string; email: string; displayName: string; isGuest: boolean }>(sql, [
+  const rows = await queryService<{ id: string; email: string; displayName: string; isGuest: boolean }>(sql, [
     id,
     authUserId,
     email,
@@ -133,7 +259,7 @@ export async function dbUpsertGooglePrincipal(
       updated_at = now()
     RETURNING id, auth_user_id AS "authUserId", email, display_name AS "displayName", avatar_url AS "avatarUrl", is_guest AS "isGuest", is_platform_owner AS "isPlatformOwner";
   `;
-  const rows = await query<{
+  const rows = await queryService<{
     id: string;
     authUserId: string;
     email: string;
@@ -158,7 +284,7 @@ export async function dbInsertWorkspace(
     ON CONFLICT (slug) DO UPDATE SET updated_at = now()
     RETURNING id, slug, name, description;
   `;
-  const rows = await query<{ id: string; slug: string; name: string; description: string }>(sql, [
+  const rows = await queryService<{ id: string; slug: string; name: string; description: string }>(sql, [
     id,
     slug,
     name,
@@ -178,7 +304,7 @@ export async function dbInsertMembership(
     VALUES ($1, $2, $3)
     ON CONFLICT (workspace_id, principal_id) DO UPDATE SET role = EXCLUDED.role, updated_at = now();
   `;
-  await query(sql, [workspaceId, principalId, role]);
+  await queryService(sql, [workspaceId, principalId, role]);
 }
 
 export async function dbGetAuthorizedWorkspaces(principalId: string): Promise<
@@ -192,7 +318,13 @@ export async function dbGetAuthorizedWorkspaces(principalId: string): Promise<
     retentionDays: number | null;
   }[]
 > {
-  const pRows = await query<{ is_platform_owner: boolean }>(
+  // Authorization bootstrap: this runs the owner's cross-workspace bypass and a
+  // principal's own membership join. Both read `principals`/`workspace_memberships`
+  // by an explicit principal id that is not necessarily the bound RLS identity (the
+  // OAuth callback and signed-media paths call it before any identity is bound), so
+  // it runs on the trusted service pool. Route-level `requireScope`/`keyWorkspaceMatches`
+  // remain the authority; the fence still guards every user-data read downstream.
+  const pRows = await queryService<{ is_platform_owner: boolean }>(
     'SELECT is_platform_owner FROM octo.principals WHERE id = $1',
     [principalId]
   );
@@ -209,7 +341,7 @@ export async function dbGetAuthorizedWorkspaces(principalId: string): Promise<
       FROM octo.workspaces w
       ORDER BY w.name ASC;
     `;
-    return query(sql, []);
+    return queryService(sql, []);
   }
   const sql = `
     SELECT
@@ -225,14 +357,17 @@ export async function dbGetAuthorizedWorkspaces(principalId: string): Promise<
     WHERE m.principal_id = $1
     ORDER BY w.name ASC;
   `;
-  return query(sql, [principalId]);
+  return queryService(sql, [principalId]);
 }
 
 export async function dbGetWorkspaceMembership(
   workspaceId: string,
   principalId: string
 ): Promise<{ role: string } | null> {
-  const pRows = await query<{ is_platform_owner: boolean }>(
+  // Same bootstrap reason as dbGetAuthorizedWorkspaces: the worker and signed-media
+  // paths resolve membership for a principal id with no bound RLS identity, so this
+  // must not depend on the fence. It is a read only; it grants no bypass.
+  const pRows = await queryService<{ is_platform_owner: boolean }>(
     'SELECT is_platform_owner FROM octo.principals WHERE id = $1',
     [principalId]
   );
@@ -245,7 +380,7 @@ export async function dbGetWorkspaceMembership(
     WHERE workspace_id = $1 AND principal_id = $2
     LIMIT 1;
   `;
-  const rows = await query<{ role: string }>(sql, [workspaceId, principalId]);
+  const rows = await queryService<{ role: string }>(sql, [workspaceId, principalId]);
   return rows[0] ?? null;
 }
 
@@ -354,7 +489,7 @@ export async function dbGetArchiveRecord(
     WHERE id = $1 AND workspace_id = $2 AND status = 'active'
     LIMIT 1;
   `;
-  const rows = await query<{
+  const rows = await queryService<{
     fileId: string;
     workspaceId: string;
     name: string;
@@ -399,7 +534,7 @@ export async function dbUpdateArchiveState(
 
   if (sets.length === 0) return;
   params.push(fileId);
-  const updated = await query<{ id: string }>(
+  const updated = await queryService<{ id: string }>(
     `UPDATE octo.files SET ${sets.join(', ')}, updated_at = now() WHERE id = $${params.length} RETURNING id`,
     params
   );
@@ -426,11 +561,14 @@ export async function dbDeleteFileIfIdle(
     const file = files.rows[0] as { id: string; storageKey: string; archiveState: string } | undefined;
     if (!file) return { status: 'missing' };
 
+    // No FOR UPDATE here: octo.jobs carries only a SELECT policy, so a locking read
+    // returns zero rows for the non-owner app role and the busy check silently passes.
+    // Serialization against enqueue does not need it — the file row lock above is the
+    // gate, and dbEnqueueFileTransition (service pool) also locks the file row.
     const transitions = await client.query(
       `SELECT id FROM octo.jobs
        WHERE workspace_id = $1 AND job_type IN ('archive_file', 'restore_file')
-         AND payload->>'fileId' = $2 AND state IN ('queued', 'running')
-       FOR UPDATE`,
+         AND payload->>'fileId' = $2 AND state IN ('queued', 'running')`,
       [workspaceId, fileId]
     );
     if (
@@ -491,7 +629,7 @@ export async function dbVerifyApiKey(keyHash: string): Promise<{
       scopes
     FROM octo.verify_api_key($1);
   `;
-  const rows = await query<{
+  const rows = await queryService<{
     keyId: string;
     prefix: string;
     keyName: string;
@@ -597,7 +735,7 @@ export async function dbResolveShareByTokenHash(tokenHash: string): Promise<{
     FROM octo.resolve_share($1) r
     JOIN octo.shares s ON s.id = r.share_id;
   `;
-  const rows = await query<{
+  const rows = await queryService<{
     shareId: string;
     workspaceId: string;
     resourceType: string;
@@ -609,7 +747,11 @@ export async function dbResolveShareByTokenHash(tokenHash: string): Promise<{
   return rows[0] ?? null;
 }
 
-/** Re-checks that a share referenced by a signed media URL is still active. */
+/**
+ * Re-checks that a share referenced by a signed media URL is still active. Like the
+ * token resolver, this runs before any principal identity exists (a media token
+ * carries a share id, not a caller), so it reads through the service pool.
+ */
 export async function dbResolveShareById(shareId: string): Promise<{
   workspaceId: string;
   createdBy: string;
@@ -623,7 +765,7 @@ export async function dbResolveShareById(shareId: string): Promise<{
       AND (valid_until IS NULL OR valid_until > now())
     LIMIT 1;
   `;
-  const rows = await query<{ workspaceId: string; createdBy: string }>(sql, [shareId]);
+  const rows = await queryService<{ workspaceId: string; createdBy: string }>(sql, [shareId]);
   return rows[0] ?? null;
 }
 
@@ -701,7 +843,7 @@ export async function dbEnqueueJob(
     ON CONFLICT (workspace_id, job_type, idempotency_key) DO NOTHING
     RETURNING ${JOB_COLUMNS};
   `;
-  const inserted = await query<DbJobRow>(insertSql, [
+  const inserted = await queryService<DbJobRow>(insertSql, [
     id,
     workspaceId,
     jobType,
@@ -715,7 +857,7 @@ export async function dbEnqueueJob(
     return { job: inserted[0], created: true };
   }
 
-  const existing = await query<DbJobRow>(
+  const existing = await queryService<DbJobRow>(
     `SELECT ${JOB_COLUMNS} FROM octo.jobs
      WHERE workspace_id = $1 AND job_type = $2 AND idempotency_key = $3`,
     [workspaceId, jobType, idempotencyKey]
@@ -739,6 +881,15 @@ export async function dbEnqueueFileTransition(
   const fileId = String(payload['fileId'] ?? '');
   const jobType = direction === 'archive' ? 'archive_file' : 'restore_file';
 
+  // Server-owned job transition, trusted/internal callers only. It INSERTs into
+  // octo.jobs (which intentionally has no client-side write policy) and reads
+  // octo.files without the RLS fence, so it runs on the service pool like every
+  // other jobs/activity write. Every caller must have already performed a fenced,
+  // scope-bound read of the same file on the app pool — the archive/restore route
+  // does this via dbGetFile immediately before enqueueing — so a workspace-scoped
+  // key naming another workspace is refused before reaching here. Do not expose
+  // this as a client-facing operation. The `FOR UPDATE` row lock is load-bearing:
+  // it serializes this transition against dbDeleteFileIfIdle.
   return withTransaction(async (client) => {
     const files = await client.query(
       `SELECT id, archive_state AS "archiveState" FROM octo.files
@@ -789,9 +940,8 @@ export async function dbEnqueueFileTransition(
       [workspaceId, jobType, `${idempotencyPrefix}:${cycle}`]
     );
     return { status: 'queued', job: existing.rows[0] as DbJobRow, created: false };
-  });
+  }, servicePool);
 }
-
 /** Requeues a failed transition while its file is idle (or already gone). */
 export async function dbRetryJob(
   jobId: string,
@@ -848,7 +998,7 @@ export async function dbRetryJob(
       [jobId, workspaceId]
     );
     return requeued.rows.length > 0 ? 'requeued' : 'not_retryable';
-  });
+  }, servicePool);
 }
 
 export async function dbListJobs(workspaceId: string, limit = 50): Promise<DbJobRow[]> {
@@ -872,7 +1022,7 @@ export async function dbClaimJob(
   attempt: number;
   payload: Record<string, unknown>;
 } | null> {
-  const rows = await query<{
+  const rows = await queryService<{
     job_id: string;
     workspace_id: string;
     job_type: string;
@@ -895,7 +1045,7 @@ export async function dbCompleteJob(
   jobId: string,
   result: Record<string, unknown>
 ): Promise<boolean> {
-  const rows = await query<{ id: string }>(
+  const rows = await queryService<{ id: string }>(
     `UPDATE octo.jobs
      SET state = 'completed', result = $2, completed_at = now(),
          lease_expires_at = NULL, lease_owner = NULL, updated_at = now()
@@ -917,7 +1067,7 @@ export async function dbFailJob(
   const exhausted = attempt >= maxAttempts;
 
   if (!retryable || exhausted) {
-    await query(
+    await queryService(
       `UPDATE octo.jobs
        SET state = 'failed', error_code = $2, error_summary = $3, completed_at = now(),
            lease_expires_at = NULL, lease_owner = NULL, updated_at = now()
@@ -928,7 +1078,7 @@ export async function dbFailJob(
   }
 
   const backoffSeconds = Math.min(2 ** attempt, 300);
-  await query(
+  await queryService(
     `UPDATE octo.jobs
      SET state = 'queued', error_code = $2, error_summary = $3,
          available_at = now() + make_interval(secs => $4),
@@ -947,7 +1097,7 @@ export async function dbRecordActivity(
   actorPrincipalId: string | null = null,
   detail: Record<string, unknown> = {}
 ): Promise<void> {
-  await query(
+  await queryService(
     `INSERT INTO octo.activity (workspace_id, job_id, actor_principal_id, event_type, summary, detail)
      VALUES ($1, $2, $3, $4, $5, $6)`,
     [workspaceId, jobId, actorPrincipalId, eventType, summary, JSON.stringify(detail)]
@@ -1248,14 +1398,18 @@ export async function dbDeleteWorkspaceAtomic(workspaceId: string): Promise<bool
 }
 
 export async function dbSetConfirmSecret(principalId: string, hash: string): Promise<void> {
-  await query('UPDATE octo.principals SET confirm_secret_hash = $1, updated_at = now() WHERE id = $2', [
+  // principals_update_own keys on auth.uid(), which the fence path no longer sets
+  // (identity is bound by principal id instead). The confirm secret is per-principal
+  // and the caller is already authenticated, so this identity-maintenance write runs
+  // on the trusted path rather than widening the principals UPDATE policy.
+  await queryService('UPDATE octo.principals SET confirm_secret_hash = $1, updated_at = now() WHERE id = $2', [
     hash,
     principalId,
   ]);
 }
 
 export async function dbGetConfirmSecretHash(principalId: string): Promise<string | null> {
-  const rows = await query<{ hash: string | null }>(
+  const rows = await queryService<{ hash: string | null }>(
     'SELECT confirm_secret_hash AS hash FROM octo.principals WHERE id = $1',
     [principalId]
   );
@@ -1264,7 +1418,10 @@ export async function dbGetConfirmSecretHash(principalId: string): Promise<strin
 
 /** The id of a principal's account-wide key, or null. Enforces the one-key rule. */
 export async function dbGetAccountWideKeyId(principalId: string): Promise<string | null> {
-  const rows = await query<{ id: string }>(
+  // An account-wide key has workspace_id NULL by definition, so a scoped key's fence
+  // would hide it. This is a pre-mint existence check for the one-key rule, not tenant
+  // data; it reads the caller's own key row on the trusted path.
+  const rows = await queryService<{ id: string }>(
     'SELECT id FROM octo.api_keys WHERE principal_id = $1 AND workspace_id IS NULL LIMIT 1',
     [principalId]
   );
@@ -1273,7 +1430,7 @@ export async function dbGetAccountWideKeyId(principalId: string): Promise<string
 
 /** Workspaces that have a retention window set, for the archive sweep. */
 export async function dbListRetentionWorkspaces(): Promise<{ id: string; retentionDays: number }[]> {
-  return query<{ id: string; retentionDays: number }>(
+  return queryService<{ id: string; retentionDays: number }>(
     `SELECT id, retention_days AS "retentionDays" FROM octo.workspaces
      WHERE retention_days IS NOT NULL`
   );
@@ -1281,7 +1438,7 @@ export async function dbListRetentionWorkspaces(): Promise<{ id: string; retenti
 
 /** Active R2 files older than the retention window, candidates for archiving. */
 export async function dbListAgedActiveFiles(workspaceId: string, retentionDays: number): Promise<string[]> {
-  const rows = await query<{ id: string }>(
+  const rows = await queryService<{ id: string }>(
     `SELECT id FROM octo.files
      WHERE workspace_id = $1 AND status = 'active' AND archive_state = 'active_r2'
        AND created_at < now() - ($2 || ' days')::interval`,
@@ -1300,7 +1457,7 @@ export async function dbHasOpenFileJob(
   jobType: string,
   fileId: string
 ): Promise<boolean> {
-  const rows = await query<{ open: boolean }>(
+  const rows = await queryService<{ open: boolean }>(
     `SELECT EXISTS(
        SELECT 1 FROM octo.jobs
        WHERE workspace_id = $1 AND job_type = $2 AND payload->>'fileId' = $3
