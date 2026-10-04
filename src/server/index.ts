@@ -645,7 +645,17 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
-  const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+  // A malformed request target (for example the absolute-form `http://[`) makes
+  // URL() throw ERR_INVALID_URL. Constructing it before the try below would turn
+  // that into an unhandled rejection that terminates the single-process host, so
+  // answer the bad request instead of dying on it.
+  let url: URL;
+  try {
+    url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+  } catch {
+    sendJson(res, 400, { error: 'BAD_REQUEST: malformed request target' });
+    return;
+  }
   const pathname = url.pathname;
 
   try {
