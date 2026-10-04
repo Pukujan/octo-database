@@ -26,7 +26,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { classifyLocalFile, classifySize, remotePathFor, isUnchanged, sameStat, type Manifest } from '../src/backup/planner';
+import { classifyLocalFile, classifySize, remotePathFor, isUnchanged, partitionSources, sameStat, type Manifest } from '../src/backup/planner';
 import { walkFiles } from '../src/backup/walk';
 
 const BASE_URL = process.env['OCTO_BACKUP_BASE_URL'] ?? 'http://localhost:3001';
@@ -93,11 +93,12 @@ async function main(): Promise<void> {
   let skippedLarge = 0;
   let skippedEmpty = 0;
 
-  for (const source of sources) {
-    if (!existsSync(source.dir)) {
-      console.error(`Source not found, skipping: ${source.name} (${source.dir})`);
-      continue;
-    }
+  const { scanned, missing } = partitionSources(sources, (source) => existsSync(source.dir));
+  for (const source of missing) {
+    console.error(`Source not found, skipping: ${source.name} (${source.dir})`);
+  }
+
+  for (const source of scanned) {
     walkFiles(source.dir, (absolutePath, relPath) => {
       const base = relPath.split(/[\\/]/).pop() ?? relPath;
       const reason = classifyLocalFile(base, IGNORE);
@@ -143,7 +144,8 @@ async function main(): Promise<void> {
 
   const totalBytes = uploads.reduce((sum, upload) => sum + upload.size, 0);
   const summary = {
-    sources: sources.map((s) => s.name),
+    sources: scanned.map((s) => s.name),
+    missingSources: missing.map((s) => s.name),
     toUpload: uploads.length,
     totalBytes,
     unchanged,

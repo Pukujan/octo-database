@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { classifyLocalFile, classifySize, remotePathFor, isUnchanged, sameStat, shouldSkipDirectory, type ManifestEntry } from '../../src/backup/planner';
+import { classifyLocalFile, classifySize, remotePathFor, isUnchanged, sameStat, shouldSkipDirectory, partitionSources, type ManifestEntry } from '../../src/backup/planner';
 
 describe('classifyLocalFile', () => {
   it('skips in-progress downloads and temp files', () => {
@@ -83,6 +83,31 @@ describe('remotePathFor', () => {
 
   it('strips leading slashes', () => {
     expect(remotePathFor('desktop', '/a.txt')).toBe('desktop/a.txt');
+  });
+});
+
+describe('partitionSources', () => {
+  const sources = [
+    { name: 'desktop', dir: '/home/me/Desktop' },
+    { name: 'downloads', dir: '/home/me/Downloads' },
+  ];
+
+  it('separates sources that exist from ones that do not', () => {
+    const { scanned, missing } = partitionSources(sources, (s) => s.dir.endsWith('Desktop'));
+    expect(scanned.map((s) => s.name)).toEqual(['desktop']);
+    expect(missing.map((s) => s.name)).toEqual(['downloads']);
+  });
+
+  it('reports every configured source as scanned when all exist', () => {
+    const { scanned, missing } = partitionSources(sources, () => true);
+    expect(scanned).toHaveLength(2);
+    expect(missing).toEqual([]);
+  });
+
+  it('reports nothing as scanned when no source exists', () => {
+    const { scanned, missing } = partitionSources(sources, () => false);
+    expect(scanned).toEqual([]);
+    expect(missing.map((s) => s.name)).toEqual(['desktop', 'downloads']);
   });
 });
 
