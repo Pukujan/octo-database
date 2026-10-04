@@ -22,6 +22,15 @@ export const dbPool = new Pool({
   connectionString,
   max: 10,
   idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
+
+// An idle pooled client can error (server restart, network reset, admin
+// termination). Without a listener Node rethrows that 'error' event as an
+// uncaught exception and the single-process host exits, so log and continue:
+// the pool discards the broken client and the next query dials a fresh one.
+dbPool.on('error', (err) => {
+  console.error('[db] idle client error:', err.message);
 });
 
 export async function query<T = unknown>(text: string, params: unknown[] = []): Promise<T[]> {
