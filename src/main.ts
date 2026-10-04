@@ -56,6 +56,9 @@ function clearSession(): void {
   localStorage.removeItem('octo_principal');
   state.token = null; state.principal = null; state.workspaces = []; state.workspace = null;
   state.files = []; state.gallery = []; state.keys = []; state.shares = []; state.jobs = []; state.activity = [];
+  // One-time material is not session state to carry forward: a minted key secret
+  // or share link must not render for whoever signs in next on this machine.
+  state.oneTimeSecret = ''; state.oneTimeLabel = ''; state.shareUrl = '';
   state.modal = null; state.loadError = '';
 }
 
