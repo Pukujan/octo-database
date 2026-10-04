@@ -34,6 +34,12 @@ export default defineConfig({
         DATABASE_URL:
           process.env['DATABASE_URL'] ??
           'postgresql://postgres:postgres@localhost:54329/postgres',
+        // When set, the server runs its request path as the fenced `octo_app` role
+        // (Slice 14). Left unset locally, the server falls back to DATABASE_URL.
+        ...(process.env['OCTO_DB_URL'] ? { OCTO_DB_URL: process.env['OCTO_DB_URL'] } : {}),
+        ...(process.env['OCTO_SERVICE_URL']
+          ? { OCTO_SERVICE_URL: process.env['OCTO_SERVICE_URL'] }
+          : {}),
       },
     },
     {

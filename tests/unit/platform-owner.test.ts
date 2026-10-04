@@ -5,6 +5,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import * as db from '../../src/server/db';
 
+// Slice 14 moved the principal-read/authorize and pre-auth bootstrap paths onto
+// `servicePool` (BYPASSRLS) instead of `dbPool` (fenced). These tests mock the pool
+// those functions now actually query through.
 describe('Platform Owner Database Authorization Logic', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -12,7 +15,7 @@ describe('Platform Owner Database Authorization Logic', () => {
 
   it('correctly passes isOwner=true for pujan3645@gmail.com in dbUpsertGooglePrincipal', async () => {
     let capturedParams: unknown[] = [];
-    vi.spyOn(db.dbPool, 'connect').mockResolvedValue({
+    vi.spyOn(db.servicePool, 'connect').mockResolvedValue({
       query: vi.fn().mockImplementation(async (_sql: string, params: unknown[]) => {
         capturedParams = params;
         return {
@@ -46,7 +49,7 @@ describe('Platform Owner Database Authorization Logic', () => {
 
   it('passes isOwner=false for non-owner email in dbUpsertGooglePrincipal', async () => {
     let capturedParams: unknown[] = [];
-    vi.spyOn(db.dbPool, 'connect').mockResolvedValue({
+    vi.spyOn(db.servicePool, 'connect').mockResolvedValue({
       query: vi.fn().mockImplementation(async (_sql: string, params: unknown[]) => {
         capturedParams = params;
         return {
@@ -78,7 +81,7 @@ describe('Platform Owner Database Authorization Logic', () => {
   });
 
   it('grants owner role across all workspaces in dbGetAuthorizedWorkspaces for platform owners', async () => {
-    vi.spyOn(db.dbPool, 'connect').mockResolvedValue({
+    vi.spyOn(db.servicePool, 'connect').mockResolvedValue({
       query: vi.fn().mockImplementation(async (sql: string) => {
         if (sql.includes('SELECT is_platform_owner FROM octo.principals')) {
           return { rows: [{ is_platform_owner: true }] };
@@ -102,7 +105,7 @@ describe('Platform Owner Database Authorization Logic', () => {
   });
 
   it('grants owner role for any workspace in dbGetWorkspaceMembership for platform owners', async () => {
-    vi.spyOn(db.dbPool, 'connect').mockResolvedValue({
+    vi.spyOn(db.servicePool, 'connect').mockResolvedValue({
       query: vi.fn().mockImplementation(async (sql: string) => {
         if (sql.includes('SELECT is_platform_owner FROM octo.principals')) {
           return { rows: [{ is_platform_owner: true }] };
