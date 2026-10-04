@@ -9,7 +9,7 @@
 
 import { expect, test, APIRequestContext } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
-import { query } from '../../src/server/db';
+import { queryService } from '../../src/server/db';
 
 interface GuestSession {
   principal: { id: string; isGuest: boolean };
@@ -254,7 +254,7 @@ test.describe('Workspace capability discovery contract', () => {
   }) => {
     const owner = await createGuest(request);
     const member = await createGuest(request);
-    await query(
+    await queryService(
       `INSERT INTO octo.workspace_memberships (workspace_id, principal_id, role)
        VALUES ($1, $2, 'member')
        ON CONFLICT (workspace_id, principal_id) DO UPDATE SET role = 'member', updated_at = now()`,
@@ -282,7 +282,7 @@ test.describe('Workspace capability discovery contract', () => {
     expect(memberActions.has('jobs.run')).toBe(false);
 
     // A workspace key retains its role cap if live membership is promoted.
-    await query(
+    await queryService(
       `UPDATE octo.workspace_memberships SET role = 'operator', updated_at = now()
        WHERE workspace_id = $1 AND principal_id = $2`,
       [owner.workspace.id, member.principal.id]
@@ -314,7 +314,7 @@ test.describe('Workspace capability discovery contract', () => {
     );
     expect(runWorker.status()).toBe(403);
 
-    await query(
+    await queryService(
       'DELETE FROM octo.workspace_memberships WHERE workspace_id = $1 AND principal_id = $2',
       [owner.workspace.id, member.principal.id]
     );

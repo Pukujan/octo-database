@@ -8,7 +8,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
-import { query } from '../../src/server/db';
+import { ownerQuery } from './owner-db';
 
 const STORAGE_ROOT = '/tmp/octo-storage';
 
@@ -28,7 +28,7 @@ test('removes uploaded bytes when the file catalog insert fails', async ({ reque
   };
   const filename = `upload-rollback-fixture-${randomUUID()}.txt`;
 
-  await query(`
+  await ownerQuery(`
     CREATE OR REPLACE FUNCTION octo.reject_upload_rollback_fixture()
     RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
@@ -39,8 +39,8 @@ test('removes uploaded bytes when the file catalog insert fails', async ({ reque
     END;
     $$
   `);
-  await query(`DROP TRIGGER IF EXISTS reject_upload_rollback_fixture ON octo.files`);
-  await query(`
+  await ownerQuery(`DROP TRIGGER IF EXISTS reject_upload_rollback_fixture ON octo.files`);
+  await ownerQuery(`
     CREATE TRIGGER reject_upload_rollback_fixture
     BEFORE INSERT ON octo.files
     FOR EACH ROW EXECUTE FUNCTION octo.reject_upload_rollback_fixture()
@@ -60,12 +60,12 @@ test('removes uploaded bytes when the file catalog insert fails', async ({ reque
     });
     uploadStatus = upload.status();
   } finally {
-    await query('DROP TRIGGER IF EXISTS reject_upload_rollback_fixture ON octo.files');
-    await query('DROP FUNCTION IF EXISTS octo.reject_upload_rollback_fixture()');
+    await ownerQuery('DROP TRIGGER IF EXISTS reject_upload_rollback_fixture ON octo.files');
+    await ownerQuery('DROP FUNCTION IF EXISTS octo.reject_upload_rollback_fixture()');
   }
 
   expect(uploadStatus!).toBe(500);
-  const files = await query<{ id: string }>(
+  const files = await ownerQuery<{ id: string }>(
     'SELECT id FROM octo.files WHERE workspace_id = $1 AND name = $2',
     [guest.workspace.id, filename]
   );

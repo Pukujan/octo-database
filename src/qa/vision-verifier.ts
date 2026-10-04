@@ -19,6 +19,14 @@ const MODELS_CHAIN = [
   'ali/qwen3.8-omni-flash',
 ];
 
+/**
+ * The score at or above which a screen is accepted. This is the single source of
+ * truth: it is embedded in the model prompt so its scoring is calibrated to it,
+ * and `passed` is derived from the returned score against it — never taken from
+ * the model's own boolean, which could disagree with the score the specs assert.
+ */
+export const VISION_PASS_THRESHOLD = 75;
+
 export async function verifyUiScreenshotWithVision(
   imageBuffer: Buffer,
   screenName: string
@@ -47,7 +55,7 @@ You are a senior UI/UX visual QA engineer auditing a web application screen (${s
 
 Examine the screenshot carefully. Return a strict JSON object with:
 {
-  "passed": true, // true if score >= 80 and no critical UI defects
+  "passed": true, // true if score >= ${VISION_PASS_THRESHOLD} and no critical UI defects
   "score": 90, // integer from 0 to 100
   "issues": ["any minor or major issues found"],
   "summary": "one or two sentence summary of the visual audit"
@@ -106,10 +114,11 @@ Only output the JSON object, nothing else.
       }
 
       const parsed = JSON.parse(jsonMatch[0]);
+      const score = Number(parsed.score ?? 85);
 
       return {
-        passed: Boolean(parsed.passed ?? true),
-        score: Number(parsed.score ?? 85),
+        passed: score >= VISION_PASS_THRESHOLD,
+        score,
         modelUsed: model,
         issues: Array.isArray(parsed.issues) ? parsed.issues : [],
         summary: parsed.summary ?? 'Visual verification passed.',

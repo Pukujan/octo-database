@@ -98,6 +98,22 @@ jobs:
             echo "applying $migration"
             PGPASSWORD=postgres psql -v ON_ERROR_STOP=1 -h localhost -p 54329 -U postgres < "$migration"
           done
+          # Slice 14 creates octo_app (the RLS-fenced request role) and octo_service
+          # (the BYPASSRLS trusted role) without passwords. Give them throwaway
+          # CI-only passwords so the server and the fence check can connect as them.
+          PGPASSWORD=postgres psql -v ON_ERROR_STOP=1 -h localhost -p 54329 -U postgres <<'EOF'
+          ALTER ROLE octo_app PASSWORD 'octo_app';
+          ALTER ROLE octo_service PASSWORD 'octo_service';
+          EOF
+
+      - name: Verify key-scope isolation fence (engine backstop)
+        # Proves the slice's invariant directly against the database, bypassing the
+        # application's own key-scope check: a session scoped to one workspace can
+        # neither read nor write another, even though its principal is a member.
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:54329/postgres
+          OCTO_DB_URL: postgresql://octo_app:octo_app@localhost:54329/postgres
+        run: npx tsx scripts/verify-key-scope-fence.ts
 
       - name: Playwright E2E and Multimodal Vision QA
         env:
@@ -107,6 +123,13 @@ jobs:
           OCTO_STORAGE_BACKEND: local
           OCTO_MEDIA_SECRET: ci-media-secret
           DATABASE_URL: postgresql://postgres:postgres@localhost:54329/postgres
+          # Run the server's request path as the fenced octo_app role so the E2E
+          # suite proves the golden flows still work under RLS, and the trusted
+          # surface as octo_service. Without these the server would connect as the
+          # postgres superuser and the fence would be dormant -- a green suite that
+          # proves nothing about isolation.
+          OCTO_DB_URL: postgresql://octo_app:octo_app@localhost:54329/postgres
+          OCTO_SERVICE_URL: postgresql://octo_service:octo_service@localhost:54329/postgres
         run: npx playwright test
       - name: Validate stack-manifest against the certified release train
         shell: bash

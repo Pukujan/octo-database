@@ -6,6 +6,7 @@
 
 import { SupabaseClient, User } from '@supabase/supabase-js';
 import { Principal } from '../types/auth';
+import { guestSlug } from '../lib/provisioning-slug';
 
 export interface AuthState {
   user: User | null;
@@ -145,8 +146,8 @@ export async function loginAsGuest(
   }
 
   const user = authData.user;
-  const guestSlug = `guest-${user.id.slice(0, 8)}`;
-  const email = `${guestSlug}@octo.local`;
+  const slug = guestSlug(user.id);
+  const email = `${slug}@octo.local`;
   const now = new Date().toISOString();
 
   // 2. Check if principal exists
@@ -208,7 +209,7 @@ export async function loginAsGuest(
     .schema('octo')
     .from('workspaces')
     .insert({
-      slug: guestSlug,
+      slug,
       name: 'Personal (Guest)',
       description: 'Default sandbox workspace for guest exploration',
       created_by: principal.id,

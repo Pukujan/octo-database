@@ -38,6 +38,8 @@ import {
 import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
+import { sendStaticFile } from './static-file';
+import { guestSlug, personalSlug } from '../lib/provisioning-slug';
 import {
   dbCountTransientFiles,
   dbCreateWorkspaceAtomic,
@@ -84,6 +86,9 @@ import {
   dbUpdateArchiveState,
   dbVerifyApiKey,
   query,
+  queryService,
+  bindRequestIdentity,
+  runWithRequestIdentity,
   testDbConnection,
 } from './db';
 import { Principal, ROLE_HIERARCHY, WorkspaceRole } from '../types/auth';
@@ -232,6 +237,17 @@ async function readJsonObject(req: IncomingMessage): Promise<Record<string, unkn
   }
 }
 
+// Refuse an identifier that is not a UUID before it reaches a Postgres uuid
+// column, where a malformed value raises 22P02 and the outer handler would answer
+// 500 with raw database text. Writes a clean 400 and returns false when the value
+// is malformed, so the caller returns immediately.
+function requireUuid(res: ServerResponse, value: string, field: string): boolean {
+  if (UUID_PATTERN.test(value)) return true;
+  const code = field === 'workspaceId' ? 'INVALID_WORKSPACE_ID' : 'INVALID_IDENTIFIER';
+  sendJson(res, 400, { error: code, code, message: `${field} must be a UUID.` });
+  return false;
+}
+
 interface AuthContext {
   principal: Principal;
   apiKey?: {
@@ -279,7 +295,7 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
     if (!verified) return null;
 
     // Resolve principal
-    const rows = await query<{
+    const rows = await queryService<{
       id: string;
       auth_user_id: string;
       email: string;
@@ -307,6 +323,8 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
       updatedAt: new Date().toISOString(),
     };
 
+    bindRequestIdentity(pRow.id, verified.workspaceId ?? null);
+
     return {
       principal,
       apiKey: {
@@ -328,7 +346,7 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
     return null;
   }
 
-  const rows = await query<{
+  const rows = await queryService<{
     id: string;
     auth_user_id: string;
     email: string;
@@ -343,6 +361,8 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
 
   if (rows.length === 0) return null;
   const pRow = rows[0]!;
+
+  bindRequestIdentity(pRow.id, null);
 
   return {
     principal: {
@@ -379,6 +399,9 @@ async function authorizeMediaRequest(
     const workspaceId = url.searchParams.get('workspaceId');
     const fileId = url.searchParams.get('fileId');
     if (!workspaceId || !fileId) return null;
+    // A malformed id can never resolve to a membership, and passing it to a uuid
+    // column would raise 22P02; refuse before the lookup.
+    if (!UUID_PATTERN.test(workspaceId) || !UUID_PATTERN.test(fileId)) return null;
     if (!requireScope(bearer, 'files') || !keyWorkspaceMatches(bearer, workspaceId)) return false;
     const mem = await dbGetWorkspaceMembership(workspaceId, bearer.principal.id);
     if (!mem || !roleAllows(bearer, mem.role, 'member')) return false;
@@ -392,6 +415,9 @@ async function authorizeMediaRequest(
     // Membership is still re-checked, so revoking access invalidates live tokens.
     const mem = await dbGetWorkspaceMembership(claims.workspaceId, claims.principalId);
     if (!mem) return null;
+    // The signature already names the principal and workspace, so bind them before the
+    // fenced file read that follows (image/video tags carry no Authorization header).
+    bindRequestIdentity(claims.principalId, claims.workspaceId);
     return {
       principalId: claims.principalId,
       workspaceId: claims.workspaceId,
@@ -403,6 +429,10 @@ async function authorizeMediaRequest(
   // link therefore also invalidates every media URL it signed.
   const share = await dbResolveShareById(claims.shareId);
   if (!share || share.workspaceId !== claims.workspaceId) return null;
+
+  // Bind the share creator so the fenced read is scoped to exactly the shared
+  // workspace; the creator is a member, so the membership predicate also passes.
+  bindRequestIdentity(share.createdBy, claims.workspaceId);
 
   return {
     principalId: share.createdBy,
@@ -490,13 +520,16 @@ async function runRetentionSweep(): Promise<number> {
     for (const fileId of await dbListAgedActiveFiles(workspace.id, workspace.retentionDays)) {
       if (await dbHasOpenFileJob(workspace.id, 'archive_file', fileId)) continue;
 
-      const file = await dbGetFile(workspace.id, fileId);
+      // The sweep runs with no caller identity (a background interval), so it reads
+      // through the trusted service pool: dbGetFile is RLS-fenced and would return
+      // nothing without a bound principal.
+      const file = await dbGetArchiveRecord(workspace.id, fileId);
       if (!file) continue;
 
       const transition = await enqueueFileTransition(
         'archive',
         workspace.id,
-        { id: file.id, storageKey: file.storageKey, mimeType: file.mimeType },
+        { id: file.fileId, storageKey: file.storageKey, mimeType: file.mimeType },
         null
       );
       if (transition.status === 'queued' && transition.created) enqueued += 1;
@@ -632,7 +665,7 @@ export function getGoogleClientCredentials(): { clientId: string | null; clientS
   return { clientId, clientSecret };
 }
 
-export const server = createServer(async (req, res) => {
+async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   // Handle CORS Preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -644,7 +677,17 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
-  const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+  // A malformed request target (for example the absolute-form `http://[`) makes
+  // URL() throw ERR_INVALID_URL. Constructing it before the try below would turn
+  // that into an unhandled rejection that terminates the single-process host, so
+  // answer the bad request instead of dying on it.
+  let url: URL;
+  try {
+    url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+  } catch {
+    sendJson(res, 400, { error: 'BAD_REQUEST: malformed request target' });
+    return;
+  }
   const pathname = url.pathname;
 
   try {
@@ -785,7 +828,7 @@ export const server = createServer(async (req, res) => {
         // Ensure the principal has at least one workspace to enter
         const workspaces = await dbGetAuthorizedWorkspaces(principal.id);
         if (workspaces.length === 0) {
-          const slug = `personal-${principal.id.slice(0, 8)}`;
+          const slug = personalSlug(principal.id);
           const ws = await dbInsertWorkspace(
             randomUUID(),
             slug,
@@ -809,13 +852,15 @@ export const server = createServer(async (req, res) => {
 
     // 2. Guest Login: POST /api/auth/guest
     if (pathname === '/api/auth/guest' && req.method === 'POST') {
-      const bodyStr = await readBody(req);
-      const parsed = bodyStr ? JSON.parse(bodyStr) : {};
-      const displayName = parsed.displayName ?? 'Guest User';
+      // Tolerate a malformed, empty, or non-object body: this endpoint is
+      // anonymous and bodyless-friendly, so an absent displayName defaults rather
+      // than throwing a bare JSON.parse error as a 500.
+      const parsed = await readJsonObject(req);
+      const displayName = typeof parsed.displayName === 'string' ? parsed.displayName : 'Guest User';
 
       const guestId = randomUUID();
-      const guestSlug = `guest-${guestId.slice(0, 8)}`;
-      const email = `${guestSlug}@octo.local`;
+      const slug = guestSlug(guestId);
+      const email = `${slug}@octo.local`;
 
       // Insert guest principal in PostgreSQL
       const principal = await dbInsertGuestPrincipal(guestId, guestId, email, displayName);
@@ -824,7 +869,7 @@ export const server = createServer(async (req, res) => {
       const workspaceId = randomUUID();
       const workspace = await dbInsertWorkspace(
         workspaceId,
-        guestSlug,
+        slug,
         'Personal (Guest)',
         'Auto-provisioned personal sandbox workspace',
         principal.id
@@ -1144,6 +1189,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
 
       // Enforce workspace-scoped key restrictions
       if (!keyWorkspaceMatches(auth, workspaceId)) {
@@ -1181,6 +1227,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId, name, and data are required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
 
       // Enforce workspace-scoped key restriction
       if (auth.apiKey && auth.apiKey.workspaceId && auth.apiKey.workspaceId !== workspaceId) {
@@ -1280,6 +1327,8 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'fileId and workspaceId required' });
         return;
       }
+      if (!requireUuid(res, fileId, 'fileId')) return;
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -1430,6 +1479,8 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'fileId and workspaceId required' });
         return;
       }
+      if (!requireUuid(res, fileId, 'fileId')) return;
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -1491,6 +1542,8 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'fileId and workspaceId required' });
         return;
       }
+      if (!requireUuid(res, fileId, 'fileId')) return;
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
 
       // A workspace-scoped key may only touch its own workspace.
       if (!keyWorkspaceMatches(auth, workspaceId)) {
@@ -1564,6 +1617,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -1664,6 +1718,12 @@ export const server = createServer(async (req, res) => {
         }
         const d = new Date();
         d.setDate(d.getDate() + (expiresInDays as number));
+        // A large enough day count overflows the Date range; refuse it rather than
+        // letting toISOString() throw `Invalid time value` as a 500.
+        if (!Number.isFinite(d.getTime())) {
+          sendJson(res, 400, { error: 'BAD_REQUEST: expiresInDays is out of range' });
+          return;
+        }
         expiresAt = d.toISOString();
       }
 
@@ -1838,10 +1898,17 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId is required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      // Enforce workspace-scoped key restrictions before anything else.
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
 
       // The server connects as a trusted role, so authorization is enforced here.
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+      if (!mem || !roleAllows(auth, mem.role, 'admin')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to create share links' });
         return;
       }
@@ -1864,6 +1931,12 @@ export const server = createServer(async (req, res) => {
       if (!expiry && typeof expiresInHours === 'number' && expiresInHours > 0) {
         const d = new Date();
         d.setHours(d.getHours() + expiresInHours);
+        // A large enough hour count overflows the Date range; refuse it rather than
+        // letting toISOString() throw `Invalid time value` as a 500.
+        if (!Number.isFinite(d.getTime())) {
+          sendJson(res, 400, { error: 'BAD_REQUEST: expiresInHours is out of range' });
+          return;
+        }
         expiry = d.toISOString();
       }
 
@@ -1915,9 +1988,15 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId is required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+      if (!mem || !roleAllows(auth, mem.role, 'admin')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to list share links' });
         return;
       }
@@ -1941,9 +2020,16 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'shareId and workspaceId are required' });
         return;
       }
+      if (!requireUuid(res, shareId, 'shareId')) return;
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+      if (!mem || !roleAllows(auth, mem.role, 'admin')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to revoke share links' });
         return;
       }
@@ -1977,6 +2063,10 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 404, { error: 'SHARE_NOT_FOUND_OR_INACTIVE' });
         return;
       }
+
+      // The token has authorized this workspace read; bind the share creator so the
+      // fenced file listing is scoped to exactly the shared workspace.
+      bindRequestIdentity(share.createdBy, share.workspaceId);
 
       const mediaFiles = (await dbListWorkspaceFiles(share.workspaceId)).filter(
         (f) => f.mimeType.startsWith('image/') || f.mimeType.startsWith('video/')
@@ -2148,6 +2238,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId, jobType, and idempotencyKey are required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (jobType === 'archive_file' || jobType === 'restore_file') {
         sendJson(res, 400, { error: 'JOB_TYPE_RESERVED: use the file archive or restore route' });
         return;
@@ -2204,6 +2295,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId is required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -2236,6 +2328,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId is required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -2270,9 +2363,16 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'jobId and workspaceId are required' });
         return;
       }
+      if (!requireUuid(res, jobId, 'jobId')) return;
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+      if (!mem || !roleAllows(auth, mem.role, 'admin')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to retry jobs' });
         return;
       }
@@ -2311,6 +2411,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId is required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -2340,14 +2441,8 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const embeddingConfig = loadEmbeddingConfigFromEnv();
-      if (!embeddingConfig) {
-        sendJson(res, 503, {
-          error: 'EMBEDDING_PROVIDER_NOT_CONFIGURED: set OCTO_EMBEDDING_API_KEY to ingest documents',
-        });
-        return;
-      }
-
+      // Authorize before probing provider configuration: an unauthorized caller
+      // must not learn whether embeddings are configured.
       const parsed = (await readJsonObject(req)) as Record<string, any>;
       const { workspaceId, title, text, mimeType } = parsed;
 
@@ -2355,10 +2450,24 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId, title, and text are required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin' && mem.role !== 'operator')) {
+      if (!mem || !roleAllows(auth, mem.role, 'operator')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Operator role or higher required to ingest documents' });
+        return;
+      }
+
+      const embeddingConfig = loadEmbeddingConfigFromEnv();
+      if (!embeddingConfig) {
+        sendJson(res, 503, {
+          error: 'EMBEDDING_PROVIDER_NOT_CONFIGURED: set OCTO_EMBEDDING_API_KEY to ingest documents',
+        });
         return;
       }
 
@@ -2448,14 +2557,6 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const embeddingConfig = loadEmbeddingConfigFromEnv();
-      if (!embeddingConfig) {
-        sendJson(res, 503, {
-          error: 'EMBEDDING_PROVIDER_NOT_CONFIGURED: set OCTO_EMBEDDING_API_KEY to query documents',
-        });
-        return;
-      }
-
       const parsed = (await readJsonObject(req)) as Record<string, any>;
       const { workspaceId, query, limit } = parsed;
 
@@ -2463,10 +2564,26 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId and query are required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
 
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
       if (!mem) {
         sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      // Authorize before probing provider configuration: an unauthorized caller
+      // must not learn whether embeddings are configured.
+      const embeddingConfig = loadEmbeddingConfigFromEnv();
+      if (!embeddingConfig) {
+        sendJson(res, 503, {
+          error: 'EMBEDDING_PROVIDER_NOT_CONFIGURED: set OCTO_EMBEDDING_API_KEY to query documents',
+        });
         return;
       }
 
@@ -2507,16 +2624,14 @@ export const server = createServer(async (req, res) => {
           '.ttf': 'font/ttf',
         };
         const contentType = contentTypes[ext] ?? 'application/octet-stream';
-        res.writeHead(200, { 'Content-Type': contentType });
-        fs.createReadStream(filePath).pipe(res);
+        sendStaticFile(res, filePath, contentType);
         return;
       }
 
       // SPA fallback for HTML navigation requests (excluding /api routes)
       const indexPath = path.join(distPath, 'index.html');
       if (!pathname.startsWith('/api/') && fs.existsSync(indexPath) && (!path.extname(pathname) || req.headers.accept?.includes('text/html'))) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        fs.createReadStream(indexPath).pipe(res);
+        sendStaticFile(res, indexPath, 'text/html; charset=utf-8');
         return;
       }
     }
@@ -2527,6 +2642,13 @@ export const server = createServer(async (req, res) => {
     const message = err instanceof Error ? err.message : String(err);
     sendJson(res, 500, { error: `INTERNAL_SERVER_ERROR: ${message}` });
   }
+}
+
+// Every request runs inside a fresh identity holder so concurrent requests can
+// never share RLS claims. `authenticateRequest` fills it in; `query()` binds it,
+// transaction-scoped, on the fenced app pool.
+export const server = createServer((req, res) => {
+  void runWithRequestIdentity(() => handleRequest(req, res));
 });
 
 // Start listening if run directly. Compare on the basename so the guard holds on

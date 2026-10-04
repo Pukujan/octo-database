@@ -18,11 +18,12 @@ const state: {
   files: FileRecord[]; gallery: GalleryItem[]; keys: ApiKey[]; shares: ShareSummary[]; jobs: Job[]; activity: Activity[];
   googleAuthEnabled: boolean; confirmSecretSet: boolean; view: View; loading: boolean; theme: 'midnight' | 'paper';
   modal: Modal; modalError: string; oneTimeSecret: string; oneTimeLabel: string; shareUrl: string; previewItem: GalleryItem | null; notice: string;
+  loadError: string;
 } = {
   principal: null, token: null, workspaces: [], workspace: null, files: [], gallery: [], keys: [], shares: [], jobs: [], activity: [],
   googleAuthEnabled: false, confirmSecretSet: false, view: 'overview', loading: false,
   theme: localStorage.getItem('octo-design-system') === 'paper' ? 'paper' : 'midnight', modal: null, modalError: '',
-  oneTimeSecret: '', oneTimeLabel: '', shareUrl: '', previewItem: null, notice: '',
+  oneTimeSecret: '', oneTimeLabel: '', shareUrl: '', previewItem: null, notice: '', loadError: '',
 };
 
 const $ = <T extends HTMLElement = HTMLElement>(selector: string): T | null => root!.querySelector<T>(selector);
@@ -55,7 +56,10 @@ function clearSession(): void {
   localStorage.removeItem('octo_principal');
   state.token = null; state.principal = null; state.workspaces = []; state.workspace = null;
   state.files = []; state.gallery = []; state.keys = []; state.shares = []; state.jobs = []; state.activity = [];
-  state.modal = null;
+  // One-time material is not session state to carry forward: a minted key secret
+  // or share link must not render for whoever signs in next on this machine.
+  state.oneTimeSecret = ''; state.oneTimeLabel = ''; state.shareUrl = '';
+  state.modal = null; state.loadError = '';
 }
 
 async function loadWorkspace(id: string): Promise<void> {
@@ -65,10 +69,16 @@ async function loadWorkspace(id: string): Promise<void> {
   state.loading = true;
   render();
   const query = '?workspaceId=' + encodeURIComponent(id);
+  const labels = ['files', 'gallery', 'jobs', 'activity', 'shares', 'API keys'];
   const results = await Promise.allSettled([
     api<FileRecord[]>('/api/files' + query), api<GalleryItem[]>('/api/gallery' + query), api<Job[]>('/api/jobs' + query),
     api<Activity[]>('/api/activity' + query), api<ShareSummary[]>('/api/workspaces/shares' + query), api<ApiKey[]>('/api/keys'),
   ]);
+  const failed = results.map((result, index) => (result.status === 'rejected' ? labels[index] : null)).filter(Boolean);
+  // A failed request and an empty workspace look identical in the UI, but only the
+  // former needs attention. Surface which sections failed instead of coercing every
+  // rejection to an empty list and rendering a misleadingly empty workspace.
+  state.loadError = failed.length ? 'Could not load ' + failed.join(', ') + ' for this workspace.' : '';
   state.files = results[0].status === 'fulfilled' ? results[0].value : [];
   state.gallery = results[1].status === 'fulfilled' ? results[1].value : [];
   state.jobs = results[2].status === 'fulfilled' ? results[2].value : [];
@@ -194,13 +204,17 @@ function renderApp(): void {
   const body = state.view === 'overview' ? renderOverview() : state.view === 'files' ? renderFiles() : state.view === 'gallery' ? renderGallery() : state.view === 'operations' ? renderOperations() : renderAccess();
   const select = state.workspaces.map((workspace) => '<option value="' + esc(workspace.id) + '" ' + (workspace.id === state.workspace?.id ? 'selected' : '') + '>' + esc(workspace.name) + '</option>').join('');
   const toast = state.notice ? '<div class="toast" role="status">' + esc(state.notice) + '</div>' : '';
+  const loadError = state.loadError ? '<div class="load-error" role="alert">' + esc(state.loadError) + '</div>' : '';
   const workspaceName = state.workspace?.name || 'No Authorized Workspaces';
   const guestSuffix = state.principal?.isGuest && !workspaceName.endsWith(' (Guest)') ? ' (Guest)' : '';
-  root!.innerHTML = '<div class="app-shell" data-theme="' + state.theme + '"><aside class="sidebar"><a class="brand-lockup" href="/" aria-label="Octo home"><span class="brand-mark">◉</span><span>octo</span></a><div class="workspace-label">WORKSPACE</div><label class="sr-only" for="workspace-select">Select workspace</label><select id="workspace-select" class="workspace-picker" ' + (state.workspaces.length ? '' : 'disabled') + '>' + (select || '<option>No workspaces</option>') + '</select><nav class="main-nav" aria-label="Workspace navigation">' + navButton('overview', 'Overview', '◫') + navButton('files', 'Files', '⌑') + navButton('gallery', 'Gallery', '▧') + navButton('operations', 'Operations', '⌁') + navButton('access', 'Access', '⌑') + '</nav><div class="sidebar-spacer"></div><div class="sidebar-note"><span class="live-dot"></span><span>Workspace data is live</span></div><div class="profile"><span class="avatar">' + esc((state.principal?.displayName || state.principal?.email || 'O').slice(0, 1).toUpperCase()) + '</span><span class="profile-copy"><strong>' + esc(state.principal?.displayName || (state.principal?.isGuest ? 'Personal (Guest)' : state.principal?.email)) + '</strong><small>' + (state.principal?.isPlatformOwner ? 'Platform owner' : state.principal?.isGuest ? 'Guest session' : 'Workspace member') + '</small></span></div></aside><main class="main-area"><header class="topbar"><div class="breadcrumbs"><span>Workspace Control Dashboard</span><span class="crumb-divider">/</span><strong>' + labels[state.view] + '</strong></div><div class="topbar-actions"><span class="workspace-chip">' + esc(state.workspace?.role ?? 'No workspace') + '</span><button class="icon-button theme-toggle" type="button" data-action="theme" aria-label="Switch color theme" title="Switch color theme">' + (state.theme === 'midnight' ? '☼' : '◐') + '</button><button class="button quiet small" type="button" data-action="sign-out">Sign out</button></div></header><div class="page-wrap"><div class="page-heading"><div><p class="eyebrow">' + (state.principal?.isGuest ? 'PERSONAL WORKSPACE' : 'OCTO / ' + labels[state.view].toUpperCase()) + '</p><h1>' + esc(workspaceName + guestSuffix) + '</h1><p class="page-subtitle">' + (state.view === 'overview' ? 'Everything important in this workspace, at a glance.' : state.view === 'files' ? 'Find and manage workspace files.' : state.view === 'gallery' ? 'A visual view of your workspace media.' : state.view === 'operations' ? 'Recent jobs and activity for this workspace.' : 'Manage workspace credentials and shares.') + '</p></div><div class="page-actions"><button class="button secondary" data-action="new-workspace">+ New Workspace</button></div></div>' + (state.loading ? '<div class="loading-bar" aria-label="Loading workspace"></div>' : '') + body + '<input class="sr-only" type="file" id="binary-upload" aria-label="Upload file" multiple>' + '</div></main>' + toast + modalMarkup() + '</div>';
-  document.documentElement.dataset.octoSystem = state.theme;
+  root!.innerHTML = '<div class="app-shell" data-theme="' + state.theme + '"><aside class="sidebar"><a class="brand-lockup" href="/" aria-label="Octo home"><span class="brand-mark">◉</span><span>octo</span></a><div class="workspace-label">WORKSPACE</div><label class="sr-only" for="workspace-select">Select workspace</label><select id="workspace-select" class="workspace-picker" ' + (state.workspaces.length ? '' : 'disabled') + '>' + (select || '<option>No workspaces</option>') + '</select><nav class="main-nav" aria-label="Workspace navigation">' + navButton('overview', 'Overview', '◫') + navButton('files', 'Files', '⌑') + navButton('gallery', 'Gallery', '▧') + navButton('operations', 'Operations', '⌁') + navButton('access', 'Access', '⌑') + '</nav><div class="sidebar-spacer"></div><div class="sidebar-note"><span class="live-dot"></span><span>Workspace data is live</span></div><div class="profile"><span class="avatar">' + esc((state.principal?.displayName || state.principal?.email || 'O').slice(0, 1).toUpperCase()) + '</span><span class="profile-copy"><strong>' + esc(state.principal?.displayName || (state.principal?.isGuest ? 'Personal (Guest)' : state.principal?.email)) + '</strong><small>' + (state.principal?.isPlatformOwner ? 'Platform owner' : state.principal?.isGuest ? 'Guest session' : 'Workspace member') + '</small></span></div></aside><main class="main-area"><header class="topbar"><div class="breadcrumbs"><span>Workspace Control Dashboard</span><span class="crumb-divider">/</span><strong>' + labels[state.view] + '</strong></div><div class="topbar-actions"><span class="workspace-chip">' + esc(state.workspace?.role ?? 'No workspace') + '</span><button class="icon-button theme-toggle" type="button" data-action="theme" aria-label="Switch color theme" title="Switch color theme">' + (state.theme === 'midnight' ? '☼' : '◐') + '</button><button class="button quiet small" type="button" data-action="sign-out">Sign out</button></div></header><div class="page-wrap"><div class="page-heading"><div><p class="eyebrow">' + (state.principal?.isGuest ? 'PERSONAL WORKSPACE' : 'OCTO / ' + labels[state.view].toUpperCase()) + '</p><h1>' + esc(workspaceName + guestSuffix) + '</h1><p class="page-subtitle">' + (state.view === 'overview' ? 'Everything important in this workspace, at a glance.' : state.view === 'files' ? 'Find and manage workspace files.' : state.view === 'gallery' ? 'A visual view of your workspace media.' : state.view === 'operations' ? 'Recent jobs and activity for this workspace.' : 'Manage workspace credentials and shares.') + '</p></div><div class="page-actions"><button class="button secondary" data-action="new-workspace">+ New Workspace</button></div></div>' + loadError + (state.loading ? '<div class="loading-bar" aria-label="Loading workspace"></div>' : '') + body + '<input class="sr-only" type="file" id="binary-upload" aria-label="Upload file" multiple>' + '</div></main>' + toast + modalMarkup() + '</div>';
 }
 
 function render(): void {
+  // The saved palette belongs to every screen, not just the authenticated
+  // shell: a returning user who chose the light theme must not get a dark login
+  // or share page on a fresh load.
+  document.documentElement.dataset.octoSystem = state.theme;
   if (location.pathname.match(/^\/share\/.+/)) { void renderPublicShare(); return; }
   if (!state.token || !state.principal) renderLogin(); else renderApp();
 }
