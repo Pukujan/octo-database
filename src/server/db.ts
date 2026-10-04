@@ -783,7 +783,7 @@ export async function dbEnqueueFileTransition(
   });
 }
 
-/** Requeues a failed transition only while its file still exists and is idle. */
+/** Requeues a failed transition while its file is idle (or already gone). */
 export async function dbRetryJob(
   jobId: string,
   workspaceId: string
@@ -810,21 +810,24 @@ export async function dbRetryJob(
         [fileId, workspaceId]
       );
       const file = files.rows[0] as { id: string; archiveState: string } | undefined;
-      if (!file) return 'not_retryable';
 
-      const open = await client.query(
-        `SELECT id FROM octo.jobs
-         WHERE workspace_id = $1 AND job_type IN ('archive_file', 'restore_file')
-           AND payload->>'fileId' = $2 AND state IN ('queued', 'running')
-         FOR UPDATE`,
-        [workspaceId, fileId]
-      );
-      if (
-        open.rows.length > 0 ||
-        file.archiveState === 'archiving' ||
-        file.archiveState === 'restoring'
-      ) {
-        return 'busy';
+      // A deleted file makes the transition moot. Requeue it so the worker can
+      // resolve it as a no-op rather than stranding a failure the owner cannot clear.
+      if (file) {
+        const open = await client.query(
+          `SELECT id FROM octo.jobs
+           WHERE workspace_id = $1 AND job_type IN ('archive_file', 'restore_file')
+             AND payload->>'fileId' = $2 AND state IN ('queued', 'running')
+           FOR UPDATE`,
+          [workspaceId, fileId]
+        );
+        if (
+          open.rows.length > 0 ||
+          file.archiveState === 'archiving' ||
+          file.archiveState === 'restoring'
+        ) {
+          return 'busy';
+        }
       }
     }
 
