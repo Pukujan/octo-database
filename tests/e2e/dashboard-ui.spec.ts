@@ -80,6 +80,20 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     await expect(page.locator('text=Welcome to Octo')).toBeVisible();
   });
 
+  test('applies the saved color theme on the login screen, not only inside the app', async ({
+    page,
+  }) => {
+    // The theme attribute drives which palette the whole document uses. It was
+    // set only when the authenticated shell rendered, so a returning user who
+    // chose the light theme still saw a dark login screen on a fresh load.
+    await page.goto('/');
+    await page.evaluate(() => localStorage.setItem('octo-design-system', 'paper'));
+    await page.reload();
+
+    await expect(page.locator('text=Welcome to Octo')).toBeVisible();
+    await expect(page.locator('html')).toHaveAttribute('data-octo-system', 'paper');
+  });
+
   test('surfaces a workspace load failure instead of a misleading empty workspace', async ({
     page,
   }) => {
