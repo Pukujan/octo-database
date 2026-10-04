@@ -100,3 +100,18 @@ export function sameStat(entry: ManifestEntry | undefined, size: number, mtimeMs
   if (!entry) return false;
   return entry.size === size && entry.mtimeMs === mtimeMs;
 }
+
+/**
+ * Splits configured backup sources into the ones that exist on disk and the ones
+ * that do not, so a summary can report coverage honestly: a source whose folder
+ * is missing or redirected was never read, and must not be listed as backed up.
+ */
+export function partitionSources<T extends { name: string }>(
+  sources: T[],
+  exists: (source: T) => boolean
+): { scanned: T[]; missing: T[] } {
+  const scanned: T[] = [];
+  const missing: T[] = [];
+  for (const source of sources) (exists(source) ? scanned : missing).push(source);
+  return { scanned, missing };
+}
