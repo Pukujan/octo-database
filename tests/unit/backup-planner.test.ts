@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { classifyLocalFile, classifySize, remotePathFor, isUnchanged, sameStat, shouldSkipDirectory, partitionSources, type ManifestEntry } from '../../src/backup/planner';
+import { classifyLocalFile, classifySize, remotePathFor, isUnchanged, sameStat, shouldSkipDirectory, partitionSources, supersededFileIds, type ManifestEntry } from '../../src/backup/planner';
 
 describe('classifyLocalFile', () => {
   it('skips in-progress downloads and temp files', () => {
@@ -148,5 +148,28 @@ describe('sameStat', () => {
 
   it('does not match a missing entry', () => {
     expect(sameStat(undefined, 100, 1000)).toBe(false);
+  });
+});
+
+describe('supersededFileIds', () => {
+  const existing = [
+    { id: '11111111-1111-1111-1111-111111111111', name: 'desktop/notes.txt' },
+    { id: '22222222-2222-2222-2222-222222222222', name: 'desktop/notes.txt' },
+    { id: '33333333-3333-3333-3333-333333333333', name: 'downloads/report.pdf' },
+  ];
+
+  it('returns every existing record whose name is the path being re-uploaded, so a changed file replaces its prior versions instead of piling up', () => {
+    expect(supersededFileIds('desktop/notes.txt', existing)).toEqual([
+      '11111111-1111-1111-1111-111111111111',
+      '22222222-2222-2222-2222-222222222222',
+    ]);
+  });
+
+  it('returns nothing when the path is new to the workspace', () => {
+    expect(supersededFileIds('desktop/fresh.txt', existing)).toEqual([]);
+  });
+
+  it('does not match a different folder that shares the file name', () => {
+    expect(supersededFileIds('downloads/notes.txt', existing)).toEqual([]);
   });
 });
