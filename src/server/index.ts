@@ -834,9 +834,11 @@ export const server = createServer(async (req, res) => {
 
     // 2. Guest Login: POST /api/auth/guest
     if (pathname === '/api/auth/guest' && req.method === 'POST') {
-      const bodyStr = await readBody(req);
-      const parsed = bodyStr ? JSON.parse(bodyStr) : {};
-      const displayName = parsed.displayName ?? 'Guest User';
+      // Tolerate a malformed, empty, or non-object body: this endpoint is
+      // anonymous and bodyless-friendly, so an absent displayName defaults rather
+      // than throwing a bare JSON.parse error as a 500.
+      const parsed = await readJsonObject(req);
+      const displayName = typeof parsed.displayName === 'string' ? parsed.displayName : 'Guest User';
 
       const guestId = randomUUID();
       const slug = guestSlug(guestId);
@@ -1698,6 +1700,12 @@ export const server = createServer(async (req, res) => {
         }
         const d = new Date();
         d.setDate(d.getDate() + (expiresInDays as number));
+        // A large enough day count overflows the Date range; refuse it rather than
+        // letting toISOString() throw `Invalid time value` as a 500.
+        if (!Number.isFinite(d.getTime())) {
+          sendJson(res, 400, { error: 'BAD_REQUEST: expiresInDays is out of range' });
+          return;
+        }
         expiresAt = d.toISOString();
       }
 
@@ -1905,6 +1913,12 @@ export const server = createServer(async (req, res) => {
       if (!expiry && typeof expiresInHours === 'number' && expiresInHours > 0) {
         const d = new Date();
         d.setHours(d.getHours() + expiresInHours);
+        // A large enough hour count overflows the Date range; refuse it rather than
+        // letting toISOString() throw `Invalid time value` as a 500.
+        if (!Number.isFinite(d.getTime())) {
+          sendJson(res, 400, { error: 'BAD_REQUEST: expiresInHours is out of range' });
+          return;
+        }
         expiry = d.toISOString();
       }
 
