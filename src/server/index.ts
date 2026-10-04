@@ -233,6 +233,17 @@ async function readJsonObject(req: IncomingMessage): Promise<Record<string, unkn
   }
 }
 
+// Refuse an identifier that is not a UUID before it reaches a Postgres uuid
+// column, where a malformed value raises 22P02 and the outer handler would answer
+// 500 with raw database text. Writes a clean 400 and returns false when the value
+// is malformed, so the caller returns immediately.
+function requireUuid(res: ServerResponse, value: string, field: string): boolean {
+  if (UUID_PATTERN.test(value)) return true;
+  const code = field === 'workspaceId' ? 'INVALID_WORKSPACE_ID' : 'INVALID_IDENTIFIER';
+  sendJson(res, 400, { error: code, code, message: `${field} must be a UUID.` });
+  return false;
+}
+
 interface AuthContext {
   principal: Principal;
   apiKey?: {
@@ -380,6 +391,9 @@ async function authorizeMediaRequest(
     const workspaceId = url.searchParams.get('workspaceId');
     const fileId = url.searchParams.get('fileId');
     if (!workspaceId || !fileId) return null;
+    // A malformed id can never resolve to a membership, and passing it to a uuid
+    // column would raise 22P02; refuse before the lookup.
+    if (!UUID_PATTERN.test(workspaceId) || !UUID_PATTERN.test(fileId)) return null;
     if (!requireScope(bearer, 'files') || !keyWorkspaceMatches(bearer, workspaceId)) return false;
     const mem = await dbGetWorkspaceMembership(workspaceId, bearer.principal.id);
     if (!mem || !roleAllows(bearer, mem.role, 'member')) return false;
@@ -1155,6 +1169,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
 
       // Enforce workspace-scoped key restrictions
       if (!keyWorkspaceMatches(auth, workspaceId)) {
@@ -1192,6 +1207,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId, name, and data are required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
 
       // Enforce workspace-scoped key restriction
       if (auth.apiKey && auth.apiKey.workspaceId && auth.apiKey.workspaceId !== workspaceId) {
@@ -1291,6 +1307,8 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'fileId and workspaceId required' });
         return;
       }
+      if (!requireUuid(res, fileId, 'fileId')) return;
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -1441,6 +1459,8 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'fileId and workspaceId required' });
         return;
       }
+      if (!requireUuid(res, fileId, 'fileId')) return;
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -1502,6 +1522,8 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'fileId and workspaceId required' });
         return;
       }
+      if (!requireUuid(res, fileId, 'fileId')) return;
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
 
       // A workspace-scoped key may only touch its own workspace.
       if (!keyWorkspaceMatches(auth, workspaceId)) {
@@ -1575,6 +1597,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -1849,6 +1872,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId is required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
 
       // Enforce workspace-scoped key restrictions before anything else.
       if (!keyWorkspaceMatches(auth, workspaceId)) {
@@ -1932,6 +1956,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId is required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
 
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
@@ -1963,6 +1988,8 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'shareId and workspaceId are required' });
         return;
       }
+      if (!requireUuid(res, shareId, 'shareId')) return;
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
 
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
@@ -2175,6 +2202,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId, jobType, and idempotencyKey are required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (jobType === 'archive_file' || jobType === 'restore_file') {
         sendJson(res, 400, { error: 'JOB_TYPE_RESERVED: use the file archive or restore route' });
         return;
@@ -2231,6 +2259,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId is required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -2263,6 +2292,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId is required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -2297,6 +2327,8 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'jobId and workspaceId are required' });
         return;
       }
+      if (!requireUuid(res, jobId, 'jobId')) return;
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
 
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
@@ -2343,6 +2375,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId is required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
         return;
@@ -2381,6 +2414,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId, title, and text are required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
 
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
@@ -2494,6 +2528,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'workspaceId and query are required' });
         return;
       }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
 
       if (!keyWorkspaceMatches(auth, workspaceId)) {
         sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
