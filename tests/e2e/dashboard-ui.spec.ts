@@ -80,6 +80,25 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     await expect(page.locator('text=Welcome to Octo')).toBeVisible();
   });
 
+  test('surfaces a workspace load failure instead of a misleading empty workspace', async ({
+    page,
+  }) => {
+    // A single failing workspace request (here the file listing) must not be
+    // silently coerced to an empty list: an empty workspace and a failed one look
+    // identical to the user, and only the latter needs attention.
+    await page.goto('/');
+    await page.route(/\/api\/files\?/, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'INTERNAL_SERVER_ERROR' }),
+      })
+    );
+    await page.click('text=Continue as Guest');
+    await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
+    await expect(page.getByRole('alert')).toContainText(/could not load/i);
+  });
+
   test('discards a dead persisted session instead of showing an empty workspace shell', async ({
     page,
   }) => {
