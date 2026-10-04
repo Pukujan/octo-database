@@ -12,12 +12,14 @@
     "capture-ops": "tsx scripts/capture-ops.ts",
     "backup": "tsx scripts/octo-backup.ts",
     "export-vectors": "tsx scripts/export-vectors.ts",
+    "mcp": "tsx scripts/octo-mcp.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1144.0",
     "@aws-sdk/s3-request-presigner": "^3.1144.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@supabase/supabase-js": "^2.117.0",
     "@types/pg": "^8.23.1",
     "pg": "^8.23.1",
