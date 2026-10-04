@@ -38,6 +38,7 @@ import {
 import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
+import { guestSlug, personalSlug } from '../lib/provisioning-slug';
 import {
   dbCountTransientFiles,
   dbCreateWorkspaceAtomic,
@@ -785,7 +786,7 @@ export const server = createServer(async (req, res) => {
         // Ensure the principal has at least one workspace to enter
         const workspaces = await dbGetAuthorizedWorkspaces(principal.id);
         if (workspaces.length === 0) {
-          const slug = `personal-${principal.id.slice(0, 8)}`;
+          const slug = personalSlug(principal.id);
           const ws = await dbInsertWorkspace(
             randomUUID(),
             slug,
@@ -814,8 +815,8 @@ export const server = createServer(async (req, res) => {
       const displayName = parsed.displayName ?? 'Guest User';
 
       const guestId = randomUUID();
-      const guestSlug = `guest-${guestId.slice(0, 8)}`;
-      const email = `${guestSlug}@octo.local`;
+      const slug = guestSlug(guestId);
+      const email = `${slug}@octo.local`;
 
       // Insert guest principal in PostgreSQL
       const principal = await dbInsertGuestPrincipal(guestId, guestId, email, displayName);
@@ -824,7 +825,7 @@ export const server = createServer(async (req, res) => {
       const workspaceId = randomUUID();
       const workspace = await dbInsertWorkspace(
         workspaceId,
-        guestSlug,
+        slug,
         'Personal (Guest)',
         'Auto-provisioned personal sandbox workspace',
         principal.id
