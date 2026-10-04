@@ -43,6 +43,10 @@ not sure what happened i believ i was on work mode but now im not?? can u work o
 
 i do want auto merge and proper ci with integretity, type chechker lint and ruff
 
+### Message 10
+
+For the Dyad frontend work, remove framework and component-library prescriptions so Dyad has freedom to choose. The current React 19/MUI implementation is also not a required target stack. Keep dark mode as the default and design systems interchangeable.
+
 ## Active instructions
 
 | Instruction | Current implementation |
@@ -53,8 +57,8 @@ i do want auto merge and proper ci with integretity, type chechker lint and ruff
 | Check PCM, CGM, ACS hot loader | Pinned contracts present on PR #17; all three validators remain in gates |
 | Owner controls scope; no unsolicited overengineering | AGENTS.md and project/handoff/task/issue requirements aligned |
 | Audit issue logs and remove added delivery ceremony | Remove mandatory holdouts and exhaustive validation ceremony; retain functional checks |
-| Keep simple aesthetic dashboard, gallery, operations UI | Issues #3/#5/#8 explicitly retain template/component UI with minimal customization |
-| Use CGM and HSW guidance | Read pinned HSW, HTML-demo, and visual-direction guidance; use plain copy, restrained visuals, accessible responsive controls |
+| Keep simple aesthetic dashboard, gallery, operations UI | Issues #3/#5/#8 retain the product views; no framework, library, template, or design-tool stack is mandated. The owner prefers dark default and interchangeable design systems. |
+| Use CGM and HSW guidance | Use the owner-selected visual direction; do not let helper guidance prescribe a frontend stack or override owner taste |
 | Auto-merge and proper CI integrity/integration, types, lint, Ruff | Explicit required delivery work, superseding earlier agent text calling auto-merge optional |
 
 Later owner corrections control earlier conflicting instructions. Reusing existing CI capacity supersedes the earlier dedicated-registration approach. The owner still wants the dashboard, gallery, and operations UI. Auto-merge and quality checks are requested scope; they must not be mistaken for unsolicited protection.

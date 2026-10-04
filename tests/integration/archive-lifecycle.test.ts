@@ -182,13 +182,20 @@ describe('archive_file job', () => {
     expect(outcome.detail).toMatch(/not configured/);
   });
 
-  it('fails permanently when the target file does not exist', async () => {
+  it('completes as a no-op when the target file was deleted before the job ran', async () => {
     const h = makeHarness();
     const deps: WorkerDeps = { ...h.deps, loadArchiveTarget: async () => null };
 
     const outcome = await processJob(job('archive_file'), deps);
 
-    expect(outcome.status).toBe('failed');
+    // A deleted file makes the requested transition moot. Failing the job
+    // permanently would strand an unclearable error in the workspace, so the
+    // job resolves as a benign no-op instead.
+    expect(outcome.status).toBe('completed');
+    expect(outcome.detail).toMatch(/no longer exists/);
+    // Nothing was copied or pruned: there is no file to act on.
+    expect(h.active.objects.size).toBe(1);
+    expect(h.archive.objects.size).toBe(0);
   });
 
   it('keeps the source and is retryable when the R2 read fails', async () => {
@@ -293,6 +300,19 @@ describe('restore_file job', () => {
 
     expect(outcome.status).toBe('retry');
     expect(h.lastState()).toBe('archived_drive');
+  });
+
+  it('completes as a no-op when the target file was deleted before the job ran', async () => {
+    const h = makeHarness({ archiveState: 'archived_drive', coldLocator: 'drive-9', seedActive: false });
+    const deps: WorkerDeps = { ...h.deps, loadArchiveTarget: async () => null };
+
+    const outcome = await processJob(job('restore_file'), deps);
+
+    expect(outcome.status).toBe('completed');
+    expect(outcome.detail).toMatch(/no longer exists/);
+    // The deleted file's cold copy is untouched; there is nothing to restore.
+    expect(h.archive.objects.has('drive-9')).toBe(true);
+    expect(h.active.objects.size).toBe(0);
   });
 
   it('requires reconciliation when the cold copy hash does not match', async () => {

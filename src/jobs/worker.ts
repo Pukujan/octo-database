@@ -98,7 +98,11 @@ export async function handleArchiveJob(
 
   const target = await deps.loadArchiveTarget(job.workspaceId, fileId);
   if (!target) {
-    return { ok: false, code: 'FILE_NOT_FOUND', summary: `No file ${fileId} in workspace ${job.workspaceId}`, retryable: false };
+    // The file was deleted after the job was queued (deletion is serialized
+    // against open transitions, so a queued job normally blocks it; this covers
+    // jobs left behind by an older deployment). The transition is moot: resolve
+    // it as a benign no-op rather than a permanent failure the owner cannot clear.
+    return { ok: true, detail: `no-op: file ${fileId} no longer exists` };
   }
 
   const outcome = direction === 'archive'

@@ -37,7 +37,7 @@ import {
 } from '../api/capabilities';
 import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
-import { hashApiKeySecret } from '../api/keys';
+import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
 import {
   dbCountTransientFiles,
   dbCreateWorkspaceAtomic,
@@ -1174,8 +1174,7 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const bodyStr = await readBody(req);
-      const parsed = JSON.parse(bodyStr);
+      const parsed = (await readJsonObject(req)) as Record<string, any>;
       const { workspaceId, name, mimeType, data, dataEncoding } = parsed;
 
       if (!workspaceId || !name || data === undefined) {
@@ -1644,23 +1643,27 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const bodyStr = await readBody(req);
-      const parsed = JSON.parse(bodyStr);
-      const { name, workspaceId, scopes: requestedScopes, expiresInDays } = parsed;
+      const parsed = await readJsonObject(req);
+      const {
+        name,
+        workspaceId: requestedWorkspaceId,
+        scopes: requestedScopes,
+        expiresInDays,
+      } = parsed;
 
-      if (!name) {
+      if (!name || typeof name !== 'string') {
         sendJson(res, 400, { error: 'name is required' });
         return;
       }
 
       let expiresAt: string | null = null;
       if (expiresInDays !== undefined && expiresInDays !== null) {
-        if (!Number.isInteger(expiresInDays) || expiresInDays <= 0) {
+        if (!Number.isInteger(expiresInDays as number) || (expiresInDays as number) <= 0) {
           sendJson(res, 400, { error: 'BAD_REQUEST: expiresInDays must be a positive integer' });
           return;
         }
         const d = new Date();
-        d.setDate(d.getDate() + expiresInDays);
+        d.setDate(d.getDate() + (expiresInDays as number));
         expiresAt = d.toISOString();
       }
 
@@ -1673,13 +1676,46 @@ export const server = createServer(async (req, res) => {
           sendJson(res, 400, { error: 'BAD_REQUEST: scopes must be a non-empty array' });
           return;
         }
-        const unknown = requestedScopes.filter((s: string) => !ALLOWED_SCOPES.includes(s));
+        const unknown = requestedScopes.filter((s: unknown) => !ALLOWED_SCOPES.includes(s as string));
         if (unknown.length > 0) {
           sendJson(res, 400, { error: `BAD_REQUEST: unknown scopes: ${unknown.join(', ')}` });
           return;
         }
-        scopes = requestedScopes;
+        scopes = requestedScopes as string[];
       }
+
+      if (
+        requestedWorkspaceId !== undefined &&
+        requestedWorkspaceId !== null &&
+        typeof requestedWorkspaceId !== 'string'
+      ) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: workspaceId must be a UUID string' });
+        return;
+      }
+      let workspaceId: string | null =
+        typeof requestedWorkspaceId === 'string' ? requestedWorkspaceId : null;
+      if (workspaceId !== null && !UUID_PATTERN.test(workspaceId)) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: workspaceId must be a valid UUID' });
+        return;
+      }
+
+      // A token may only narrow its own authority when minting another key: it
+      // cannot widen its scopes, escape its workspace binding, or turn a
+      // workspace-bound token into an account-wide one.
+      const decision = authorizeKeyMint(
+        {
+          isApiKey: Boolean(auth.apiKey),
+          workspaceId: auth.apiKey?.workspaceId ?? null,
+          scopes: auth.apiKey?.scopes ?? [],
+        },
+        { workspaceId, scopes }
+      );
+      if (!decision.ok) {
+        sendJson(res, decision.status, { error: decision.error });
+        return;
+      }
+      workspaceId = decision.workspaceId;
+      scopes = decision.scopes;
 
       // If workspace-scoped key requested, verify caller belongs to that workspace
       if (workspaceId) {
@@ -1795,8 +1831,7 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const bodyStr = await readBody(req);
-      const parsed = JSON.parse(bodyStr);
+      const parsed = (await readJsonObject(req)) as Record<string, any>;
       const { workspaceId, resourceType, resourceId, permission, expiresInHours, validUntil } = parsed;
 
       if (!workspaceId) {
@@ -2106,8 +2141,7 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const bodyStr = await readBody(req);
-      const parsed = JSON.parse(bodyStr);
+      const parsed = (await readJsonObject(req)) as Record<string, any>;
       const { workspaceId, jobType, idempotencyKey, payload } = parsed;
 
       if (!workspaceId || !jobType || !idempotencyKey) {
@@ -2314,8 +2348,7 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const bodyStr = await readBody(req);
-      const parsed = JSON.parse(bodyStr);
+      const parsed = (await readJsonObject(req)) as Record<string, any>;
       const { workspaceId, title, text, mimeType } = parsed;
 
       if (!workspaceId || !title || typeof text !== 'string') {
@@ -2423,8 +2456,7 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const bodyStr = await readBody(req);
-      const parsed = JSON.parse(bodyStr);
+      const parsed = (await readJsonObject(req)) as Record<string, any>;
       const { workspaceId, query, limit } = parsed;
 
       if (!workspaceId || !query) {
