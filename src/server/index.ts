@@ -415,6 +415,9 @@ async function authorizeMediaRequest(
     // Membership is still re-checked, so revoking access invalidates live tokens.
     const mem = await dbGetWorkspaceMembership(claims.workspaceId, claims.principalId);
     if (!mem) return null;
+    // The signature already names the principal and workspace, so bind them before the
+    // fenced file read that follows (image/video tags carry no Authorization header).
+    bindRequestIdentity(claims.principalId, claims.workspaceId);
     return {
       principalId: claims.principalId,
       workspaceId: claims.workspaceId,
@@ -426,6 +429,10 @@ async function authorizeMediaRequest(
   // link therefore also invalidates every media URL it signed.
   const share = await dbResolveShareById(claims.shareId);
   if (!share || share.workspaceId !== claims.workspaceId) return null;
+
+  // Bind the share creator so the fenced read is scoped to exactly the shared
+  // workspace; the creator is a member, so the membership predicate also passes.
+  bindRequestIdentity(share.createdBy, claims.workspaceId);
 
   return {
     principalId: share.createdBy,
@@ -2056,6 +2063,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         sendJson(res, 404, { error: 'SHARE_NOT_FOUND_OR_INACTIVE' });
         return;
       }
+
+      // The token has authorized this workspace read; bind the share creator so the
+      // fenced file listing is scoped to exactly the shared workspace.
+      bindRequestIdentity(share.createdBy, share.workspaceId);
 
       const mediaFiles = (await dbListWorkspaceFiles(share.workspaceId)).filter(
         (f) => f.mimeType.startsWith('image/') || f.mimeType.startsWith('video/')

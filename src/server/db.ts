@@ -561,11 +561,14 @@ export async function dbDeleteFileIfIdle(
     const file = files.rows[0] as { id: string; storageKey: string; archiveState: string } | undefined;
     if (!file) return { status: 'missing' };
 
+    // No FOR UPDATE here: octo.jobs carries only a SELECT policy, so a locking read
+    // returns zero rows for the non-owner app role and the busy check silently passes.
+    // Serialization against enqueue does not need it — the file row lock above is the
+    // gate, and dbEnqueueFileTransition (service pool) also locks the file row.
     const transitions = await client.query(
       `SELECT id FROM octo.jobs
        WHERE workspace_id = $1 AND job_type IN ('archive_file', 'restore_file')
-         AND payload->>'fileId' = $2 AND state IN ('queued', 'running')
-       FOR UPDATE`,
+         AND payload->>'fileId' = $2 AND state IN ('queued', 'running')`,
       [workspaceId, fileId]
     );
     if (
@@ -732,7 +735,7 @@ export async function dbResolveShareByTokenHash(tokenHash: string): Promise<{
     FROM octo.resolve_share($1) r
     JOIN octo.shares s ON s.id = r.share_id;
   `;
-  const rows = await query<{
+  const rows = await queryService<{
     shareId: string;
     workspaceId: string;
     resourceType: string;
@@ -744,7 +747,11 @@ export async function dbResolveShareByTokenHash(tokenHash: string): Promise<{
   return rows[0] ?? null;
 }
 
-/** Re-checks that a share referenced by a signed media URL is still active. */
+/**
+ * Re-checks that a share referenced by a signed media URL is still active. Like the
+ * token resolver, this runs before any principal identity exists (a media token
+ * carries a share id, not a caller), so it reads through the service pool.
+ */
 export async function dbResolveShareById(shareId: string): Promise<{
   workspaceId: string;
   createdBy: string;
@@ -758,7 +765,7 @@ export async function dbResolveShareById(shareId: string): Promise<{
       AND (valid_until IS NULL OR valid_until > now())
     LIMIT 1;
   `;
-  const rows = await query<{ workspaceId: string; createdBy: string }>(sql, [shareId]);
+  const rows = await queryService<{ workspaceId: string; createdBy: string }>(sql, [shareId]);
   return rows[0] ?? null;
 }
 

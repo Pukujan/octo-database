@@ -353,3 +353,18 @@ the code differs from the SDD prose above. The PDD is unchanged; only the SDD's
   `dbGetFile` immediately before enqueueing). The route's `keyWorkspaceMatches` +
   membership + fenced `dbGetFile` is the fence for that path; the trusted-caller
   contract is stated in the function's own comment.
+- **Share / media reads.** The two share resolvers (`dbResolveShareByTokenHash`,
+  `dbResolveShareById`) run before any principal identity exists — a share token or
+  a signed media token names a share, not a caller — so they read through the
+  service pool. Having resolved the share, the media routes and the anonymous
+  public-share route `bindRequestIdentity(share.createdBy, share.workspaceId)` and
+  then do the file read fenced, so the read is scoped to exactly the shared
+  workspace rather than bypassing the fence. The principal-token media path binds
+  the signature's own `(principalId, workspaceId)` the same way.
+- **Locking reads on control tables.** A `SELECT ... FOR UPDATE` needs an UPDATE
+  policy, and `jobs`/`activity` deliberately have only SELECT policies. So the
+  jobs locking read in `dbDeleteFileIfIdle` was dropped: for the non-owner app role
+  a locking read there returned **zero rows** and the busy check silently passed,
+  letting a delete proceed during a queued archive transition. Serialization does
+  not depend on it — the `files` row lock (and the same lock taken by
+  `dbEnqueueFileTransition`) is the gate.
