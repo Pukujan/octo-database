@@ -128,3 +128,38 @@ test('manual retry requeues an archive only while its file still exists', async 
   );
   expect(refusedDelete.status()).toBe(409);
 });
+
+test('requeues a failed archive whose file was deleted so the worker can clear it', async ({ request }) => {
+  const fixture = await createFileFixture(request);
+  const queued = await dbEnqueueFileTransition(
+    randomUUID(),
+    fixture.workspace.id,
+    'archive',
+    `archive:${fixture.file.id}`,
+    { fileId: fixture.file.id, storageKey: `test/${fixture.file.id}`, mimeType: 'text/plain' },
+    fixture.principal.id
+  );
+  expect(queued.status).toBe('queued');
+  if (queued.status !== 'queued') return;
+
+  const headers = { Authorization: `Bearer ${fixture.sessionToken}` };
+  // The job fails, then the file is deleted. The job is now moot, but leaving it
+  // failed would strand an error the owner can neither retry nor dismiss.
+  await query("UPDATE octo.jobs SET state = 'failed' WHERE id = $1", [queued.job.id]);
+  const deleted = await request.delete(
+    `/api/files/${fixture.file.id}?workspaceId=${fixture.workspace.id}`,
+    { headers }
+  );
+  expect(deleted.status()).toBe(200);
+
+  const retry = await request.post(
+    `/api/jobs/${queued.job.id}/retry?workspaceId=${fixture.workspace.id}`,
+    { headers }
+  );
+  expect(retry.status()).toBe(200);
+
+  const requeued = await query<{ state: string }>('SELECT state FROM octo.jobs WHERE id = $1', [
+    queued.job.id,
+  ]);
+  expect(requeued[0]!.state).toBe('queued');
+});

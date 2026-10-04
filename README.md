@@ -26,10 +26,10 @@ Google Login & RLS ──► Full-Stack Server & UI ──► Active R2 Storage 
 
 | Slice / Component | Scope & Capabilities | Status |
 |---|---|---|
-| **Slice 1 (#3)** | Google OAuth login, Octo principals, workspaces, PostgreSQL RLS, React MUI dashboard | **Merged** (`PR #20`) |
+| **Slice 1 (#3)** | Google OAuth login, Octo principals, workspaces, PostgreSQL RLS, control dashboard | **Merged** (`PR #20`) |
 | **Slice 2 (#4)** | Canonical `octo.files` catalog, signed URL generation, Cloudflare R2 active storage | **Merged** (`PR #21`) |
 | **Slice 7 (#9)** | Scoped machine identities, workspace API keys (`OCTO_API_KEY`), and REST API gateway | **Merged** (`PR #21`) |
-| **Full-Stack Runtime** | Node server (`src/server/`), Vite frontend (`src/main.tsx`), live DB & R2 integration | **Merged** (`PR #22`) |
+| **Full-Stack Runtime** | Node server (`src/server/`), Vite frontend (`src/main.ts`), live DB & R2 integration | **Merged** (`PR #22`) |
 | **QA Vision Pipeline** | Playwright E2E testing with Alibaba Qwen 3.8 Flash multimodal vision model verification | **Merged** (`PR #23`) |
 | **Provider Runtime (#16)** | Provider configuration for R2 & Google Drive OAuth without secret leakage in Git | **Merged** (`PR #19`) |
 | **Slice 5 (#7)** | Google Drive 5TB cold storage archival transition and on-demand restore | **Verified Live** |

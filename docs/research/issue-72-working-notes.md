@@ -218,36 +218,9 @@ Working frontend boundary:
 The frontend should feel like a coherent workspace portal that composes mature systems, not a homemade replacement for every system it connects.
 
 
-### 12. Proposed fast frontend delivery path
+### 12. Frontend approach — owner-selected
 
-Current preferred direction after reviewing agent-driven design/build tools:
-
-- **OpenPencil** as the agent-addressable design workspace. It exposes MCP/CLI workflows, reusable components/variants, token extraction, linting, and JSX/Tailwind export.
-- **shadcn/ui** as the actual frontend component/design-system foundation. It has strong defaults, accessible components, a consistent composition model, and is explicitly designed to be predictable for coding agents.
-- **Onlook** as the visual editor over the real React/Next.js codebase when visual iteration is needed. It edits the same production components rather than maintaining a separate mockup format.
-- **Mature existing consoles remain authoritative** for generic infrastructure/admin work: database console, analytics/BI, graph tooling, GitHub, provider consoles, etc.
-- **ToolJet remains optional** for internal/operational panels where delivery speed matters more than bespoke product polish.
-
-The goal is to stop agents from inventing UI structure from scratch. They should work from a pinned design system and editable design artifacts, then glue the workspace shell to existing mature systems.
-
-Proposed delivery flow:
-
-```
-requirements + CGM content direction
-        ↓
-OpenPencil design / tokens / components
-        ↓
-shadcn/ui component system
-        ↓
-Onlook + coding agent edits real frontend
-        ↓
-thin workspace portal
-        ↓
-deep-link/embed mature DB / analytics / graph / provider tools
-```
-
-Custom frontend should focus on workspace overview, gallery/files, agent proposal/approval flows, and cross-system summaries. Do not rebuild SQL consoles, BI builders, graph explorers, or provider administration.
-
+The owner removed framework, component-library, design-tool, and fixed-design-system requirements on 2026-10-03. Dyad and other selected tools have freedom to choose the frontend implementation. Octo's workspace jobs and API remain the product boundary; dark mode is preferred by default and design systems should remain interchangeable.
 
 ### 13. Operational data vs analytical data
 
@@ -283,7 +256,7 @@ The initial operational-data requirement is therefore:
 - no requirement for DAX unless Power BI is deliberately adopted
 
 
-### 14. Consolidated target stack and glue contract
+### 14. Consolidated target architecture and glue contract
 
 The working target is one workspace-oriented server API with multiple thin clients rather than separate bespoke integration logic for every app or agent.
 
@@ -322,12 +295,8 @@ The SDK should be thin: authentication, typed requests, retries/pagination where
 
 The MCP layer should translate agent tool calls into the same workspace capability API rather than gaining separate infrastructure credentials.
 
-**Frontend stack**
-- OpenPencil: agent-addressable design workspace / design artifacts
-- shadcn/ui: production component/design-system foundation
-- React/Next.js: application shell
-- Onlook: optional visual editing of the real frontend code
-- mature external consoles/tools for generic DB, analytics, graph, and provider administration
+**Frontend approach**
+The owner has removed framework, component-library, and design-tool requirements. The owner selects the implementation and visual system. Prefer dark mode by default and allow interchangeable design systems. Octo product requirements remain the workspace jobs and stable API; specialist consoles stay available for deep database, analytics, graph, and provider administration.
 
 **Success condition**
 A fresh machine or agent can authenticate to a workspace and:

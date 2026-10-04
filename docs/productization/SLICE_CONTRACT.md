@@ -220,13 +220,11 @@ For product-facing UI, the eval must describe real tasks rather than screenshots
 Use the same:
 - user jobs;
 - workspace API;
-- design tokens/components;
-- content/surface direction;
 - test data.
 
-Candidate UIs may compete during the bounded frontend bakeoff. Evaluation should include task completion, clear next actions, accessibility checks, visual consistency/regression, and owner taste judgment.
+Do not require a framework, component library, design tool, or fixed design system; the owner may choose these freely.
 
-Do not let the implementation agent invent a new design system for each screen.
+Candidate UIs may compete during the bounded frontend bakeoff. Evaluation should include task completion, clear next actions, accessibility checks, visual consistency/regression, and owner taste judgment.
 
 ## Default execution loop
 

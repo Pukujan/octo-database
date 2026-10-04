@@ -67,17 +67,7 @@ Custom product UI focuses on:
 
 Mature systems retain specialized interfaces for database administration, analytics/BI, graph exploration, GitHub, and provider administration.
 
-The frontend must use a fixed design system and repeatable agent-driven design process rather than allowing each coding agent to invent a dashboard from scratch.
-
-Current target direction:
-
-- React/Next.js application shell;
-- shadcn/ui component/design-system foundation;
-- OpenPencil as an agent-addressable design workspace;
-- Onlook or equivalent for visual editing of the real frontend code;
-- mature external consoles/tools for deep database, analytics, graph, and provider workflows.
-
-The exact frontend tool choice is validated through a bounded frontend bakeoff against the same user jobs and API contract.
+Do not prescribe a frontend framework, component library, design tool, or fixed visual system. The owner may use interchangeable design systems and prefers dark mode by default. Keep the frontend focused on Octo's workspace jobs and existing API; leave implementation and visual exploration choices open to the owner and the selected design tool. Mature external consoles/tools remain available for deep database, analytics, graph, and provider workflows.
 
 ## Client contract
 
