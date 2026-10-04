@@ -67,6 +67,34 @@ python scripts/verify_live_guest_storage.py
 
 ---
 
+## Managed folder backup
+
+Back up your **Desktop** and **Downloads** folders into one workspace, foldered by
+source and incremental on re-run. It never touches your local files and stores no
+credentials. See **[docs/backup.md](docs/backup.md)** for the three-step start
+(get a key, set two variables, run), configuration, and a daily schedule.
+
+```bash
+npm run backup -- --dry-run   # preview what would upload
+npm run backup -- --commit    # upload changed files
+```
+
+---
+
+## Repository operational capture
+
+Point a workspace at this repository to collect operational snapshots — git
+state, repository shape, test inventory, and live server health — as JSON files
+you can browse and analyze alongside other workspace data. Read-only against the
+repo and server; the only write is the snapshot upload.
+
+```bash
+OCTO_OPS_TOKEN=octo_live_ws_... OCTO_OPS_WORKSPACE=<uuid> npm run capture-ops
+OCTO_OPS_TOKEN=... OCTO_OPS_WORKSPACE=... npm run capture-ops -- --dry-run
+```
+
+---
+
 ## Local development & gates
 
 ```bash
