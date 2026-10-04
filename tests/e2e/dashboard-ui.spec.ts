@@ -94,6 +94,63 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     await expect(page.locator('html')).toHaveAttribute('data-octo-system', 'paper');
   });
 
+  test('surfaces a workspace load failure instead of a misleading empty workspace', async ({
+    page,
+  }) => {
+    // A single failing workspace request (here the file listing) must not be
+    // silently coerced to an empty list: an empty workspace and a failed one look
+    // identical to the user, and only the latter needs attention.
+    await page.goto('/');
+    await page.route(/\/api\/files\?/, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'INTERNAL_SERVER_ERROR' }),
+      })
+    );
+    await page.click('text=Continue as Guest');
+    await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
+    await expect(page.getByRole('alert')).toContainText(/could not load/i);
+  });
+
+  test('a disabled Google button keeps its label legible instead of fading it out', async ({
+    page,
+  }) => {
+    // The disabled "Google sign-in not configured" control is the only signal
+    // that Google auth is off, so its label must stay readable. A blanket
+    // opacity dims the text toward the panel until it can no longer be read;
+    // measure the rendered contrast and require comfortably legible text.
+    await page.goto('/');
+    test.skip(
+      (await page.getByRole('button', { name: 'Sign in with Google' }).count()) > 0,
+      'Google sign-in is configured in this environment'
+    );
+    const button = page.getByRole('button', { name: 'Google sign-in not configured' });
+    await expect(button).toBeDisabled();
+
+    const ratio = await button.evaluate((el) => {
+      const channels = (color: string) => (color.match(/[\d.]+/g) ?? []).map(Number);
+      const linear = (value: number) => {
+        const c = value / 255;
+        return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+      };
+      const luminance = (rgb: number[]) =>
+        0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2]);
+      const style = getComputedStyle(el);
+      const opacity = Number(style.opacity);
+      const page = channels(getComputedStyle(document.body).backgroundColor);
+      // Opacity composites the whole control (label over its own surface) toward
+      // whatever sits behind it, so model that before comparing the two.
+      const seen = (color: string) =>
+        channels(color).map((value, i) => value * opacity + page[i] * (1 - opacity));
+      const [bright, dim] = [luminance(seen(style.color)), luminance(seen(style.backgroundColor))].sort(
+        (a, b) => b - a
+      );
+      return (bright + 0.05) / (dim + 0.05);
+    });
+    expect(ratio).toBeGreaterThanOrEqual(7);
+  });
+
   test('discards a dead persisted session instead of showing an empty workspace shell', async ({
     page,
   }) => {

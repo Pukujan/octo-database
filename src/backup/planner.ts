@@ -115,3 +115,16 @@ export function partitionSources<T extends { name: string }>(
   for (const source of sources) (exists(source) ? scanned : missing).push(source);
   return { scanned, missing };
 }
+
+/**
+ * Existing workspace records a re-upload supersedes, matched by their exact
+ * remote path. The workspace has no name uniqueness, so a changed file that is
+ * uploaded again would otherwise accumulate a new record per backup run. Returns
+ * every matching id so the CLI can delete them after the new version is stored.
+ */
+export function supersededFileIds(
+  remotePath: string,
+  existing: { id: string; name: string }[]
+): string[] {
+  return existing.filter((file) => file.name === remotePath).map((file) => file.id);
+}
