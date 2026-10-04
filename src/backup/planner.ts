@@ -100,3 +100,31 @@ export function sameStat(entry: ManifestEntry | undefined, size: number, mtimeMs
   if (!entry) return false;
   return entry.size === size && entry.mtimeMs === mtimeMs;
 }
+
+/**
+ * Splits configured backup sources into the ones that exist on disk and the ones
+ * that do not, so a summary can report coverage honestly: a source whose folder
+ * is missing or redirected was never read, and must not be listed as backed up.
+ */
+export function partitionSources<T extends { name: string }>(
+  sources: T[],
+  exists: (source: T) => boolean
+): { scanned: T[]; missing: T[] } {
+  const scanned: T[] = [];
+  const missing: T[] = [];
+  for (const source of sources) (exists(source) ? scanned : missing).push(source);
+  return { scanned, missing };
+}
+
+/**
+ * Existing workspace records a re-upload supersedes, matched by their exact
+ * remote path. The workspace has no name uniqueness, so a changed file that is
+ * uploaded again would otherwise accumulate a new record per backup run. Returns
+ * every matching id so the CLI can delete them after the new version is stored.
+ */
+export function supersededFileIds(
+  remotePath: string,
+  existing: { id: string; name: string }[]
+): string[] {
+  return existing.filter((file) => file.name === remotePath).map((file) => file.id);
+}

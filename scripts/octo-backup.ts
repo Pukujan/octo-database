@@ -1,10 +1,18 @@
 /**
  * Managed folder backup: Desktop and Downloads -> one Octo workspace.
  *
- * Upload-only. This tool reads local folders and uploads changed files into a
- * single target workspace, foldered by source (`desktop/...`, `downloads/...`).
- * It never deletes, moves, or renames anything locally, and it stores no
- * credentials: the token comes from the environment.
+ * This tool reads local folders and uploads changed files into a single target
+ * workspace, foldered by source (`desktop/...`, `downloads/...`). It never
+ * deletes, moves, or renames anything locally, and it stores no credentials: the
+ * token comes from the environment.
+ *
+ * Replace-on-change: the workspace has no name uniqueness, so re-uploading a
+ * changed file would otherwise leave its prior record behind and pile up one
+ * copy per run. After storing the new version, the CLI deletes the prior records
+ * whose remote path matches, so a backed-up path always has exactly one current
+ * copy. This needs a token with the `delete` scope (plus `read`, `write`,
+ * `files`); without it the uploads still succeed but prior versions are left in
+ * place and reported as `replaceFailed`.
  *
  * Incremental: a local manifest records path, size, mtime, and SHA-256 per file;
  * unchanged files are skipped, so re-runs upload only what changed.
@@ -26,7 +34,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { classifyLocalFile, classifySize, remotePathFor, isUnchanged, sameStat, type Manifest } from '../src/backup/planner';
+import { classifyLocalFile, classifySize, remotePathFor, isUnchanged, partitionSources, sameStat, supersededFileIds, type Manifest } from '../src/backup/planner';
 import { walkFiles } from '../src/backup/walk';
 
 const BASE_URL = process.env['OCTO_BACKUP_BASE_URL'] ?? 'http://localhost:3001';
@@ -83,6 +91,32 @@ interface PlannedUpload {
   sha256: string;
 }
 
+async function listExistingFiles(): Promise<{ id: string; name: string }[]> {
+  const response = await fetch(
+    `${BASE_URL}/api/files?workspaceId=${encodeURIComponent(WORKSPACE_ID as string)}`,
+    { headers: { Authorization: `Bearer ${TOKEN}` } }
+  );
+  if (!response.ok) {
+    console.error(
+      `Could not list existing files (${response.status}); prior versions will not be replaced.`
+    );
+    return [];
+  }
+  return (await response.json()) as { id: string; name: string }[];
+}
+
+async function deleteFile(id: string): Promise<boolean> {
+  const response = await fetch(
+    `${BASE_URL}/api/files/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(WORKSPACE_ID as string)}`,
+    { method: 'DELETE', headers: { Authorization: `Bearer ${TOKEN}` } }
+  );
+  if (!response.ok) {
+    console.error(`FAILED to replace prior version ${id}: ${response.status} ${await response.text()}`);
+    return false;
+  }
+  return true;
+}
+
 async function main(): Promise<void> {
   const sources = parseSources();
   const manifest = loadManifest();
@@ -93,11 +127,12 @@ async function main(): Promise<void> {
   let skippedLarge = 0;
   let skippedEmpty = 0;
 
-  for (const source of sources) {
-    if (!existsSync(source.dir)) {
-      console.error(`Source not found, skipping: ${source.name} (${source.dir})`);
-      continue;
-    }
+  const { scanned, missing } = partitionSources(sources, (source) => existsSync(source.dir));
+  for (const source of missing) {
+    console.error(`Source not found, skipping: ${source.name} (${source.dir})`);
+  }
+
+  for (const source of scanned) {
     walkFiles(source.dir, (absolutePath, relPath) => {
       const base = relPath.split(/[\\/]/).pop() ?? relPath;
       const reason = classifyLocalFile(base, IGNORE);
@@ -143,7 +178,8 @@ async function main(): Promise<void> {
 
   const totalBytes = uploads.reduce((sum, upload) => sum + upload.size, 0);
   const summary = {
-    sources: sources.map((s) => s.name),
+    sources: scanned.map((s) => s.name),
+    missingSources: missing.map((s) => s.name),
     toUpload: uploads.length,
     totalBytes,
     unchanged,
@@ -169,7 +205,10 @@ async function main(): Promise<void> {
     return;
   }
 
+  const existing = await listExistingFiles();
   let uploaded = 0;
+  let replaced = 0;
+  let replaceFailed = 0;
   for (const upload of uploads) {
     const data = readFileSync(upload.absolutePath).toString('base64');
     const response = await fetch(`${BASE_URL}/api/files/upload`, {
@@ -187,6 +226,15 @@ async function main(): Promise<void> {
       console.error(`FAILED ${upload.remotePath}: ${response.status} ${await response.text()}`);
       continue;
     }
+    // A changed file must replace its prior version rather than accumulate a
+    // second record: the workspace has no name uniqueness, so without this every
+    // backup run that touches a file leaves the old copy behind. Delete only
+    // after the new version is stored, so the workspace is never left without a
+    // copy. Matching by exact remote path also clears duplicates from past runs.
+    for (const id of supersededFileIds(upload.remotePath, existing)) {
+      if (await deleteFile(id)) replaced += 1;
+      else replaceFailed += 1;
+    }
     manifest[upload.absolutePath] = {
       size: upload.size,
       mtimeMs: upload.mtimeMs,
@@ -198,7 +246,13 @@ async function main(): Promise<void> {
 
   mkdirSync(dirname(MANIFEST_PATH), { recursive: true });
   writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2));
-  console.log(JSON.stringify({ mode: 'commit', ...summary, uploaded, manifest: MANIFEST_PATH }, null, 2));
+  console.log(
+    JSON.stringify(
+      { mode: 'commit', ...summary, uploaded, replaced, replaceFailed, manifest: MANIFEST_PATH },
+      null,
+      2
+    )
+  );
 }
 
 await main();

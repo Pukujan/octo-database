@@ -80,6 +80,77 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     await expect(page.locator('text=Welcome to Octo')).toBeVisible();
   });
 
+  test('applies the saved color theme on the login screen, not only inside the app', async ({
+    page,
+  }) => {
+    // The theme attribute drives which palette the whole document uses. It was
+    // set only when the authenticated shell rendered, so a returning user who
+    // chose the light theme still saw a dark login screen on a fresh load.
+    await page.goto('/');
+    await page.evaluate(() => localStorage.setItem('octo-design-system', 'paper'));
+    await page.reload();
+
+    await expect(page.locator('text=Welcome to Octo')).toBeVisible();
+    await expect(page.locator('html')).toHaveAttribute('data-octo-system', 'paper');
+  });
+
+  test('surfaces a workspace load failure instead of a misleading empty workspace', async ({
+    page,
+  }) => {
+    // A single failing workspace request (here the file listing) must not be
+    // silently coerced to an empty list: an empty workspace and a failed one look
+    // identical to the user, and only the latter needs attention.
+    await page.goto('/');
+    await page.route(/\/api\/files\?/, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'INTERNAL_SERVER_ERROR' }),
+      })
+    );
+    await page.click('text=Continue as Guest');
+    await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
+    await expect(page.getByRole('alert')).toContainText(/could not load/i);
+  });
+
+  test('a disabled Google button keeps its label legible instead of fading it out', async ({
+    page,
+  }) => {
+    // The disabled "Google sign-in not configured" control is the only signal
+    // that Google auth is off, so its label must stay readable. A blanket
+    // opacity dims the text toward the panel until it can no longer be read;
+    // measure the rendered contrast and require comfortably legible text.
+    await page.goto('/');
+    test.skip(
+      (await page.getByRole('button', { name: 'Sign in with Google' }).count()) > 0,
+      'Google sign-in is configured in this environment'
+    );
+    const button = page.getByRole('button', { name: 'Google sign-in not configured' });
+    await expect(button).toBeDisabled();
+
+    const ratio = await button.evaluate((el) => {
+      const channels = (color: string) => (color.match(/[\d.]+/g) ?? []).map(Number);
+      const linear = (value: number) => {
+        const c = value / 255;
+        return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+      };
+      const luminance = (rgb: number[]) =>
+        0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2]);
+      const style = getComputedStyle(el);
+      const opacity = Number(style.opacity);
+      const page = channels(getComputedStyle(document.body).backgroundColor);
+      // Opacity composites the whole control (label over its own surface) toward
+      // whatever sits behind it, so model that before comparing the two.
+      const seen = (color: string) =>
+        channels(color).map((value, i) => value * opacity + page[i] * (1 - opacity));
+      const [bright, dim] = [luminance(seen(style.color)), luminance(seen(style.backgroundColor))].sort(
+        (a, b) => b - a
+      );
+      return (bright + 0.05) / (dim + 0.05);
+    });
+    expect(ratio).toBeGreaterThanOrEqual(7);
+  });
+
   test('discards a dead persisted session instead of showing an empty workspace shell', async ({
     page,
   }) => {
@@ -114,5 +185,31 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     // The dead credential is cleared, not left behind to fail every later call.
     const token = await page.evaluate(() => localStorage.getItem('octo_token'));
     expect(token).toBeNull();
+  });
+
+  test('a one-time secret does not survive sign-out into the next session', async ({ page }) => {
+    // The minted secret lives in client state, not localStorage. If sign-out
+    // clears only the token and principal, the secret stays in memory and the
+    // Access view renders it for the next person who signs in on this machine —
+    // a one-time key disclosed to a different session. Sign-out must clear it.
+    await page.goto('/');
+    await page.click('text=Continue as Guest');
+    await page.getByRole('button', { name: 'Access', exact: true }).click();
+    await page.fill('input[placeholder="e.g. Ingest Agent"]', 'Leak Probe Agent');
+    await page.click('button:has-text("Generate API Key")');
+
+    const secret = page.getByText(/^octo_live_ws_[0-9a-f]{32}$/);
+    await expect(secret).toBeVisible();
+    const value = ((await secret.textContent()) ?? '').trim();
+    expect(value).toMatch(/^octo_live_ws_[0-9a-f]{32}$/);
+
+    await page.getByRole('button', { name: 'Sign out' }).click();
+    await expect(page.locator('text=Welcome to Octo')).toBeVisible();
+
+    // A fresh guest session must not be shown the previous session's key.
+    await page.click('text=Continue as Guest');
+    await page.getByRole('button', { name: 'Access', exact: true }).click();
+    await expect(page.getByText(value, { exact: true })).toHaveCount(0);
+    await expect(page.locator('text=New API Key Minted')).toHaveCount(0);
   });
 });
