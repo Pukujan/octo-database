@@ -38,6 +38,7 @@ import {
 import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
+import { sendStaticFile } from './static-file';
 import { guestSlug, personalSlug } from '../lib/provisioning-slug';
 import {
   dbCountTransientFiles,
@@ -2602,16 +2603,14 @@ export const server = createServer(async (req, res) => {
           '.ttf': 'font/ttf',
         };
         const contentType = contentTypes[ext] ?? 'application/octet-stream';
-        res.writeHead(200, { 'Content-Type': contentType });
-        fs.createReadStream(filePath).pipe(res);
+        sendStaticFile(res, filePath, contentType);
         return;
       }
 
       // SPA fallback for HTML navigation requests (excluding /api routes)
       const indexPath = path.join(distPath, 'index.html');
       if (!pathname.startsWith('/api/') && fs.existsSync(indexPath) && (!path.extname(pathname) || req.headers.accept?.includes('text/html'))) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        fs.createReadStream(indexPath).pipe(res);
+        sendStaticFile(res, indexPath, 'text/html; charset=utf-8');
         return;
       }
     }
