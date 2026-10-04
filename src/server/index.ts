@@ -1839,9 +1839,15 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
+      // Enforce workspace-scoped key restrictions before anything else.
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
       // The server connects as a trusted role, so authorization is enforced here.
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+      if (!mem || !roleAllows(auth, mem.role, 'admin')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to create share links' });
         return;
       }
@@ -1916,8 +1922,13 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+      if (!mem || !roleAllows(auth, mem.role, 'admin')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to list share links' });
         return;
       }
@@ -1942,8 +1953,13 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+      if (!mem || !roleAllows(auth, mem.role, 'admin')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to revoke share links' });
         return;
       }
@@ -2271,8 +2287,13 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin')) {
+      if (!mem || !roleAllows(auth, mem.role, 'admin')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Owner or admin role required to retry jobs' });
         return;
       }
@@ -2340,14 +2361,8 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const embeddingConfig = loadEmbeddingConfigFromEnv();
-      if (!embeddingConfig) {
-        sendJson(res, 503, {
-          error: 'EMBEDDING_PROVIDER_NOT_CONFIGURED: set OCTO_EMBEDDING_API_KEY to ingest documents',
-        });
-        return;
-      }
-
+      // Authorize before probing provider configuration: an unauthorized caller
+      // must not learn whether embeddings are configured.
       const parsed = (await readJsonObject(req)) as Record<string, any>;
       const { workspaceId, title, text, mimeType } = parsed;
 
@@ -2356,9 +2371,22 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
-      if (!mem || (mem.role !== 'owner' && mem.role !== 'admin' && mem.role !== 'operator')) {
+      if (!mem || !roleAllows(auth, mem.role, 'operator')) {
         sendJson(res, 403, { error: 'FORBIDDEN: Operator role or higher required to ingest documents' });
+        return;
+      }
+
+      const embeddingConfig = loadEmbeddingConfigFromEnv();
+      if (!embeddingConfig) {
+        sendJson(res, 503, {
+          error: 'EMBEDDING_PROVIDER_NOT_CONFIGURED: set OCTO_EMBEDDING_API_KEY to ingest documents',
+        });
         return;
       }
 
@@ -2448,14 +2476,6 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const embeddingConfig = loadEmbeddingConfigFromEnv();
-      if (!embeddingConfig) {
-        sendJson(res, 503, {
-          error: 'EMBEDDING_PROVIDER_NOT_CONFIGURED: set OCTO_EMBEDDING_API_KEY to query documents',
-        });
-        return;
-      }
-
       const parsed = (await readJsonObject(req)) as Record<string, any>;
       const { workspaceId, query, limit } = parsed;
 
@@ -2464,9 +2484,24 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
       const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
       if (!mem) {
         sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      // Authorize before probing provider configuration: an unauthorized caller
+      // must not learn whether embeddings are configured.
+      const embeddingConfig = loadEmbeddingConfigFromEnv();
+      if (!embeddingConfig) {
+        sendJson(res, 503, {
+          error: 'EMBEDDING_PROVIDER_NOT_CONFIGURED: set OCTO_EMBEDDING_API_KEY to query documents',
+        });
         return;
       }
 
