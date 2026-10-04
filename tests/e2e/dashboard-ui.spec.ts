@@ -186,4 +186,30 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     const token = await page.evaluate(() => localStorage.getItem('octo_token'));
     expect(token).toBeNull();
   });
+
+  test('a one-time secret does not survive sign-out into the next session', async ({ page }) => {
+    // The minted secret lives in client state, not localStorage. If sign-out
+    // clears only the token and principal, the secret stays in memory and the
+    // Access view renders it for the next person who signs in on this machine —
+    // a one-time key disclosed to a different session. Sign-out must clear it.
+    await page.goto('/');
+    await page.click('text=Continue as Guest');
+    await page.getByRole('button', { name: 'Access', exact: true }).click();
+    await page.fill('input[placeholder="e.g. Ingest Agent"]', 'Leak Probe Agent');
+    await page.click('button:has-text("Generate API Key")');
+
+    const secret = page.getByText(/^octo_live_ws_[0-9a-f]{32}$/);
+    await expect(secret).toBeVisible();
+    const value = ((await secret.textContent()) ?? '').trim();
+    expect(value).toMatch(/^octo_live_ws_[0-9a-f]{32}$/);
+
+    await page.getByRole('button', { name: 'Sign out' }).click();
+    await expect(page.locator('text=Welcome to Octo')).toBeVisible();
+
+    // A fresh guest session must not be shown the previous session's key.
+    await page.click('text=Continue as Guest');
+    await page.getByRole('button', { name: 'Access', exact: true }).click();
+    await expect(page.getByText(value, { exact: true })).toHaveCount(0);
+    await expect(page.locator('text=New API Key Minted')).toHaveCount(0);
+  });
 });
