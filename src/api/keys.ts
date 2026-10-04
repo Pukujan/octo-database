@@ -43,6 +43,63 @@ export interface VerifiedApiKey {
   workspaceId: string | null;
 }
 
+/** The minting caller's own authority, reduced to what the decision depends on. */
+export interface KeyMintCaller {
+  isApiKey: boolean;
+  /** Caller's workspace binding; null means account-wide (or a human session). */
+  workspaceId: string | null;
+  scopes: string[];
+}
+
+export interface KeyMintRequest {
+  workspaceId: string | null;
+  scopes: string[];
+}
+
+export type KeyMintDecision =
+  | { ok: true; workspaceId: string | null; scopes: string[] }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Authorizes an API-key caller minting another key. A token may only ever narrow
+ * its own authority: it must hold the write scope, it may never mint an
+ * account-wide key or escape its workspace binding, and it may not grant a scope
+ * it does not itself hold. Human sessions are not constrained here; the route
+ * applies its own membership checks.
+ */
+export function authorizeKeyMint(caller: KeyMintCaller, request: KeyMintRequest): KeyMintDecision {
+  if (!caller.isApiKey) {
+    return { ok: true, workspaceId: request.workspaceId, scopes: request.scopes };
+  }
+
+  if (!caller.scopes.includes('write')) {
+    return {
+      ok: false,
+      status: 403,
+      error: "FORBIDDEN: Token is missing the required 'write' scope",
+    };
+  }
+
+  if (caller.workspaceId !== null && request.workspaceId !== caller.workspaceId) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'FORBIDDEN: A workspace-bound key may only mint keys bound to its own workspace',
+    };
+  }
+
+  const widened = request.scopes.filter((scope) => !caller.scopes.includes(scope));
+  if (widened.length > 0) {
+    return {
+      ok: false,
+      status: 403,
+      error: `FORBIDDEN: Cannot grant scopes the token does not hold: ${widened.join(', ')}`,
+    };
+  }
+
+  return { ok: true, workspaceId: request.workspaceId, scopes: request.scopes };
+}
+
 /**
  * Computes a SHA-256 hash of a raw API key secret.
  */
