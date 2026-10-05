@@ -49,6 +49,7 @@ import { OctoApi } from '../src/mcp/client';
 import {
   isSafeRelativePath,
   reconcile,
+  recordIdsToSupersede,
   selectPaths,
   toRemotePath,
   type ClassifiedPath,
@@ -274,12 +275,10 @@ async function main(): Promise<void> {
         data: bytes.toString('base64'),
         mimeType: 'application/octet-stream',
       })) as { id: string };
-      // Delete only the exact ids this client last exchanged or already
-      // superseded — never a broad same-name sweep that could remove another
-      // writer's record.
-      const priorIds = Array.from(
-        new Set([...(p.baseline?.pendingDelete ?? []), ...(p.baseline ? [p.baseline.remoteId] : [])])
-      ).filter((id) => id !== record.id);
+      // Delete the exact ids this client superseded — its baseline record and
+      // any interrupted replace — plus, on a forced overwrite, the one current
+      // remote record at the path. Never a broad same-name sweep.
+      const priorIds = recordIdsToSupersede(p, record.id, FORCE);
       const stillPending: string[] = [];
       for (const id of priorIds) {
         try {

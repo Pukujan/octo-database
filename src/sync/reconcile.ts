@@ -154,6 +154,31 @@ export function pathsToPull(paths: ClassifiedPath[]): ClassifiedPath[] {
 }
 
 /**
+ * Record ids a push must delete after uploading the replacement record, so a
+ * path ends with exactly one record.
+ *
+ * A normal push supersedes only ids this client already exchanged (its baseline
+ * remote id plus any replace it failed to finish). A forced overwrite of
+ * `both-changed` / `untracked-both` also removes the single current remote record
+ * observed at the path — otherwise the upload would leave two records and the
+ * next run would report `ambiguous`. This stays a targeted delete, not a
+ * same-name sweep: only the exact id the reconciliation read returned. A path
+ * with more than one remote id is never forced (see `classifyPath`), so the
+ * `length === 1` guard is a belt-and-braces check, not the primary refusal.
+ */
+export function recordIdsToSupersede(
+  path: ClassifiedPath,
+  uploadedId: string,
+  force: boolean
+): string[] {
+  const ids = new Set<string>(path.baseline?.pendingDelete ?? []);
+  if (path.baseline) ids.add(path.baseline.remoteId);
+  if (force && path.remoteIds.length === 1) ids.add(path.remoteIds[0] as string);
+  ids.delete(uploadedId);
+  return Array.from(ids);
+}
+
+/**
  * Reject a workspace-relative path that would escape the project root when
  * joined locally. Remote names are attacker-influenced in the general case, so
  * an absolute path, a drive letter, or a `..` segment is refused before any
