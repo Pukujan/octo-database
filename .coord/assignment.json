@@ -74,7 +74,7 @@
   "pins": {
     "acs": {
       "repo": "https://github.com/Pukujan/agent-custom-setup",
-      "revision": "3a381eba11c6262c702f5d696878c371342e859a",
+      "revision": "38f8f52e8d210db3ce258bf911ebb560c6e0fe4c",
       "module": "modules/coordination/multi-agent-hotload/v0.1.0",
       "version": "0.1.0"
     },
