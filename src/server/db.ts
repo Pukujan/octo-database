@@ -1306,10 +1306,20 @@ export async function dbGetWorkspaceById(workspaceId: string): Promise<{
   return rows[0] ?? null;
 }
 
+/** Thrown by dbCreateWorkspaceAtomic when the Slice 16 rolling-day quota is spent. */
+export const WORKSPACE_DAILY_LIMIT = 'WORKSPACE_DAILY_LIMIT';
+
 /**
  * Creates a workspace, the creator's owner membership, and the workspace-scoped
  * API key in one transaction. A failure in any of the three rolls back all of
  * them, so a workspace can never exist without its key.
+ *
+ * When `enforceDailyLimit` is set, the Slice 16 quota is enforced *inside* the
+ * same transaction, under a per-principal advisory lock. The count and the
+ * insert must be atomic: checking the quota on one connection and inserting on
+ * another lets two concurrent creates both observe an empty window and both
+ * succeed. The lock serializes creates by one principal so the second sees the
+ * first's row. The platform owner passes `enforceDailyLimit: false`.
  */
 export async function dbCreateWorkspaceAtomic(params: {
   workspaceId: string;
@@ -1323,8 +1333,27 @@ export async function dbCreateWorkspaceAtomic(params: {
   keyPrefix: string;
   keyName: string;
   keyScopes: string[];
+  enforceDailyLimit: boolean;
 }): Promise<{ id: string; slug: string; name: string; description: string | null; retentionDays: number | null }> {
   return withTransaction(async (client) => {
+    if (params.enforceDailyLimit) {
+      // Serialize concurrent creates by this principal for the life of the
+      // transaction. The lock releases on COMMIT/ROLLBACK.
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [params.createdBy]);
+      const existing = await client.query(
+        `SELECT count(*)::text AS count FROM octo.workspaces
+         WHERE created_by = $1 AND auto_provisioned = false
+           AND created_at >= now() - interval '24 hours'`,
+        [params.createdBy]
+      );
+      const createdLastDay = parseInt((existing.rows[0] as { count: string }).count, 10);
+      if (createdLastDay >= 1) {
+        const err = new Error(WORKSPACE_DAILY_LIMIT);
+        (err as { code?: string }).code = WORKSPACE_DAILY_LIMIT;
+        throw err;
+      }
+    }
+
     const ws = await client.query(
       `INSERT INTO octo.workspaces (id, slug, name, description, created_by, retention_days)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -1361,21 +1390,6 @@ export async function dbCreateWorkspaceAtomic(params: {
 
     return row;
   });
-}
-
-/**
- * Workspaces a principal created through the API since `since`. Backs the
- * Slice 16 daily creation limit. The auto-provisioned personal sandbox is
- * excluded: it is handed to the principal at sign-in, not created by them, so
- * it must not consume the quota.
- */
-export async function dbCountCreatedWorkspacesSince(principalId: string, since: Date): Promise<number> {
-  const rows = await queryService<{ count: string }>(
-    `SELECT count(*)::text AS count FROM octo.workspaces
-     WHERE created_by = $1 AND auto_provisioned = false AND created_at >= $2`,
-    [principalId, since.toISOString()]
-  );
-  return parseInt(rows[0]?.count ?? '0', 10);
 }
 
 /** Files in a transient archive state block a workspace delete. */
