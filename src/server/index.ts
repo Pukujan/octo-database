@@ -42,6 +42,7 @@ import { sendStaticFile } from './static-file';
 import { guestSlug, personalSlug } from '../lib/provisioning-slug';
 import {
   dbCountTransientFiles,
+  dbCountCreatedWorkspacesSince,
   dbCreateWorkspaceAtomic,
   dbDeleteFileIfIdle,
   dbEnqueueFileTransition,
@@ -1052,6 +1053,23 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       // deletion, it is stamped by a human session plus the confirmation secret,
       // so an agent holding the account-wide key cannot create workspaces at all.
       if (!(await confirmGate(res, auth, parsed.confirmSecret))) return;
+
+      // Slice 16: a second, independent guard. Even a compromised browser session
+      // that holds the confirmation secret may create at most one workspace per
+      // rolling day. The platform owner is exempt. The auto-provisioned personal
+      // sandbox does not count (see dbCountCreatedWorkspacesSince).
+      if (!auth.principal.isPlatformOwner) {
+        const createdLastDay = await dbCountCreatedWorkspacesSince(
+          auth.principal.id,
+          new Date(Date.now() - 24 * 60 * 60 * 1000)
+        );
+        if (createdLastDay >= 1) {
+          sendJson(res, 429, {
+            error: 'WORKSPACE_DAILY_LIMIT: You can create one workspace per day. Try again after 24 hours.',
+          });
+          return;
+        }
+      }
 
       const workspaceId = randomUUID();
       const keyId = randomUUID();

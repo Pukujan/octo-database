@@ -18,6 +18,7 @@
 
 import { expect, Page, test } from '@playwright/test';
 import { auditPage } from './vision-audit';
+import { exemptFromDailyLimit } from './workspace-quota';
 
 /** Selects a workspace by name from the dashboard's workspace switcher. */
 async function selectWorkspace(page: Page, name: string): Promise<void> {
@@ -157,6 +158,7 @@ test.describe('Workspace data plane', () => {
     await page.goto('/');
     await page.click('text=Continue as Guest');
     await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
+    await exemptFromDailyLimit(page);
 
     const result = await page.evaluate(async () => {
       const token = localStorage.getItem('octo_token');
@@ -198,6 +200,7 @@ test.describe('Workspace data plane', () => {
     await page.goto('/');
     await page.click('text=Continue as Guest');
     await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
+    await exemptFromDailyLimit(page);
 
     const result = await page.evaluate(async () => {
       const token = localStorage.getItem('octo_token');

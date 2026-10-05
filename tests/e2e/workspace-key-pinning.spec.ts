@@ -12,6 +12,7 @@
  */
 
 import { expect, test } from '@playwright/test';
+import { exemptFromDailyLimit } from './workspace-quota';
 
 test.describe('Workspace-scoped key pinning', () => {
   test('a key bound to one workspace is refused on another across shares, jobs, and RAG', async ({
@@ -20,6 +21,10 @@ test.describe('Workspace-scoped key pinning', () => {
     await page.goto('/');
     await page.click('text=Continue as Guest');
     await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
+
+    // Pinning is orthogonal to the daily creation limit, which would refuse the
+    // second workspace; exempt this fixture so both are created in one run.
+    await exemptFromDailyLimit(page);
 
     const result = await page.evaluate(async () => {
       const token = localStorage.getItem('octo_token');
