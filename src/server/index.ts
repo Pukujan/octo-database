@@ -1271,7 +1271,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       // Creating a workspace mints a tenancy boundary and its first key. Like
       // deletion, it is stamped by a human session plus the confirmation secret,
       // so an agent holding the account-wide key cannot create workspaces at all.
-      if (!(await confirmGate(res, auth, parsed.confirmSecret))) return;
+      // When the principal has MFA enrolled, a valid code is required too.
+      if (!(await confirmGate(res, auth, parsed.confirmSecret, { requireMfa: true, mfaCode: parsed.mfaCode })))
+        return;
 
       // Slice 16: a second, independent guard. Even a compromised browser session
       // that holds the confirmation secret may create at most one workspace per
@@ -2043,8 +2045,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       // Minting a credential grants authority, so it carries the same human stamp
       // as workspace creation and deletion: a human session plus the confirmation
       // secret. An API-key caller is refused outright, so a leaked agent token
-      // cannot mint itself a wider key.
-      if (!(await confirmGate(res, auth, parsed.confirmSecret))) return;
+      // cannot mint itself a wider key. When the principal has MFA enrolled, a
+      // valid code is required too.
+      if (!(await confirmGate(res, auth, parsed.confirmSecret, { requireMfa: true, mfaCode: parsed.mfaCode })))
+        return;
 
       const isAccountWide = !workspaceId;
 
