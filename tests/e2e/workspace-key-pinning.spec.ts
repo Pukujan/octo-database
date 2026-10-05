@@ -27,12 +27,19 @@ test.describe('Workspace-scoped key pinning', () => {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       };
+      // Creating a workspace and minting a key both require the human stamp.
+      await fetch('/api/me/confirm-secret', {
+        method: 'POST',
+        headers: sessionHeaders,
+        body: JSON.stringify({ secret: 'e2e-confirm-secret' }),
+      });
+
       const createWorkspace = async (name: string) =>
         (await (
           await fetch('/api/workspaces', {
             method: 'POST',
             headers: sessionHeaders,
-            body: JSON.stringify({ name }),
+            body: JSON.stringify({ name, confirmSecret: 'e2e-confirm-secret' }),
           })
         ).json()) as { workspace: { id: string } };
 
@@ -48,6 +55,7 @@ test.describe('Workspace-scoped key pinning', () => {
             name: 'pinning key',
             workspaceId: a.workspace.id,
             scopes: ['read', 'write', 'files'],
+            confirmSecret: 'e2e-confirm-secret',
           }),
         })
       ).json()) as { rawSecret: string };
