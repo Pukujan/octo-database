@@ -44,7 +44,7 @@ ACS, PCM, and CGM are helpers, not product authorities. Use them only to the ext
 
 Pinned versions currently used by repository validation:
 
-- ACS hot-loader v0.1.0 @ `3a381eba11c6262c702f5d696878c371342e859a`.
+- ACS hot-loader v0.1.0 @ `38f8f52e8d210db3ce258bf911ebb560c6e0fe4c`.
 - PCM @ `4e2385474b4af9249ca009cbdcb38c4498932475`.
 - CGM 0.5.12 @ `6831f91e165b62d719c05eb492f7375fa932b560`.
 
@@ -67,6 +67,22 @@ Pinned versions currently used by repository validation:
 - Required aggregate status is `gates`, covering contract integrity/integration checks,
   type checking, lint, and Ruff. Never claim completion when the requested workflow has
   not actually run.
+
+## Dev root hygiene
+
+The dev root (`D:\development` on Windows, `~/development` elsewhere, or wherever `ACS_DEV_ROOT` points) holds one main checkout per repo and nothing else.
+
+- Don't create git worktrees, dependency or sibling clones, scratch folders, or caches in the dev root.
+- Put them in the ACS cache instead: `%LOCALAPPDATA%\acs\{deps,scratch,worktrees}` on Windows, `~/.cache/acs/{deps,scratch,worktrees}` on macOS and Linux. `ACS_CACHE_DIR` moves the cache.
+- Before you finish, push any real work to a branch and remove the worktrees and scratch folders you made. Never delete a checkout that has uncommitted, unpushed, or stashed work just to tidy up.
+- To check, run the pinned ACS script: `python <acs>/modules/coordination/multi-agent-hotload/v0.1.0/scripts/dev_root_check.py --dev-root <dev root>`. It prints JSON and exits non-zero when it finds anything other than main checkouts. `--clean` shows a fix and only acts with `--yes`.
+- This repo's PCM workspace mode is `managed-worktrees`, which puts task worktrees inside the checkout, so `dev_root_check.py` reports them as stray worktrees. Until PCM can put them in the ACS cache, prefer sequential work in the main checkout and remove a task worktree as soon as its PR merges.
+
+Paste this at session boot along with the CGM `system_block` (it comes from the ACS hotloader's `PROMPT_INJECT.md` at `38f8f52`):
+
+```
+Dev root hygiene (ACS): the dev root (ACS_DEV_ROOT; default D:\development on Windows, ~/development elsewhere) holds exactly one main checkout per repo. Never create git worktrees, dependency or sibling clones, scratch folders, or caches there. Put them under the ACS cache instead: %LOCALAPPDATA%\acs\{deps,scratch,worktrees} on Windows, ~/.cache/acs/{deps,scratch,worktrees} on macOS/Linux (ACS_CACHE_DIR overrides). Check with scripts/dev_root_check.py.
+```
 
 ## Baseline secret hygiene
 
