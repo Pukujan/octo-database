@@ -5,8 +5,26 @@
  * verification (Qwen 3.8 Flash fallback chain via InferHub) on rendered screenshots.
  */
 
-import { expect, test } from '@playwright/test';
+import { expect, test, Page } from '@playwright/test';
 import { auditPage } from './vision-audit';
+
+/**
+ * Arms the confirmation gate from the Access view's inline mint form. Minting is
+ * stamped, so the secret must be set (first run) and supplied every time; setting
+ * it re-renders and clears the form, so call this before filling the key name.
+ */
+async function armConfirmSecret(page: Page): Promise<void> {
+  const secretField = page.locator('input[name="secret"]');
+  await secretField.waitFor({ state: 'visible' });
+  const newSecret = page.locator('input[name="newSecret"]');
+  if ((await newSecret.count()) > 0) {
+    await newSecret.fill('e2e-confirm-secret');
+    await page.click('button[data-action="set-secret"]');
+    // Setting the secret re-renders the form; wait for it to settle before typing.
+    await newSecret.waitFor({ state: 'detached' });
+  }
+  await secretField.fill('e2e-confirm-secret');
+}
 
 test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
   test('renders login screen, audits visual quality with vision model, and enters guest mode', async ({
@@ -66,6 +84,7 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     // 9. Test API Key Generation via Access.
     await page.getByRole('button', { name: 'Access', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'API keys' })).toBeVisible();
+    await armConfirmSecret(page);
     await page.fill('input[placeholder="e.g. Ingest Agent"]', 'Vision E2E Agent');
     await page.click('button:has-text("Generate API Key")');
 
@@ -195,6 +214,7 @@ test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {
     await page.goto('/');
     await page.click('text=Continue as Guest');
     await page.getByRole('button', { name: 'Access', exact: true }).click();
+    await armConfirmSecret(page);
     await page.fill('input[placeholder="e.g. Ingest Agent"]', 'Leak Probe Agent');
     await page.click('button:has-text("Generate API Key")');
 
