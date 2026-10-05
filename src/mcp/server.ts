@@ -50,6 +50,45 @@ export function createOctoMcpServer(api: OctoApi): McpServer {
   );
 
   server.tool(
+    'create_workspace',
+    'Create a workspace and mint its first API key. Returns the workspace plus the new key; the raw secret is shown exactly once. Requires an account-wide token — a workspace-scoped key cannot create workspaces.',
+    {
+      name: z.string().describe('Human-readable workspace name'),
+      slug: z.string().optional().describe('URL slug (defaults to a slugified name)'),
+      description: z.string().optional().describe('Optional workspace description'),
+      retentionDays: z.number().int().positive().optional().describe('Optional retention window in days'),
+    },
+    async ({ name, slug, description, retentionDays }) => {
+      try {
+        return asText(await api.createWorkspace({ name, slug, description, retentionDays }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'mint_key',
+    'Mint an API key. Omit workspaceId for an account-wide key (one per principal) or pass one for a workspace-scoped key. A token may only narrow its own authority: it cannot widen its scopes, escape its workspace, or grant admin unless the caller is a platform owner. The raw secret is shown exactly once.',
+    {
+      name: z.string().describe('Label for the new key'),
+      workspaceId: z.string().optional().describe('Workspace to scope the key to (omit for account-wide)'),
+      scopes: z
+        .array(z.enum(['read', 'write', 'files', 'delete', 'admin']))
+        .optional()
+        .describe('Requested scopes (defaults to read, write, files)'),
+      expiresInDays: z.number().int().positive().optional().describe('Optional expiry in days'),
+    },
+    async ({ name, workspaceId, scopes, expiresInDays }) => {
+      try {
+        return asText(await api.mintKey({ name, workspaceId, scopes, expiresInDays }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
     'list_files',
     'List the files in a workspace.',
     { workspaceId: z.string().describe('The workspace to list files from') },
@@ -74,6 +113,38 @@ export function createOctoMcpServer(api: OctoApi): McpServer {
     async ({ workspaceId, name, dataBase64, mimeType }) => {
       try {
         return asText(await api.uploadFile({ workspaceId, name, data: dataBase64, mimeType }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'download_file',
+    'Download a file\'s bytes from a workspace, returned base64-encoded.',
+    {
+      workspaceId: z.string().describe('The workspace the file belongs to'),
+      fileId: z.string().describe('The file id (from list_files)'),
+    },
+    async ({ workspaceId, fileId }) => {
+      try {
+        return asText(await api.downloadFile({ workspaceId, fileId }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'delete_file',
+    'Delete a file from a workspace. Requires the delete scope and an owner or admin role in the workspace.',
+    {
+      workspaceId: z.string().describe('The workspace the file belongs to'),
+      fileId: z.string().describe('The file id (from list_files)'),
+    },
+    async ({ workspaceId, fileId }) => {
+      try {
+        return asText(await api.deleteFile({ workspaceId, fileId }));
       } catch (error) {
         return asError(error);
       }
