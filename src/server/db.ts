@@ -278,9 +278,12 @@ export async function dbInsertWorkspace(
   description: string,
   createdBy: string
 ): Promise<{ id: string; slug: string; name: string; description: string }> {
+  // This path only ever provisions the sandbox a principal is handed at sign-in,
+  // so it is marked auto_provisioned: it must not count against the Slice 16
+  // daily creation limit, which bounds deliberate POST /api/workspaces creates.
   const sql = `
-    INSERT INTO octo.workspaces (id, slug, name, description, created_by)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO octo.workspaces (id, slug, name, description, created_by, auto_provisioned)
+    VALUES ($1, $2, $3, $4, $5, true)
     ON CONFLICT (slug) DO UPDATE SET updated_at = now()
     RETURNING id, slug, name, description;
   `;
@@ -1358,6 +1361,21 @@ export async function dbCreateWorkspaceAtomic(params: {
 
     return row;
   });
+}
+
+/**
+ * Workspaces a principal created through the API since `since`. Backs the
+ * Slice 16 daily creation limit. The auto-provisioned personal sandbox is
+ * excluded: it is handed to the principal at sign-in, not created by them, so
+ * it must not consume the quota.
+ */
+export async function dbCountCreatedWorkspacesSince(principalId: string, since: Date): Promise<number> {
+  const rows = await queryService<{ count: string }>(
+    `SELECT count(*)::text AS count FROM octo.workspaces
+     WHERE created_by = $1 AND auto_provisioned = false AND created_at >= $2`,
+    [principalId, since.toISOString()]
+  );
+  return parseInt(rows[0]?.count ?? '0', 10);
 }
 
 /** Files in a transient archive state block a workspace delete. */
