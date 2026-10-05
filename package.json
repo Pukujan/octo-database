@@ -11,6 +11,7 @@
     "production-smoke": "tsx scripts/production-smoke.ts",
     "capture-ops": "tsx scripts/capture-ops.ts",
     "backup": "tsx scripts/octo-backup.ts",
+    "sync": "tsx scripts/octo-sync.ts",
     "export-vectors": "tsx scripts/export-vectors.ts",
     "mcp": "tsx scripts/octo-mcp.ts",
     "typecheck": "tsc --noEmit",
