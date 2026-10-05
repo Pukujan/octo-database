@@ -99,8 +99,10 @@ test.describe('MFA step-up for deletion', () => {
   // MFA check, whether or not the principal behind it has MFA enrolled.
   test('an API-key caller is refused regardless of MFA', async ({ request }) => {
     const session = await createGuest(request);
-    await enrollMfa(request, session.sessionToken);
 
+    // Mint the key before enrolling: minting itself is a stamped operation, so
+    // once MFA is enabled it too needs a code. The key belongs to the principal
+    // either way, and the API-key refusal happens before the second factor.
     const minted = await request.post('/api/keys', {
       headers: bearer(session.sessionToken),
       data: {
@@ -112,6 +114,8 @@ test.describe('MFA step-up for deletion', () => {
     });
     expect(minted.status()).toBe(201);
     const { rawSecret } = (await minted.json()) as { rawSecret: string };
+
+    await enrollMfa(request, session.sessionToken);
 
     const response = await request.delete(`/api/workspaces/${session.workspace.id}`, {
       headers: bearer(rawSecret),
