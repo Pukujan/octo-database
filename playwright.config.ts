@@ -31,6 +31,8 @@ export default defineConfig({
         // explicitly so production still fails closed without R2.
         OCTO_STORAGE_BACKEND: process.env['OCTO_STORAGE_BACKEND'] ?? 'local',
         OCTO_MEDIA_SECRET: process.env['OCTO_MEDIA_SECRET'] ?? 'e2e-media-secret',
+        // Key material for the per-principal MFA secret envelope (Slice 17).
+        OCTO_MFA_SECRET: process.env['OCTO_MFA_SECRET'] ?? 'e2e-mfa-secret',
         DATABASE_URL:
           process.env['DATABASE_URL'] ??
           'postgresql://postgres:postgres@localhost:54329/postgres',
