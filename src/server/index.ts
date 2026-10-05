@@ -41,6 +41,15 @@ import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
 import { sendStaticFile } from './static-file';
 import { guestSlug, personalSlug } from '../lib/provisioning-slug';
 import {
+  generateTotpSecret,
+  totpProvisioningUri,
+  verifyTotpCode,
+  generateRecoveryCodes,
+  hashRecoveryCode,
+  encryptSecret,
+  decryptSecret,
+} from '../lib/mfa';
+import {
   dbCountTransientFiles,
   dbCountCreatedWorkspacesSince,
   dbCreateWorkspaceAtomic,
@@ -51,6 +60,12 @@ import {
   dbGetAccountWideKeyId,
   dbGetAuthorizedWorkspaces,
   dbGetConfirmSecretHash,
+  dbGetMfa,
+  dbSetMfaPending,
+  dbConfirmMfa,
+  dbSetMfaRecoveryCodes,
+  dbClearMfa,
+  MfaRecord,
   dbGetFile,
   dbGetWorkspaceById,
   dbGetWorkspaceMembership,
@@ -592,6 +607,10 @@ function slugify(name: string): string {
  * never satisfy it, whatever its scopes -- that is the structural answer to "can
  * a blind agent delete a workspace".
  *
+ * When `options.requireMfa` is set and the principal has confirmed MFA, a valid
+ * TOTP code (or a one-time recovery code) is additionally required. A used
+ * recovery code is consumed. Principals without MFA enrolled are unaffected.
+ *
  * Fails closed: an account that never set a secret refuses with
  * CONFIRM_SECRET_NOT_SET rather than falling open. Returns true when the request
  * may proceed, having already written the refusal response otherwise.
@@ -599,7 +618,8 @@ function slugify(name: string): string {
 async function confirmGate(
   res: ServerResponse,
   auth: AuthContext,
-  suppliedSecret: unknown
+  suppliedSecret: unknown,
+  options: { requireMfa?: boolean; mfaCode?: unknown } = {}
 ): Promise<boolean> {
   if (auth.apiKey) {
     sendJson(res, 403, {
@@ -621,7 +641,47 @@ async function confirmGate(
     return false;
   }
 
+  if (options.requireMfa) {
+    const mfa = await dbGetMfa(auth.principal.id);
+    if (mfa?.confirmedAt) {
+      const ok = await verifyMfaCode(auth.principal.id, mfa, options.mfaCode);
+      if (!ok) {
+        sendJson(res, 403, {
+          error: 'MFA_CODE_INVALID: A valid authenticator code is required to complete this command.',
+        });
+        return false;
+      }
+    }
+  }
+
   return true;
+}
+
+/**
+ * Verifies a TOTP code against the enrolled secret, falling back to a one-time
+ * recovery code (which is consumed on success). Returns false for a missing or
+ * malformed code.
+ */
+async function verifyMfaCode(principalId: string, mfa: MfaRecord, supplied: unknown): Promise<boolean> {
+  if (typeof supplied !== 'string' || !supplied.trim()) return false;
+  let secret: string;
+  try {
+    secret = decryptSecret(mfa.secretEncrypted);
+  } catch {
+    // A key rotation or corrupt record must fail closed, not fall open.
+    return false;
+  }
+  if (verifyTotpCode(secret, supplied)) return true;
+
+  const hash = hashRecoveryCode(supplied);
+  if (mfa.recoveryCodeHashes.includes(hash)) {
+    await dbSetMfaRecoveryCodes(
+      principalId,
+      mfa.recoveryCodeHashes.filter((candidate) => candidate !== hash)
+    );
+    return true;
+  }
+  return false;
 }
 
 /** Attributes an agent action to its principal for audit. Best-effort. */
@@ -906,12 +966,16 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
       // The client needs to know whether the destructive-command gate is armed so
-      // it can prompt for setup rather than letting the user hit a 412.
+      // it can prompt for setup rather than letting the user hit a 412, and whether
+      // MFA is enrolled so it can prompt for a code.
       const confirmSecretSet = Boolean(await dbGetConfirmSecretHash(auth.principal.id));
+      const mfa = await dbGetMfa(auth.principal.id);
       sendJson(res, 200, {
         principal: auth.principal,
         apiKey: auth.apiKey ?? null,
         confirmSecretSet,
+        mfaEnabled: Boolean(mfa?.confirmedAt),
+        mfaRecoveryCodesRemaining: mfa?.recoveryCodeHashes.length ?? 0,
       });
       return;
     }
@@ -951,6 +1015,161 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
       await dbSetConfirmSecret(auth.principal.id, hashApiKeySecret(secret));
       sendJson(res, 200, { success: true, rotated: Boolean(existing) });
+      return;
+    }
+
+    // 2d. MFA (TOTP) status. Human session only, like the confirmation secret:
+    // MFA protects a person's own account, never an agent's.
+    if (pathname === '/api/me/mfa' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (auth.apiKey) {
+        sendJson(res, 403, { error: 'FORBIDDEN: MFA is managed from a human session, never an API key.' });
+        return;
+      }
+      const mfa = await dbGetMfa(auth.principal.id);
+      sendJson(res, 200, {
+        enabled: Boolean(mfa?.confirmedAt),
+        confirmedAt: mfa?.confirmedAt ?? null,
+        recoveryCodesRemaining: mfa?.recoveryCodeHashes.length ?? 0,
+      });
+      return;
+    }
+
+    // 2e. Begin MFA enrollment: mint a secret and return its provisioning URI
+    // once. The secret is stored encrypted and unconfirmed until a code proves it.
+    if (pathname === '/api/me/mfa/begin' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (auth.apiKey) {
+        sendJson(res, 403, { error: 'FORBIDDEN: MFA is managed from a human session, never an API key.' });
+        return;
+      }
+      const existing = await dbGetMfa(auth.principal.id);
+      if (existing?.confirmedAt) {
+        sendJson(res, 409, { error: 'MFA_ALREADY_ENABLED: Disable MFA before enrolling a new authenticator.' });
+        return;
+      }
+      const secret = generateTotpSecret();
+      let encrypted: string;
+      try {
+        encrypted = encryptSecret(secret);
+      } catch {
+        sendJson(res, 503, {
+          error: 'MFA_NOT_CONFIGURED: MFA enrollment requires OCTO_MFA_SECRET on the server.',
+        });
+        return;
+      }
+      await dbSetMfaPending(auth.principal.id, encrypted);
+      const label = auth.principal.email || auth.principal.displayName || auth.principal.id;
+      sendJson(res, 200, { secret, otpauthUri: totpProvisioningUri(secret, label) });
+      return;
+    }
+
+    // 2f. Confirm MFA enrollment with a code from the authenticator. Issues the
+    // one-time recovery codes exactly here.
+    if (pathname === '/api/me/mfa/confirm' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (auth.apiKey) {
+        sendJson(res, 403, { error: 'FORBIDDEN: MFA is managed from a human session, never an API key.' });
+        return;
+      }
+      const parsed = await readJsonObject(req);
+      const mfa = await dbGetMfa(auth.principal.id);
+      if (!mfa) {
+        sendJson(res, 400, { error: 'MFA_NOT_STARTED: Begin enrollment before confirming it.' });
+        return;
+      }
+      if (mfa.confirmedAt) {
+        sendJson(res, 409, { error: 'MFA_ALREADY_ENABLED: MFA is already enabled.' });
+        return;
+      }
+      let secret: string;
+      try {
+        secret = decryptSecret(mfa.secretEncrypted);
+      } catch {
+        sendJson(res, 500, { error: 'MFA_SECRET_UNREADABLE: Re-enroll the authenticator.' });
+        return;
+      }
+      if (!verifyTotpCode(secret, parsed.code)) {
+        sendJson(res, 403, { error: 'MFA_CODE_INVALID: That code did not match. Try the next one.' });
+        return;
+      }
+      const recoveryCodes = generateRecoveryCodes();
+      await dbConfirmMfa(auth.principal.id, recoveryCodes.map(hashRecoveryCode));
+      sendJson(res, 200, { recoveryCodes });
+      return;
+    }
+
+    // 2g. Disable MFA. Requires a valid current code or a one-time recovery code
+    // (the recovery path), so a lost authenticator does not lock the account out.
+    if (pathname === '/api/me/mfa/disable' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (auth.apiKey) {
+        sendJson(res, 403, { error: 'FORBIDDEN: MFA is managed from a human session, never an API key.' });
+        return;
+      }
+      const parsed = await readJsonObject(req);
+      const mfa = await dbGetMfa(auth.principal.id);
+      if (!mfa?.confirmedAt) {
+        sendJson(res, 409, { error: 'MFA_NOT_ENABLED: MFA is not enabled.' });
+        return;
+      }
+      if (!(await verifyMfaCode(auth.principal.id, mfa, parsed.code))) {
+        sendJson(res, 403, { error: 'MFA_CODE_INVALID: Enter a current authenticator code or a recovery code.' });
+        return;
+      }
+      await dbClearMfa(auth.principal.id);
+      sendJson(res, 200, { disabled: true });
+      return;
+    }
+
+    // 2h. Rotate recovery codes. Requires a current authenticator code (not a
+    // recovery code), and returns the new set once.
+    if (pathname === '/api/me/mfa/recovery-codes' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (auth.apiKey) {
+        sendJson(res, 403, { error: 'FORBIDDEN: MFA is managed from a human session, never an API key.' });
+        return;
+      }
+      const parsed = await readJsonObject(req);
+      const mfa = await dbGetMfa(auth.principal.id);
+      if (!mfa?.confirmedAt) {
+        sendJson(res, 409, { error: 'MFA_NOT_ENABLED: MFA is not enabled.' });
+        return;
+      }
+      let secret: string;
+      try {
+        secret = decryptSecret(mfa.secretEncrypted);
+      } catch {
+        sendJson(res, 500, { error: 'MFA_SECRET_UNREADABLE: Re-enroll the authenticator.' });
+        return;
+      }
+      if (!verifyTotpCode(secret, parsed.code)) {
+        sendJson(res, 403, { error: 'MFA_CODE_INVALID: A current authenticator code is required to rotate recovery codes.' });
+        return;
+      }
+      const recoveryCodes = generateRecoveryCodes();
+      await dbSetMfaRecoveryCodes(auth.principal.id, recoveryCodes.map(hashRecoveryCode));
+      sendJson(res, 200, { recoveryCodes });
       return;
     }
 
@@ -1141,7 +1360,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       }
 
       const parsed = await readJsonObject(req);
-      if (!(await confirmGate(res, auth, parsed.confirmSecret))) return;
+      // Deletion is the most destructive command, so it is the first to require a
+      // per-principal MFA step-up: when the principal has an authenticator enrolled,
+      // a valid TOTP code (or a one-time recovery code) is required in addition to
+      // the confirmation secret. Principals without MFA enrolled are unaffected.
+      if (!(await confirmGate(res, auth, parsed.confirmSecret, { requireMfa: true, mfaCode: parsed.mfaCode })))
+        return;
 
       const workspace = await dbGetWorkspaceById(workspaceId);
       if (!workspace) {

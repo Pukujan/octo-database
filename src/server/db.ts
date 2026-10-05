@@ -1434,6 +1434,70 @@ export async function dbGetConfirmSecretHash(principalId: string): Promise<strin
   return rows[0]?.hash ?? null;
 }
 
+export interface MfaRecord {
+  secretEncrypted: string;
+  confirmedAt: string | null;
+  recoveryCodeHashes: string[];
+}
+
+/**
+ * The principal's MFA record, or null when none is enrolled. Reads the trusted
+ * path like the confirmation secret: this is per-principal identity material,
+ * never tenant data exposed to the client.
+ */
+export async function dbGetMfa(principalId: string): Promise<MfaRecord | null> {
+  const rows = await queryService<{ secret: string | null; confirmedAt: string | null; hashes: string[] | null }>(
+    `SELECT mfa_secret_encrypted AS secret, mfa_confirmed_at AS "confirmedAt", mfa_recovery_code_hashes AS hashes
+     FROM octo.principals WHERE id = $1`,
+    [principalId]
+  );
+  const row = rows[0];
+  if (!row?.secret) return null;
+  return {
+    secretEncrypted: row.secret,
+    confirmedAt: row.confirmedAt,
+    recoveryCodeHashes: row.hashes ?? [],
+  };
+}
+
+/** Stores an unconfirmed enrollment secret, clearing any prior confirmation. */
+export async function dbSetMfaPending(principalId: string, secretEncrypted: string): Promise<void> {
+  await queryService(
+    `UPDATE octo.principals
+     SET mfa_secret_encrypted = $1, mfa_confirmed_at = NULL, mfa_recovery_code_hashes = '{}', updated_at = now()
+     WHERE id = $2`,
+    [secretEncrypted, principalId]
+  );
+}
+
+/** Confirms enrollment and installs the initial recovery-code hashes. */
+export async function dbConfirmMfa(principalId: string, recoveryCodeHashes: string[]): Promise<void> {
+  await queryService(
+    `UPDATE octo.principals
+     SET mfa_confirmed_at = now(), mfa_recovery_code_hashes = $1, updated_at = now()
+     WHERE id = $2`,
+    [recoveryCodeHashes, principalId]
+  );
+}
+
+/** Replaces the recovery-code hashes (after a code is consumed or rotated). */
+export async function dbSetMfaRecoveryCodes(principalId: string, recoveryCodeHashes: string[]): Promise<void> {
+  await queryService(
+    'UPDATE octo.principals SET mfa_recovery_code_hashes = $1, updated_at = now() WHERE id = $2',
+    [recoveryCodeHashes, principalId]
+  );
+}
+
+/** Removes the MFA record entirely (disable). */
+export async function dbClearMfa(principalId: string): Promise<void> {
+  await queryService(
+    `UPDATE octo.principals
+     SET mfa_secret_encrypted = NULL, mfa_confirmed_at = NULL, mfa_recovery_code_hashes = '{}', updated_at = now()
+     WHERE id = $1`,
+    [principalId]
+  );
+}
+
 /** The id of a principal's account-wide key, or null. Enforces the one-key rule. */
 export async function dbGetAccountWideKeyId(principalId: string): Promise<string | null> {
   // An account-wide key has workspace_id NULL by definition, so a scoped key's fence
