@@ -1048,6 +1048,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
 
+      // Creating a workspace mints a tenancy boundary and its first key. Like
+      // deletion, it is stamped by a human session plus the confirmation secret,
+      // so an agent holding the account-wide key cannot create workspaces at all.
+      if (!(await confirmGate(res, auth, parsed.confirmSecret))) return;
+
       const workspaceId = randomUUID();
       const keyId = randomUUID();
       const rawSecret = `octo_live_ws_${randomUUID().replace(/-/g, '')}`;
@@ -1792,6 +1797,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         sendJson(res, 403, { error: 'FORBIDDEN: The admin scope is reserved for platform owners.' });
         return;
       }
+
+      // Minting a credential grants authority, so it carries the same human stamp
+      // as workspace creation and deletion: a human session plus the confirmation
+      // secret. An API-key caller is refused outright, so a leaked agent token
+      // cannot mint itself a wider key.
+      if (!(await confirmGate(res, auth, parsed.confirmSecret))) return;
 
       const isAccountWide = !workspaceId;
 

@@ -20,6 +20,13 @@ test.describe('Agent tokens', () => {
       const workspaces = await (await fetch('/api/workspaces', { headers })).json();
       const workspaceId = workspaces[0].id;
 
+      // Minting requires the human stamp: arm the confirmation gate first.
+      await fetch('/api/me/confirm-secret', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ secret: 'e2e-confirm-secret' }),
+      });
+
       // Mint a read-only agent token (no write, no delete).
       const minted = await (
         await fetch('/api/keys', {
@@ -29,6 +36,7 @@ test.describe('Agent tokens', () => {
             name: 'e2e read-only agent',
             workspaceId,
             scopes: ['read', 'files'],
+            confirmSecret: 'e2e-confirm-secret',
           }),
         })
       ).json();

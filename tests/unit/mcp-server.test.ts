@@ -41,8 +41,12 @@ describe('Octo MCP adapter', () => {
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'create_workspace',
+      'delete_file',
+      'download_file',
       'list_files',
       'list_workspaces',
+      'mint_key',
       'query_workspace',
       'upload_file',
       'whoami',
@@ -77,5 +81,81 @@ describe('Octo MCP adapter', () => {
     await client.callTool({ name: 'list_files', arguments: { workspaceId: 'ws-42' } });
 
     expect(calls).toEqual(['http://octo.test/api/files?workspaceId=ws-42']);
+  });
+
+  it('creates a workspace and returns the one-time secret', async () => {
+    const calls: string[] = [];
+    const client = await connect(
+      apiWith(201, '{"workspace":{"id":"w1"},"rawSecret":"octo_live_ws_secret"}', calls)
+    );
+
+    const result = await client.callTool({ name: 'create_workspace', arguments: { name: 'Project X' } });
+
+    expect(calls).toEqual(['http://octo.test/api/workspaces']);
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain('octo_live_ws_secret');
+  });
+
+  it('mints a key against the keys route', async () => {
+    const calls: string[] = [];
+    const client = await connect(apiWith(201, '{"apiKey":{"id":"k1"},"rawSecret":"octo_live_ws_k"}', calls));
+
+    const result = await client.callTool({
+      name: 'mint_key',
+      arguments: { name: 'project', workspaceId: 'w1', scopes: ['read', 'write', 'files'] },
+    });
+
+    expect(calls).toEqual(['http://octo.test/api/keys']);
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('downloads a file through the content route', async () => {
+    const calls: string[] = [];
+    const client = await connect(apiWith(200, 'bytes', calls));
+
+    const result = await client.callTool({
+      name: 'download_file',
+      arguments: { workspaceId: 'w1', fileId: 'f1' },
+    });
+
+    expect(calls).toEqual(['http://octo.test/api/files/content?workspaceId=w1&fileId=f1']);
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toBe('"Ynl0ZXM="');
+  });
+
+  it('deletes a file through the file route', async () => {
+    const calls: string[] = [];
+    const client = await connect(apiWith(200, '{"success":true,"fileId":"f1"}', calls));
+
+    const result = await client.callTool({
+      name: 'delete_file',
+      arguments: { workspaceId: 'w1', fileId: 'f1' },
+    });
+
+    expect(calls).toEqual(['http://octo.test/api/files/f1?workspaceId=w1']);
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('reports a delete refusal as a tool error', async () => {
+    const client = await connect(apiWith(403, '{"error":"FORBIDDEN: delete scope required"}'));
+
+    const result = await client.callTool({
+      name: 'delete_file',
+      arguments: { workspaceId: 'w1', fileId: 'f1' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('403');
+  });
+
+  it('reports a workspace-creation refusal as a tool error', async () => {
+    const client = await connect(
+      apiWith(403, '{"error":"FORBIDDEN: A workspace-scoped key cannot create workspaces"}')
+    );
+
+    const result = await client.callTool({ name: 'create_workspace', arguments: { name: 'Nope' } });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('403');
   });
 });
