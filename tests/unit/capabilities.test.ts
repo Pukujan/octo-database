@@ -4,10 +4,10 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  ADMIN_CAPABILITIES,
   AUTH_GUIDANCE,
   capabilitiesForScopes,
   hasScope,
+  KEY_CLASSES,
   OCTO_CAPABILITIES,
   SCOPE_PRESETS,
 } from '../../src/api/capabilities';
@@ -60,12 +60,31 @@ describe('Capability discovery', () => {
     expect(byAction.get('keys.revoke')?.requiredScope).toBe('delete');
   });
 
-  it('keeps admin-scoped capabilities out of the ordinary surface', () => {
-    expect(ADMIN_CAPABILITIES.length).toBeGreaterThan(0);
-    expect(ADMIN_CAPABILITIES.every((c) => c.requiredScope === 'admin')).toBe(true);
-    // admin never appears among the capabilities a normal scope list can reach.
-    const reachable = capabilitiesForScopes(['read', 'write', 'delete', 'files']);
-    expect(reachable.some((c) => c.requiredScope === 'admin')).toBe(false);
+  it('defines key classes as profiles over real scopes, none destructive', () => {
+    const realScopes = new Set(OCTO_CAPABILITIES.map((c) => c.requiredScope));
+    const classes = Object.entries(KEY_CLASSES);
+    expect(classes.length).toBeGreaterThan(0);
+    for (const [, profile] of classes) {
+      expect(profile.label.length).toBeGreaterThan(0);
+      // Every class carries a documented authority profile...
+      expect(profile.description.length).toBeGreaterThan(0);
+      // ...mapped only onto scopes that a route actually enforces...
+      expect(profile.scopes.length).toBeGreaterThan(0);
+      for (const scope of profile.scopes) expect(realScopes.has(scope)).toBe(true);
+      // ...and no class grants destructive authority.
+      expect(profile.scopes).not.toContain('delete');
+    }
+  });
+
+  it('no longer offers an inert admin scope', () => {
+    // `admin` was accepted at mint time but enforced nowhere; it is removed, so it
+    // must appear in no scope list, no capability, and no class.
+    const allScopes = [
+      ...OCTO_CAPABILITIES.map((c) => c.requiredScope),
+      ...SCOPE_PRESETS.flatMap((p) => p.scopes),
+      ...Object.values(KEY_CLASSES).flatMap((p) => [...p.scopes]),
+    ];
+    expect(allScopes).not.toContain('admin' as never);
   });
 
   it('defines presets that map only onto real scopes', () => {

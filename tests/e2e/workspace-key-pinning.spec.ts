@@ -59,7 +59,7 @@ test.describe('Workspace-scoped key pinning', () => {
           body: JSON.stringify({
             name: 'pinning key',
             workspaceId: a.workspace.id,
-            scopes: ['read', 'write', 'files'],
+            scopes: ['read', 'write', 'files', 'delete'],
             confirmSecret: 'e2e-confirm-secret',
           }),
         })

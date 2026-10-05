@@ -98,9 +98,21 @@ active_r2 ──archive──▶ archiving ──▶ archived_drive
 
 Both are SHA-256 hashed; the raw secret is shown exactly once.
 
-### Scopes and presets
+### Scopes, key classes, and presets
 
-Scopes: `read`, `write`, `files`, `delete`, `admin`.
+Scopes: `read`, `write`, `files`, `delete`.
+
+A **key class** is a documented authority profile a key can be minted under; the
+class expands to a scope list. Minting accepts an optional `keyClass` in place of
+an explicit `scopes` list.
+
+| Class | Scopes | Reach |
+|---|---|---|
+| `analytics` | `read` | Workspace/job/activity/share metadata and RAG retrieval. No file or gallery bytes, no mutations. |
+| `agent-read` | `read, files` | Analytics plus file, gallery, and media reads. No writes or destructive actions. |
+| `program-write` | `read, write, files` | Agent-read plus upload, restore, jobs, ingestion, and share creation. No delete, archive, or revocation. |
+
+The dashboard's named presets remain:
 
 | Preset | Scopes |
 |---|---|
@@ -110,8 +122,11 @@ Scopes: `read`, `write`, `files`, `delete`, `admin`.
 | Full | `read, write, files, delete` |
 | Custom | explicit list |
 
-`admin` is reserved for platform-owner keys. Scopes are enforced server-side on
-every route — the capability description is documentation, never the enforcement.
+Scopes are enforced server-side on every route — the capability description is
+documentation, never the enforcement. Cross-tenant workspace deletion is not a
+scope: it is platform-owner authority requiring a human session, the confirmation
+secret, a matching workspace slug, and a valid MFA code when MFA is enrolled, so
+no API key can perform it.
 
 ### How an app or agent uses a key
 

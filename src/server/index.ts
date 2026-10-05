@@ -32,6 +32,8 @@ import {
   AUTH_GUIDANCE,
   capabilitiesForScopes,
   hasScope,
+  KEY_CLASSES,
+  KeyClass,
   minimumRoleForCapability,
   OctoScope,
 } from '../api/capabilities';
@@ -1951,6 +1953,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         name,
         workspaceId: requestedWorkspaceId,
         scopes: requestedScopes,
+        keyClass,
         expiresInDays,
       } = parsed;
 
@@ -1976,11 +1979,28 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         expiresAt = d.toISOString();
       }
 
+      // A key class names a documented authority profile and expands to its
+      // scopes; it is a preset over the real scopes, never a second
+      // authorization dimension. Class and an explicit scope list are mutually
+      // exclusive.
+      const ALLOWED_SCOPES = ['read', 'write', 'files', 'delete'];
+      if (keyClass !== undefined && requestedScopes !== undefined) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: keyClass and scopes are mutually exclusive' });
+        return;
+      }
+
       // Default is non-destructive: a new token can read and write files but
       // cannot delete anything unless the delete scope is requested explicitly.
-      const ALLOWED_SCOPES = ['read', 'write', 'files', 'delete', 'admin'];
       let scopes: string[] = ['read', 'write', 'files'];
-      if (requestedScopes !== undefined) {
+      if (keyClass !== undefined) {
+        if (typeof keyClass !== 'string' || !Object.prototype.hasOwnProperty.call(KEY_CLASSES, keyClass)) {
+          sendJson(res, 400, {
+            error: `BAD_REQUEST: keyClass must be one of: ${Object.keys(KEY_CLASSES).join(', ')}`,
+          });
+          return;
+        }
+        scopes = [...KEY_CLASSES[keyClass as KeyClass].scopes];
+      } else if (requestedScopes !== undefined) {
         if (!Array.isArray(requestedScopes) || requestedScopes.length === 0) {
           sendJson(res, 400, { error: 'BAD_REQUEST: scopes must be a non-empty array' });
           return;
@@ -2033,13 +2053,6 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           sendJson(res, 403, { error: 'FORBIDDEN: Cannot create API key for non-member workspace' });
           return;
         }
-      }
-
-      // `admin` names platform-owner authority, so only a platform owner may hold
-      // or grant it. A key caller could otherwise mint itself a wider key.
-      if (scopes.includes('admin') && !auth.principal.isPlatformOwner) {
-        sendJson(res, 403, { error: 'FORBIDDEN: The admin scope is reserved for platform owners.' });
-        return;
       }
 
       // Minting a credential grants authority, so it carries the same human stamp
@@ -2147,6 +2160,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
       }
+      // A share link grants read (or upload) access to this workspace's gallery,
+      // so minting one needs the write scope; the role check below still applies.
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
+        return;
+      }
 
       const parsed = (await readJsonObject(req)) as Record<string, any>;
       const { workspaceId, resourceType, resourceId, permission, expiresInHours, validUntil } = parsed;
@@ -2239,6 +2258,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
       }
+      // Listing a workspace's share links is a read of its metadata.
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
 
       const workspaceId = url.searchParams.get('workspaceId');
       if (!workspaceId) {
@@ -2268,6 +2292,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       const auth = await authenticateRequest(req);
       if (!auth) {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      // Revoking a credential is destructive, so it needs the delete scope.
+      if (!requireScope(auth, 'delete')) {
+        scopeDenied(res, 'delete');
         return;
       }
 
@@ -2390,7 +2419,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
 
-      const scopes = auth.apiKey ? auth.apiKey.scopes : ['read', 'write', 'delete', 'files', 'admin'];
+      const scopes = auth.apiKey ? auth.apiKey.scopes : ['read', 'write', 'delete', 'files'];
       let workspace: { id: string; role: WorkspaceRole } | null = null;
       let unavailable: { action: string; reason: 'PROVIDER_UNAVAILABLE' }[] = [];
       let capabilities = capabilitiesForScopes(scopes);
