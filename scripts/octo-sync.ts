@@ -48,7 +48,7 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { classifyLocalFile, classifySize } from '../src/backup/planner';
 import { walkFiles } from '../src/backup/walk';
-import { OctoApi } from '../src/mcp/client';
+import { OctoApi, OctoApiError } from '../src/mcp/client';
 import {
   isSafeRelativePath,
   reconcile,
@@ -112,6 +112,17 @@ function loadJson<T>(path: string): T | undefined {
   }
 }
 
+// Replace the state file atomically so an interrupted write cannot leave it
+// truncated. A truncated state would fail to parse, loadJson would return
+// undefined, and the baseUrl/workspaceId binding check below would be skipped —
+// silently re-baselining against whatever target is configured next.
+function writeState(state: SyncState): void {
+  mkdirSync(dirname(STATE_PATH), { recursive: true });
+  const tmp = `${STATE_PATH}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state, null, 2));
+  renameSync(tmp, STATE_PATH);
+}
+
 function sha256File(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
@@ -132,7 +143,7 @@ interface ScanResult {
   skippedIgnored: number;
 }
 
-function scanLocal(state: SyncState): ScanResult {
+function scanLocal(): ScanResult {
   const files: LocalFile[] = [];
   const skippedEmpty: string[] = [];
   const skippedLarge: string[] = [];
@@ -158,14 +169,7 @@ function scanLocal(state: SyncState): ScanResult {
         skippedLarge.push(path);
         return;
       }
-      // Fast path: an unchanged size+mtime reuses the recorded hash instead of
-      // re-reading every file; a differing stat falls through to a real hash.
-      const entry = state.entries[path];
-      const sha256 =
-        entry && entry.size === info.size && entry.mtimeMs === info.mtimeMs
-          ? entry.sha256
-          : sha256File(absolutePath);
-      files.push({ path, size: info.size, mtimeMs: info.mtimeMs, sha256 });
+      files.push({ path, size: info.size, mtimeMs: info.mtimeMs, sha256: sha256File(absolutePath) });
     },
     IGNORE_DIRS
   );
@@ -234,7 +238,7 @@ async function main(): Promise<void> {
 
   const api = new OctoApi({ baseUrl, token });
   const remote = (await api.listFiles(workspaceId)) as RemoteRecord[];
-  const scan = scanLocal(state);
+  const scan = scanLocal();
   const all = reconcile({ baseline: state.entries, local: scan.files, remote });
   const paths = selectPaths(all, selected);
   if (selected.length > 0) {
@@ -258,6 +262,34 @@ async function main(): Promise<void> {
   }
 
   if (command === 'push') {
+    let replaceFailed = 0;
+    // Finish any supersede-delete a prior run could not. Those ids are records
+    // THIS client minted and committed to remove, so retrying them is not a
+    // sweep of another writer's records. It is also what lets a path converge
+    // after a failed delete left two records at one name: that path classifies
+    // as `ambiguous` (never a push candidate), so the obligation is retried
+    // here, independently of candidacy, instead of staying stuck forever.
+    let retriedDeletes = false;
+    for (const entry of Object.values(state.entries)) {
+      if (!entry.pendingDelete?.length) continue;
+      retriedDeletes = true;
+      const remaining: string[] = [];
+      for (const id of entry.pendingDelete) {
+        try {
+          await api.deleteFile({ workspaceId, fileId: id });
+        } catch (error) {
+          // A 404 means the record is already gone, so the obligation is met.
+          if (!(error instanceof OctoApiError && error.status === 404)) {
+            remaining.push(id);
+            replaceFailed += 1;
+          }
+        }
+      }
+      if (remaining.length) entry.pendingDelete = remaining;
+      else delete entry.pendingDelete;
+    }
+    if (retriedDeletes) writeState(state);
+
     const candidates = paths.filter(
       (p) =>
         p.category === 'local-changed' ||
@@ -265,10 +297,9 @@ async function main(): Promise<void> {
         (FORCE && (p.category === 'both-changed' || p.category === 'untracked-both'))
     );
     const conflicts = paths.filter(
-      (p) => p.category === 'both-changed' && !FORCE
+      (p) => (p.category === 'both-changed' || p.category === 'untracked-both') && !FORCE
     );
     let uploaded = 0;
-    let replaceFailed = 0;
     for (const p of candidates) {
       if (!p.local) continue;
       const bytes = readFileSync(join(ROOT, p.path));
@@ -298,8 +329,7 @@ async function main(): Promise<void> {
         remoteId: record.id,
         ...(stillPending.length ? { pendingDelete: stillPending } : {}),
       };
-      mkdirSync(dirname(STATE_PATH), { recursive: true });
-      writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+      writeState(state);
       uploaded += 1;
     }
     report(paths, {
@@ -309,7 +339,7 @@ async function main(): Promise<void> {
       replaceFailed,
       conflicts: conflicts.map((p) => p.path),
       note: conflicts.length
-        ? 'Both sides changed on the paths listed under conflicts; re-run with --force to overwrite remote.'
+        ? 'Conflicting paths listed under conflicts; re-run with --force to overwrite remote.'
         : undefined,
     });
     return;
@@ -322,7 +352,9 @@ async function main(): Promise<void> {
       p.category === 'remote-only' ||
       (FORCE && (p.category === 'both-changed' || p.category === 'untracked-both'))
   );
-  const conflicts = paths.filter((p) => p.category === 'both-changed' && !FORCE);
+  const conflicts = paths.filter(
+    (p) => (p.category === 'both-changed' || p.category === 'untracked-both') && !FORCE
+  );
   let downloaded = 0;
   for (const p of candidates) {
     if (p.remoteIds.length !== 1) continue;
@@ -334,7 +366,10 @@ async function main(): Promise<void> {
     const bytes = Buffer.from(await api.downloadFile({ workspaceId, fileId: remoteId }), 'base64');
     const target = join(ROOT, p.path);
     mkdirSync(dirname(target), { recursive: true });
-    const tmp = `${target}.octo-tmp`;
+    // A `.tmp` suffix is matched by classifyLocalFile, so a staging file left
+    // behind by a failed/killed rename is ignored by scanLocal instead of being
+    // pushed as a real record.
+    const tmp = `${target}.tmp`;
     writeFileSync(tmp, bytes);
     renameSync(tmp, target);
     const info = statSync(target);
@@ -344,8 +379,7 @@ async function main(): Promise<void> {
       mtimeMs: info.mtimeMs,
       remoteId,
     };
-    mkdirSync(dirname(STATE_PATH), { recursive: true });
-    writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+    writeState(state);
     downloaded += 1;
   }
   report(paths, {
@@ -354,7 +388,7 @@ async function main(): Promise<void> {
     downloaded,
     conflicts: conflicts.map((p) => p.path),
     note: conflicts.length
-      ? 'Both sides changed on the paths listed under conflicts; re-run with --force to overwrite local.'
+      ? 'Conflicting paths listed under conflicts; re-run with --force to overwrite local.'
       : undefined,
   });
 }
