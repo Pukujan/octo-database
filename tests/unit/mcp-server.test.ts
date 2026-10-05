@@ -147,4 +147,15 @@ describe('Octo MCP adapter', () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('403');
   });
+
+  it('reports a workspace-creation refusal as a tool error', async () => {
+    const client = await connect(
+      apiWith(403, '{"error":"FORBIDDEN: A workspace-scoped key cannot create workspaces"}')
+    );
+
+    const result = await client.callTool({ name: 'create_workspace', arguments: { name: 'Nope' } });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('403');
+  });
 });

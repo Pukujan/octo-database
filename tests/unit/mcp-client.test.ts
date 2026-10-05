@@ -137,6 +137,9 @@ describe('OctoApi', () => {
 
     expect(calls[0]!.url).toBe('http://localhost:3001/api/files/content?workspaceId=w%201&fileId=f%2F2');
     expect(calls[0]!.init.method).toBe('GET');
+    // downloadFile bypasses request() and fetches the raw content route directly,
+    // so prove that separate path still carries the bearer token.
+    expect(authOf(calls[0]!)).toBe('Bearer t');
     expect(data).toBe(Buffer.from('hello bytes').toString('base64'));
   });
 
