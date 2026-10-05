@@ -25,7 +25,10 @@
  *   OCTO_TOKEN=... npm run sync -- pull docs/readme.md
  *
  * Env:
- *   OCTO_TOKEN          required; an Octo API key (fallback OCTO_MCP_TOKEN)
+ *   OCTO_TOKEN          required; an Octo API key (fallback OCTO_MCP_TOKEN).
+ *                       A workspace-scoped key needs read, write, files, and
+ *                       delete: push replaces a record by delete-then-upload,
+ *                       so a key without delete can upload but not converge.
  *   OCTO_BASE_URL       default http://localhost:3001 (fallback OCTO_MCP_BASE_URL)
  *   OCTO_WORKSPACE_ID   target workspace (or .octo/config.json)
  *   OCTO_SYNC_DIR       project root (default: cwd)
