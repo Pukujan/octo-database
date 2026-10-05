@@ -16,8 +16,10 @@ import {
   pathsToPull,
   pathsToPush,
   reconcile,
+  recordIdsToSupersede,
   selectPaths,
   toRemotePath,
+  type ClassifiedPath,
   type LocalFile,
   type SyncBaselineEntry,
 } from '../../src/sync/reconcile';
@@ -160,5 +162,46 @@ describe('path safety and helpers', () => {
     const paths = reconcile({ baseline: {}, local: [local('a.txt', 'h'), local('b.txt', 'h')], remote: [] });
     expect(selectPaths(paths, ['a.txt']).map((p) => p.path)).toEqual(['a.txt']);
     expect(selectPaths(paths, []).map((p) => p.path)).toEqual(['a.txt', 'b.txt']);
+  });
+});
+
+describe('recordIdsToSupersede', () => {
+  function path(overrides: Partial<ClassifiedPath>): ClassifiedPath {
+    return { path: 'a.txt', category: 'in-sync', remoteIds: [], ...overrides };
+  }
+
+  it('supersedes only the baseline record on a normal push', () => {
+    const p = path({ category: 'local-changed', baseline: baseline('r1'), remoteIds: ['r1'] });
+    expect(recordIdsToSupersede(p, 'r_new', false)).toEqual(['r1']);
+  });
+
+  it('leaves the current remote record alone when not forced', () => {
+    const p = path({ category: 'untracked-both', remoteIds: ['r1'] });
+    expect(recordIdsToSupersede(p, 'r_new', false)).toEqual([]);
+  });
+
+  it('removes the current remote record too on a forced overwrite', () => {
+    const p = path({ category: 'both-changed', baseline: baseline('r1'), remoteIds: ['r2'] });
+    expect(recordIdsToSupersede(p, 'r_new', true).sort()).toEqual(['r1', 'r2']);
+  });
+
+  it('removes the remote record on a forced first-contact overwrite', () => {
+    const p = path({ category: 'untracked-both', remoteIds: ['r1'] });
+    expect(recordIdsToSupersede(p, 'r_new', true)).toEqual(['r1']);
+  });
+
+  it('carries an interrupted replace forward', () => {
+    const p = path({ baseline: { ...baseline('r1'), pendingDelete: ['r0'] }, remoteIds: ['r1'] });
+    expect(recordIdsToSupersede(p, 'r_new', false).sort()).toEqual(['r0', 'r1']);
+  });
+
+  it('never returns the id it just uploaded', () => {
+    const p = path({ baseline: baseline('r1'), remoteIds: ['r1'] });
+    expect(recordIdsToSupersede(p, 'r1', false)).toEqual([]);
+  });
+
+  it('refuses to sweep duplicates even when forced', () => {
+    const p = path({ category: 'ambiguous', baseline: baseline('r1'), remoteIds: ['r2', 'r3'] });
+    expect(recordIdsToSupersede(p, 'r_new', true)).toEqual(['r1']);
   });
 });
