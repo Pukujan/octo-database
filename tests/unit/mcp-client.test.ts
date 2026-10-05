@@ -89,6 +89,77 @@ describe('OctoApi', () => {
     expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ workspaceId: 'w', query: 'hello' });
   });
 
+  it('creates a workspace without inventing optional fields', async () => {
+    const { impl, calls } = recordingFetch(201, '{"workspace":{"id":"w"},"rawSecret":"octo_live_ws_x"}');
+    const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
+
+    await api.createWorkspace({ name: 'Backups' });
+
+    expect(calls[0]!.url).toBe('http://localhost:3001/api/workspaces');
+    expect(calls[0]!.init.method).toBe('POST');
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ name: 'Backups' });
+  });
+
+  it('passes through the workspace fields it was given', async () => {
+    const { impl, calls } = recordingFetch(201, '{}');
+    const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
+
+    await api.createWorkspace({ name: 'Backups', slug: 'backups', description: 'nightly', retentionDays: 30 });
+
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      name: 'Backups',
+      slug: 'backups',
+      description: 'nightly',
+      retentionDays: 30,
+    });
+  });
+
+  it('mints a workspace-scoped key against the keys route', async () => {
+    const { impl, calls } = recordingFetch(201, '{"apiKey":{"id":"k"},"rawSecret":"octo_live_ws_x"}');
+    const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
+
+    await api.mintKey({ name: 'project key', workspaceId: 'w', scopes: ['read', 'write', 'files', 'delete'] });
+
+    expect(calls[0]!.url).toBe('http://localhost:3001/api/keys');
+    expect(calls[0]!.init.method).toBe('POST');
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      name: 'project key',
+      workspaceId: 'w',
+      scopes: ['read', 'write', 'files', 'delete'],
+    });
+  });
+
+  it('downloads a file as base64 of the raw bytes, not parsed JSON', async () => {
+    const { impl, calls } = recordingFetch(200, 'hello bytes');
+    const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
+
+    const data = await api.downloadFile({ workspaceId: 'w 1', fileId: 'f/2' });
+
+    expect(calls[0]!.url).toBe('http://localhost:3001/api/files/content?workspaceId=w%201&fileId=f%2F2');
+    expect(calls[0]!.init.method).toBe('GET');
+    expect(data).toBe(Buffer.from('hello bytes').toString('base64'));
+  });
+
+  it('surfaces a failed download as a typed error', async () => {
+    const { impl } = recordingFetch(404, '{"error":"FILE_NOT_FOUND"}');
+    const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
+
+    await expect(api.downloadFile({ workspaceId: 'w', fileId: 'f' })).rejects.toMatchObject({
+      status: 404,
+      body: '{"error":"FILE_NOT_FOUND"}',
+    });
+  });
+
+  it('deletes a file with the workspace in the query string', async () => {
+    const { impl, calls } = recordingFetch(200, '{"success":true,"fileId":"f 1"}');
+    const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
+
+    await api.deleteFile({ workspaceId: 'w 1', fileId: 'f 1' });
+
+    expect(calls[0]!.url).toBe('http://localhost:3001/api/files/f%201?workspaceId=w%201');
+    expect(calls[0]!.init.method).toBe('DELETE');
+  });
+
   it('surfaces a non-2xx response as a typed error, not a silent success', async () => {
     const { impl } = recordingFetch(403, '{"error":"FORBIDDEN"}');
     const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
