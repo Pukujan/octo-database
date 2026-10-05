@@ -69,12 +69,12 @@ export function createOctoMcpServer(api: OctoApi): McpServer {
 
   server.tool(
     'mint_key',
-    'Mint an API key. Omit workspaceId for an account-wide key (one per principal) or pass one for a workspace-scoped key. A token may only narrow its own authority: it cannot widen its scopes, escape its workspace, or grant admin unless the caller is a platform owner. The raw secret is shown exactly once.',
+    'Mint an API key. Omit workspaceId for an account-wide key (one per principal) or pass one for a workspace-scoped key. A token may only narrow its own authority: it cannot widen its scopes or escape its workspace. Minting is human-stamped, so it requires a session with the confirmation secret. The raw secret is shown exactly once.',
     {
       name: z.string().describe('Label for the new key'),
       workspaceId: z.string().optional().describe('Workspace to scope the key to (omit for account-wide)'),
       scopes: z
-        .array(z.enum(['read', 'write', 'files', 'delete', 'admin']))
+        .array(z.enum(['read', 'write', 'files', 'delete']))
         .optional()
         .describe('Requested scopes (defaults to read, write, files)'),
       expiresInDays: z.number().int().positive().optional().describe('Optional expiry in days'),
