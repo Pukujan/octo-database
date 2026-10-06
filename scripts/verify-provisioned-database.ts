@@ -7,7 +7,9 @@
  *   1. the generated role is NOSUPERUSER / NOCREATEDB / NOCREATEROLE and owns its
  *      own database;
  *   2. the minted credential can connect to its own database and run DDL + DML
- *      (create a table, insert, select) -- the feature;
+ *      (create a table, insert, select) -- the feature -- and, where the cluster
+ *      offers pgvector, the database is vector-ready and the credential can query
+ *      a vector column without having been able to enable the extension itself;
  *   3. the same credential cannot read or write any control-plane data: it holds
  *      no USAGE on the `octo` schema, so every `octo.*` read and write is refused;
  *   4. it cannot connect to another workspace's provisioned database.
@@ -120,6 +122,27 @@ async function main(): Promise<void> {
       const rows = await own.query<{ label: string }>('SELECT label FROM items');
       check('client connected and created a table', true);
       check('client inserted and read back a row', rows.rows[0]?.label === 'hello');
+
+      // pgvector is not a trusted extension, so a NOSUPERUSER role cannot enable it
+      // itself; provisioning enables it via the privileged connection. Only assert
+      // this where the cluster actually offers the extension (the platform image
+      // does; a bare Postgres does not).
+      const offered = await owner.query<{ offered: boolean }>(
+        `SELECT EXISTS(SELECT 1 FROM pg_available_extensions WHERE name = 'vector') AS offered`
+      );
+      if (offered.rows[0]?.offered) {
+        const installed = await own.query<{ installed: boolean }>(
+          `SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector') AS installed`
+        );
+        check('the database is vector-ready without the workspace enabling it', installed.rows[0]?.installed === true);
+
+        await own.query('CREATE TABLE embeddings (id serial PRIMARY KEY, e vector(3))');
+        await own.query(`INSERT INTO embeddings (e) VALUES ('[1,2,3]')`);
+        const near = await own.query<{ id: number }>(
+          `SELECT id FROM embeddings ORDER BY e <-> '[1,2,4]' LIMIT 1`
+        );
+        check('the credential can query a vector column', near.rows.length === 1);
+      }
     } catch (err) {
       check('client connected and created a table', false, err instanceof Error ? err.message : String(err));
       check('client inserted and read back a row', false);
