@@ -50,11 +50,12 @@ services:
     container_name: octo-db
     restart: unless-stopped
     # A workspace's provisioned database is meant to be connected to by an ordinary
-    # Postgres client, so the port is published. The bind address defaults to
-    # loopback: nothing is reachable until OCTO_DB_PUBLISH_ADDR is set, because a
-    # published port is not protected by the host firewall (Docker inserts its own
-    # rules ahead of it). Set it to the Tailscale address to reach it from the
-    # tailnet only.
+    # Postgres client, but publishing this port would expose the whole cluster --
+    # the control plane included -- to every interface, because Docker's port rules
+    # sit ahead of the host firewall. So it is published on loopback and Tailscale
+    # forwards it to the tailnet only (`tailscale serve --bg --tcp`, documented in
+    # .env.example). Set OCTO_DB_PUBLISH_ADDR to a host address to skip the
+    # forwarder and publish directly instead.
     ports:
       - "${OCTO_DB_PUBLISH_ADDR:-127.0.0.1}:${OCTO_DB_PUBLIC_PORT:-5432}:5432"
     environment:
