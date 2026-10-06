@@ -1,0 +1,155 @@
+{
+  "engine": "Graph databases / Neo4j",
+  "headline": "Octo should not host a graph engine today: Postgres recursive CTEs (and DuckDB/Parquet for batch graph analytics) cover its actual graph-shaped needs, and the only thing a dedicated graph engine adds inside the current fence is Cypher syntax — which is an ergonomics problem, not a scaling problem.",
+  "scaling_ladder": [
+    {
+      "stage": "Stage 0 — Today: one Postgres 16, no graph engine (the honest answer: do nothing)",
+      "trigger": "Any graph-shaped question appears (e.g. 'what is connected to what', dependency/organizational reachability).",
+      "action": "Model edges as ordinary Postgres tables and query with WITH RECURSIVE. Keep it inside the existing octo schema and the existing workspace_id RESTRICTIVE RLS fence. For set-based relationship analysis (centrality, connected components, community detection, dependency reachability) use the Parquet + DuckDB lane Octo already declares, not an online engine. Do not add a service.",
+      "tradeoff": "Recursive CTEs are practical to roughly 3-4 hops and ~10^5 edges, then the planner's working set grows exponentially and a 10-hop query typically times out (order-of-magnitude, workload-dependent). No Cypher. Cost: $0, zero new ops."
+    },
+    {
+      "stage": "Stage 1 — GraphRAG-lite / shallow semantic graph",
+      "trigger": "An agent needs relationship-aware retrieval: vector similarity plus a bounded 2-3 hop neighborhood join.",
+      "action": "Compose pgvector KNN with a bounded recursive CTE over edge tables in the same Postgres instance. This covers most 'GraphRAG-lite' patterns without a graph engine, and reuses Octo's existing pgvector capability.",
+      "tradeoff": "Hard-bounded hop count and no variable-length path product. Still $0 and inside the relational fence."
+    },
+    {
+      "stage": "Stage 2 — Cypher ergonomics wanted (AGE inside the existing Postgres)",
+      "trigger": "The owner/agents specifically want Cypher syntax via the MCP adapter, and traversals stay within ~4-5 hops / low-millions of edges.",
+      "action": "Run Apache AGE (Apache 2.0, TLP since May 2022; PG16 = v1.6.0) inside the Postgres Octo already runs, one AGE graph namespace per workspace, accessed only through Octo's mediation. This is the only Cypher path inside Postgres until SQL/PGQ, which was reverted from PG 19 (7 Sep 2026) and is earliest in PG 20 (~Sep 2027).",
+      "tradeoff": "AGE compiles Cypher to recursive SQL, so it inherits the same 4-5 hop ceiling with no performance headroom — benchmarks show it slower than raw CTEs and timing out on large/deep cases. Isolation caveat: AGE stores graph data in its own namespace, so the existing octo.* RLS fence does NOT cover it. On PG16 there is no AGE-level RLS (that arrived only in the PG18/1.7.0 branch), so graph isolation rests on Octo's mediation layer — a deliberate, documented weakening of the DB-level fence. To get a DB-level fence you would need PG18 + AGE 1.7 + hand-written policies on AGE's internal tables. Buys syntax, not capability."
+    },
+    {
+      "stage": "Stage 3 — One workspace genuinely needs online graph traversal",
+      "trigger": "A specific workspace crosses any TWO of Capital One's thresholds — multi-million nodes, 5+ hop traversals, 100s of simultaneous graph queries, 100s of interactive graph algorithms — AND a pattern test on that workspace's real data shows the CTE/AGE baseline misses the latency SLO (e.g. a long, selective, path-shaped query; the only shape where benchmarks show a graph DB clearly winning).",
+      "action": "Stand up ONE dedicated single-node engine for that workspace only, behind Octo mediation and firewalled to localhost. Smallest realistic choices: Neo4j Community (single database, Cypher; GPLv3 is fine for internal self-host, and since Community has no hot backup the projection-rebuild pipeline IS the backup) or an in-memory engine exported from Postgres (FalkorDB or Memgraph) if the graph fits RAM. Treat the graph as a REBUILDABLE PROJECTION, not a system of record: no clustering, no HA, no Enterprise license.",
+      "tradeoff": "A new JVM/service to operate, roughly 2-8 GB RAM and 2+ vCPU, plus Neo4j's heap + page cache (~1.2x data+index) and per-database query-cache overhead. Recovery = re-derive from Postgres. FalkorDB (SSPLv1) is arguably the better multi-workspace shape; Memgraph is BSL 1.1 (internal-business-use grant, not OSI)."
+    },
+    {
+      "stage": "Stage 4 — A single workspace's graph outgrows one node",
+      "trigger": "Graph data exceeds a single node's RAM/disk, or write throughput exceeds one writer, or HA/failover becomes a hard requirement for that workspace.",
+      "action": "Only now consider Neo4j Enterprise causal clustering (reads scale on async secondaries; there is still exactly ONE writer per database; max 11 primaries / 20 secondaries, M=2F+1) and/or Infinigraph property sharding (GA Jan 2026, a separate subscription on top of Enterprise).",
+      "tradeoff": "Commercial license (custom quote; third-party marketplace data suggests ~$3k-6k/core/yr, ~$80k-200k+/yr for a 16-core production deployment — treat as a rough estimate, not list price) plus Infinigraph's extra subscription, plus real distributed-ops burden. For Octo this is very likely never."
+    },
+    {
+      "stage": "Stage 5 — If self-hosting graph ops is the actual pain",
+      "trigger": "Operational burden of running a graph engine outweighs the self-hosted requirement for some workspace.",
+      "action": "Managed alternative: Neo4j AuraDB, or Amazon Neptune if already all-in on AWS.",
+      "tradeoff": "Recurring cost and data leaving the single host. AuraDB: Free (single DB), Professional $0.09/GB/hr (min 1 GB ≈ $65/mo), Business Critical $0.20/GB/hr (min 2 GB ≈ $288/mo). Neptune is AWS-managed only (no self-host): db.r5.large $0.348/hr, storage $0.10/GB-mo, I/O $0.20/million, serverless min 1 NCU. Neither aligns well with Octo's self-hosted single-owner direction."
+    }
+  ],
+  "multitenancy": "Octo's tenancy is logical (workspace_id + a RESTRICTIVE RLS fence on octo.* tables), and no graph engine inherits that fence. Neo4j has no row-level security, so the three patterns trade isolation against cost: (1) one shared graph with a tenant property — cheapest, but filtering lives entirely in application/Cypher and is easy to get wrong; worse, the native Neo4j Browser bypasses Octo's mediation and would let a user see every tenant, which contradicts PROJECT.md's 'native consoles remain available for deep work'. (2) database-per-tenant — physical separation, but Enterprise-only (Community allows exactly one standard database), no relationships across databases, and each database adds fixed memory plus its own query caches to the heap. AuraDB Free is single-database, and Aura multi-database is only an uncommitted forum remark ('sometime in 2026'). (3) instance-per-tenant — strongest isolation, highest cost. Recommendation: never put all workspaces into one Community Neo4j database relying on app-layer filtering. Prefer one graph per workspace — an AGE graph namespace per workspace in the shared Postgres (isolation via Octo mediation only on PG16), or a dedicated instance for the one workspace that truly needs it — and lean on the fact that graph data is a rebuildable projection, so per-workspace engines need no HA.",
+  "octo_recommendation": "Do nothing yet: Octo should not host a graph engine at current or near-term scale. Single-digit workspaces and megabytes of data do not cross any threshold where a graph database is warranted, and graph is already declared an optional projection. Near-term, if a workspace genuinely wants relationship queries, the smallest step is ordinary edge tables + recursive CTEs in the Postgres Octo already runs (and DuckDB/Parquet for batch graph analytics); if Cypher ergonomics are explicitly wanted, add Apache AGE inside that same Postgres, one graph namespace per workspace, accepting that (a) AGE buys syntax not speed, (b) it inherits the ~4-5 hop ceiling, and (c) on PG16 graph data is protected only by Octo's mediation layer, not the RLS fence. Reserve a dedicated engine (single-node Neo4j Community, or in-memory FalkorDB/Memgraph) for the first workspace that demonstrably needs long, selective, path-shaped traversal at multi-million-node / 5+ hop / concurrent scale, run it as a rebuildable projection with no clustering or HA, and only then consider Enterprise/Infinigraph or AuraDB. The single strongest framing: the only graph feature Octo cannot get today inside its existing fence is native Cypher/PGQ syntax, and syntax is not a scaling problem.",
+  "options": [
+    {
+      "name": "Postgres recursive CTEs + DuckDB/Parquet",
+      "kind": "OSS",
+      "when": "Now through the near term; any graph-shaped query at Octo's current scale.",
+      "cost": "$0 — reuses the existing Postgres 16, pgvector, and declared Parquet/DuckDB lane."
+    },
+    {
+      "name": "Apache AGE (inside existing Postgres)",
+      "kind": "OSS",
+      "when": "A workspace explicitly wants Cypher syntax, traversals <=4-5 hops / low-millions of edges.",
+      "cost": "$0 license (Apache 2.0) + extension ops; PG16 branch has no RLS, so graph isolation is mediation-only."
+    },
+    {
+      "name": "JanusGraph / NebulaGraph / HugeGraph (Apache 2.0, distributed)",
+      "kind": "OSS",
+      "when": "Only if a graph need ever appears at distributed scale and AGE has been outgrown. All three are OSI Apache-2.0, but each is a separate distributed service with its own storage backend — a far heavier operational shape than Octo's single VM, and none inherits the octo.* RLS fence.",
+      "cost": "$0 license; real ops burden (JVM or C++ service, separate storage, its own isolation model)."
+    },
+    {
+      "name": "Kuzu (archived) / LadybugDB (community fork)",
+      "kind": "OSS",
+      "when": "Avoid as a new dependency today. Kuzu was the ideal embedded MIT graph engine — the closest analogue to Octo's embedded DuckDB lane — but its repository was archived 2025-10-10 (v0.11.3 final) after the Apple acquisition. Community successors (LadybugDB, and 'bighorn') are young and unproven.",
+      "cost": "Kuzu: MIT but unmaintained. LadybugDB: MIT, new — revisit only if an embedded graph engine is genuinely needed and the fork proves durable."
+    },
+    {
+      "name": "ArcadeDB",
+      "kind": "OSS",
+      "when": "Multi-model (graph + document + vector + time-series) in one engine, Apache 2.0, if a multi-model need ever appears.",
+      "cost": "$0 license (Apache 2.0); JVM service, no inheritance of the octo.* RLS fence."
+    },
+    {
+      "name": "Neo4j Community (single node, single database)",
+      "kind": "self-hosted",
+      "when": "One workspace needs real online Cypher traversal beyond what CTE/AGE delivers.",
+      "cost": "Free (GPLv3, fine for internal self-host; only matters if Octo ships it). VM + JVM ops; no hot backup — rebuild-from-Postgres is the backup."
+    },
+    {
+      "name": "Memgraph Community",
+      "kind": "self-hosted",
+      "when": "Latency-critical traversal that fits in RAM; vertical scaling to ~1B nodes/10B edges.",
+      "cost": "BSL 1.1 (internal-business-use grant; not OSI open source). No sharding; read replication only; multi-tenancy is Enterprise-only."
+    },
+    {
+      "name": "FalkorDB",
+      "kind": "OSS",
+      "when": "Multi-workspace multi-graph / GraphRAG; Redis-native, Redis Cluster sharding.",
+      "cost": "SSPLv1 (free for internal self-hosting; prohibits offering it as a DBaaS). Best multi-tenant shape of the in-memory options."
+    },
+    {
+      "name": "Neo4j Enterprise / Infinigraph",
+      "kind": "self-hosted",
+      "when": "A single workspace's graph needs clustering (one writer, async read replicas) or actual sharding.",
+      "cost": "Commercial custom quote; third-party estimate ~$3k-6k/core/yr (rough). Infinigraph sharding is a separate subscription on top of Enterprise."
+    },
+    {
+      "name": "Neo4j AuraDB",
+      "kind": "managed",
+      "when": "Self-hosting graph operations is the real pain and data may leave the host.",
+      "cost": "Free (single DB, ~200k nodes/400k rels); Professional from $0.09/GB/hr (min 1 GB ~ $65/mo); Business Critical $0.20/GB/hr (min 2 GB ~ $288/mo)."
+    },
+    {
+      "name": "Amazon Neptune",
+      "kind": "managed",
+      "when": "Already all-in on AWS; needs managed property/RDF graph.",
+      "cost": "No self-host. db.r5.large $0.348/hr, storage $0.10/GB-mo, I/O $0.20/million; serverless min 1 NCU."
+    },
+    {
+      "name": "ArangoDB",
+      "kind": "self-hosted",
+      "when": "Wants multi-model + graph sharding in one engine instead of Neo4j.",
+      "cost": "Community binaries free for non-commercial use and datasets <=100 GB; commercial/over-100GB needs a license."
+    },
+    {
+      "name": "Dgraph",
+      "kind": "self-hosted",
+      "when": "Avoid for a new dependency: acquired by Istari Digital (Oct 2025), Dgraph Cloud closing.",
+      "cost": "n/a — ecosystem risk outweighs any benefit for Octo."
+    }
+  ],
+  "sources": [
+    "https://neo4j.com/docs/operations-manual/current/clustering/introduction/",
+    "https://neo4j.com/docs/operations-manual/current/tutorial/tutorial-composite-database/",
+    "https://neo4j.com/docs/operations-manual/current/database-administration/",
+    "https://neo4j.com/docs/operations-manual/current/performance/memory-configuration/",
+    "https://neo4j.com/licensing/",
+    "https://neo4j.com/pricing/",
+    "https://neo4j.com/docs/operations-manual/current/scalability/sharded-property-databases/configuration/",
+    "https://assets.neo4j.com/Official-Materials/Multi+DB+Considerations.pdf",
+    "https://neo4j.com/cloud/platform/aura-graph-database/faq/",
+    "https://memgraph.com/docs/help-center/faq",
+    "https://memgraph.com/docs/database-management/multi-tenancy",
+    "https://github.com/memgraph/memgraph/blob/master/licenses/BSL.txt",
+    "https://arango.ai/pricing/",
+    "https://docs.arango.ai/arangodb/stable/operations/administration/license-management/",
+    "https://aws.amazon.com/neptune/pricing/",
+    "https://github.com/orgs/hypermodeinc/discussions/64",
+    "https://www.istaridigital.com/resources/istari-acquires-dgraph",
+    "https://docs.falkordb.com/references/license",
+    "https://www.falkordb.com/news-updates/multigraph-topology-isolation-linear-scale/",
+    "https://neon.com/postgresql/postgresql-19/sql-pgq-graph-queries",
+    "https://gdb-engines.com/db/postgresql-sql-pgq/",
+    "https://age.apache.org/release-notes/",
+    "https://age.apache.org/faq/",
+    "https://github.com/apache/age",
+    "https://capitalonesoftware.com/blog/graph-database-evaluation",
+    "https://blogs.unoplat.io/blog/neo4j-to-postgres-knowledge-graph-migration/",
+    "https://bluetape4k.github.io/blog/when-to-adopt-graphdb/",
+    "https://polygres.com/blog/postgres-as-a-graph-database"
+  ],
+  "uncertainty": "Several numbers are soft and should not be treated as commitments. (1) AuraDB Free limits are published inconsistently — Neo4j's FAQ says 200k nodes / 400k relationships while some Neo4j material says 50k / 175k; cite the FAQ but note the discrepancy. (2) Aura multi-database 'sometime in 2026' is a forum moderator remark, not a roadmap commitment. (3) Self-managed Enterprise pricing is not public; the ~$3k-6k/core/yr figure is a third-party marketplace estimate (Vendr), not list price, and Infinigraph pricing is quote-only. (4) The recursive-CTE (~3-4 hops / ~10^5 edges) and AGE (~4-5 hops) ceilings are order-of-magnitude and workload-dependent, drawn from practitioner benchmarks rather than engine guarantees; they should be re-measured on Octo's real data before any decision that depends on them. (5) The benchmark evidence (bluetape4k, Unoplat, polygres) is third-party and partly vendor-adjacent, though it agrees across sources on the shape of the conclusion. (6) Memgraph (BSL 1.1) and FalkorDB (SSPLv1) are source-available, not OSI open source; internal self-hosting is fine, offering either as a service is not. (7) AGE's RLS support exists only on the PG18/1.7.0 branch per the project's release notes — verify against the exact build before relying on any AGE-level fence. (8) Whether any Octo workspace will ever need graph traversal at all is unknown; the most likely outcome is that the graph capability is never built, and that is an acceptable answer."
+}
