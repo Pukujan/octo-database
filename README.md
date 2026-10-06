@@ -33,7 +33,7 @@ Google Login & RLS ──► Full-Stack Server & UI ──► Active R2 Storage 
 | **QA Vision Pipeline** | Playwright E2E testing with Alibaba Qwen 3.8 Flash multimodal vision model verification | **Merged** (`PR #23`) |
 | **Provider Runtime (#16)** | Provider configuration for R2 & Google Drive OAuth without secret leakage in Git | **Merged** (`PR #19`) |
 | **Slice 5 (#7)** | Google Drive 5TB cold storage archival transition and on-demand restore | **Verified Live** |
-| **Slice 13 (#153)** | A real, independently connectable PostgreSQL database per workspace, owned by its own scoped role | **Merged** (`PR #155`) |
+| **Slice 20 (#153)** | A real, independently connectable PostgreSQL database per workspace, owned by its own scoped role | **Merged** (`PR #155`) |
 | **Slice 3 (#5)** | Workspace image/video gallery with thumbnails and album browsing | *Next up* |
 
 ---

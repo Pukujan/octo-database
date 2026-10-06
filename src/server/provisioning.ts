@@ -1,5 +1,5 @@
 /**
- * Provisioned Postgres per workspace (productization Slice 13).
+ * Provisioned Postgres per workspace (productization Slice 20).
  *
  * This module is the single grep-able boundary for the privileged connection that
  * can `CREATE DATABASE` and `CREATE ROLE` cluster-wide. The runtime roles cannot:

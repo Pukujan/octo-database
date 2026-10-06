@@ -1464,7 +1464,7 @@ export async function dbCreateWorkspaceAtomic(params: {
   });
 }
 
-// 6b. Provisioned databases (productization Slice 13). The catalog row is tenant
+// 6b. Provisioned databases (productization Slice 20). The catalog row is tenant
 // data and runs on the fenced app pool like every other user-data read/write; the
 // privileged DDL itself lives in src/server/provisioning.ts.
 

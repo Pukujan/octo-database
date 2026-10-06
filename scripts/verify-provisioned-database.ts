@@ -1,5 +1,5 @@
 /**
- * Live provisioned-database verification (productization Slice 13).
+ * Live provisioned-database verification (productization Slice 20).
  *
  * Proves the properties the slice's success condition names, directly against a
  * real PostgreSQL cluster with the migration applied:

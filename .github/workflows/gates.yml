@@ -132,7 +132,7 @@ jobs:
           OCTO_DB_URL: postgresql://octo_app:octo_app@localhost:54329/postgres
         run: npx tsx scripts/verify-key-scope-fence.ts
 
-      - name: Verify provisioned-database isolation (Slice 13)
+      - name: Verify provisioned-database isolation (Slice 20)
         # Proves against a real cluster that a minted workspace-database credential
         # can use its own database (DDL + DML), holds no USAGE on the octo schema so
         # every octo.* read and write is refused, and cannot connect to another

@@ -1,4 +1,4 @@
--- Octo Schema: Provisioned Postgres per workspace (productization Slice 13)
+-- Octo Schema: Provisioned Postgres per workspace (productization Slice 20)
 --
 -- A workspace can own one real PostgreSQL database, created in this cluster and
 -- connectable by the client with an ordinary Postgres client. This table is the

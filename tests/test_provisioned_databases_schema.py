@@ -1,4 +1,4 @@
-"""Schema migration validation tests for provisioned databases (productization Slice 13)."""
+"""Schema migration validation tests for provisioned databases (productization Slice 20)."""
 
 from __future__ import annotations
 
