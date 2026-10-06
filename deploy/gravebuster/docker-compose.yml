@@ -49,6 +49,14 @@ services:
     image: pgvector/pgvector:pg16
     container_name: octo-db
     restart: unless-stopped
+    # A workspace's provisioned database is meant to be connected to by an ordinary
+    # Postgres client, so the port is published. The bind address defaults to
+    # loopback: nothing is reachable until OCTO_DB_PUBLISH_ADDR is set, because a
+    # published port is not protected by the host firewall (Docker inserts its own
+    # rules ahead of it). Set it to the Tailscale address to reach it from the
+    # tailnet only.
+    ports:
+      - "${OCTO_DB_PUBLISH_ADDR:-127.0.0.1}:${OCTO_DB_PUBLIC_PORT:-5432}:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
