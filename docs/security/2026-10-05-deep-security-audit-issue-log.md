@@ -8,7 +8,7 @@ Findings are filtered to high-confidence, exploitable issues. Excluded by policy
 
 ---
 
-## ISS-1 — HIGH — Raw principal UUID is accepted as a bearer session token
+## ISS-1 — HIGH — Raw principal UUID is accepted as a bearer session token — FIXED
 
 **Category:** authentication / session management
 **Locations:** `src/server/index.ts:360-398` (accept), `:958` (guest mint), `:905` (Google callback mint)
@@ -32,7 +32,7 @@ Disclosure channels are not hypothetical: `signMediaUrl` writes `principalId` in
 
 ---
 
-## ISS-2 — HIGH — Share metadata responses leak the creator's principal UUID
+## ISS-2 — HIGH — Share metadata responses leak the creator's principal UUID — FIXED
 
 **Category:** data exposure / broken authorization boundary
 **Locations:** `src/server/db.ts:686-719` (`dbInsertShare` RETURNING), `:775-787` (`dbListShares`); `src/server/index.ts:2246-2250` (create response), `:2285-2286` (list response)

@@ -675,7 +675,6 @@ export interface DbShareRow {
   validFrom: string;
   validUntil: string | null;
   revokedAt: string | null;
-  createdBy: string;
   createdAt: string;
   lastAccessedAt: string | null;
   accessCount: number;
@@ -699,7 +698,7 @@ export async function dbInsertShare(
     RETURNING
       id, workspace_id AS "workspaceId", resource_type AS "resourceType", resource_id AS "resourceId",
       token_prefix AS "tokenPrefix", permission, valid_from AS "validFrom", valid_until AS "validUntil",
-      revoked_at AS "revokedAt", created_by AS "createdBy", created_at AS "createdAt",
+      revoked_at AS "revokedAt", created_at AS "createdAt",
       last_accessed_at AS "lastAccessedAt", access_count AS "accessCount";
   `;
   const rows = await query<DbShareRow>(sql, [
@@ -776,7 +775,7 @@ export async function dbListShares(workspaceId: string): Promise<DbShareRow[]> {
     SELECT
       id, workspace_id AS "workspaceId", resource_type AS "resourceType", resource_id AS "resourceId",
       token_prefix AS "tokenPrefix", permission, valid_from AS "validFrom", valid_until AS "validUntil",
-      revoked_at AS "revokedAt", created_by AS "createdBy", created_at AS "createdAt",
+      revoked_at AS "revokedAt", created_at AS "createdAt",
       last_accessed_at AS "lastAccessedAt", access_count AS "accessCount"
     FROM octo.shares
     WHERE workspace_id = $1

@@ -42,6 +42,7 @@ import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
 import { sendStaticFile } from './static-file';
 import { guestSlug, personalSlug } from '../lib/provisioning-slug';
+import { signSessionToken, verifySessionToken } from '../lib/session-token';
 import {
   generateTotpSecret,
   totpProvisioningUri,
@@ -360,10 +361,12 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
     };
   }
 
-  // 2. Direct session / principal ID token (e.g. from guest login).
-  // Shape-check before querying so a malformed token returns 401 rather than
-  // surfacing a Postgres uuid cast error as a 500.
-  if (!UUID_PATTERN.test(token)) {
+  // 2. Signed session token (guest login / OAuth callback). A raw principal UUID
+  // is deliberately NOT accepted: it is a public identifier that also rides in
+  // media query strings, so treating it as a bearer credential would let anyone
+  // who observes it act as that principal (ISS-1).
+  const sessionPrincipalId = verifySessionToken(token);
+  if (!sessionPrincipalId) {
     return null;
   }
 
@@ -377,7 +380,7 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
     is_platform_owner: boolean;
   }>(
     'SELECT id, auth_user_id, email, display_name, avatar_url, is_guest, is_platform_owner FROM octo.principals WHERE id = $1',
-    [token]
+    [sessionPrincipalId]
   );
 
   if (rows.length === 0) return null;
@@ -951,7 +954,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           await dbInsertMembership(ws.id, principal.id, 'owner');
         }
 
-        res.writeHead(302, { Location: `${origin}/#token=${principal.id}` });
+        res.writeHead(302, { Location: `${origin}/#token=${signSessionToken(principal.id)}` });
         res.end();
         return;
       } catch (err) {
@@ -1004,7 +1007,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           name: workspace.name,
           role: 'owner',
         },
-        sessionToken: principal.id,
+        sessionToken: signSessionToken(principal.id),
       });
       return;
     }
