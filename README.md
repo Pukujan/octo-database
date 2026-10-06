@@ -15,6 +15,10 @@ Personal files, family media, work projects, research systems, and AI agents oft
 - **Google Drive**: Scalable personal cold storage (utilizing your Google One / AI Pro 5TB pooled quota) for archived media.
 - **One Platform API & Scoped Agent Keys**: Users and autonomous coding agents interact with logical file IDs and workspace machine tokens. Master database and cloud credentials stay on the server. The one deliberate exception is a workspace's own provisioned database: its connection string is returned once to the caller that created it, and it reaches no Octo control-plane data.
 
+> **Building a project that Octo serves?** Octo is that project's data layer. Do not
+> stand up a database of your own — provision the workspace database through Octo and
+> connect with an ordinary Postgres client. See **[docs/consuming-octo.md](docs/consuming-octo.md)**.
+
 ---
 
 ## Shipped slices & live architecture
