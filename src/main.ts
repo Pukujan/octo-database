@@ -298,12 +298,37 @@ function render(): void {
   document.documentElement.dataset.octoSystem = state.theme;
   if (location.pathname.match(/^\/share\/.+/)) { void renderPublicShare(); return; }
   if (!state.token || !state.principal) renderLogin(); else renderApp();
+  finishReveal();
 }
 
 function notify(message: string): void {
   state.notice = message;
   render();
   window.setTimeout(() => { if (state.notice === message) { state.notice = ''; render(); } }, 3200);
+}
+
+// notify() only flashes a toast. This brings a control that was just drawn
+// (the confirmation code, or the one-time secret) into the visible viewport.
+// Set before render(). A workspace load can paint again after the click handler,
+// which rebuilds the page and would leave the form under the fold. The flag stays
+// until a render that is not still loading.
+let revealAccess: 'form' | 'secret' | '' = '';
+
+function reveal(selector: string, block: ScrollLogicalPosition = 'nearest'): void {
+  const node = document.querySelector(selector);
+  if (!(node instanceof HTMLElement)) return;
+  // innerHTML has just been replaced. Measuring forces layout so the scroll
+  // lands on the new form instead of the empty one from the previous paint.
+  node.getBoundingClientRect();
+  node.scrollIntoView({ block, inline: 'nearest' });
+}
+
+function finishReveal(): void {
+  if (!revealAccess || state.loading) return;
+  const mode = revealAccess;
+  revealAccess = '';
+  if (mode === 'secret') reveal('.one-time-notice', 'start');
+  else if (state.view === 'access') reveal('.access-create-form .button', 'end');
 }
 
 function openModal(modal: Modal): void { state.modal = modal; state.modalError = ''; render(); }
@@ -359,7 +384,10 @@ root.addEventListener('click', async (event) => {
   const view = target.dataset.view as View | undefined;
   if (view) {
     state.view = view;
-    if (view === 'access') await loadConfirmCode();
+    if (view === 'access') {
+      revealAccess = 'form';
+      await loadConfirmCode();
+    }
     render();
     return;
   }
@@ -437,6 +465,7 @@ root.addEventListener('submit', async (event) => {
       const result = await api<{ apiKey: ApiKey; rawSecret: string }>('/api/keys', { method: 'POST', body: JSON.stringify({ name: String(data.get('name') ?? '').trim(), workspaceId: data.get('scope') === 'account' ? null : wsId(), expiresInDays: Number(data.get('expires')) || undefined, confirmSecret: String(data.get('secret') ?? ''), mfaCode: String(data.get('mfaCode') ?? '') || undefined }) });
       state.keys = [result.apiKey, ...state.keys]; state.oneTimeSecret = result.rawSecret; state.oneTimeKind = 'key'; state.modal = null;
       await loadConfirmCode();
+      revealAccess = 'secret';
       render();
     } else if (form.dataset.form === 'share') {
       const expiry = Number(data.get('expires')) || null;
