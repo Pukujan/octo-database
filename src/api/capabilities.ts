@@ -6,7 +6,7 @@
  * description is documentation, never the enforcement mechanism.
  */
 
-export type OctoScope = 'read' | 'write' | 'delete' | 'files' | 'admin';
+export type OctoScope = 'read' | 'write' | 'delete' | 'files';
 
 export interface CapabilityDescriptor {
   action: string;
@@ -115,6 +115,13 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
     description: 'Read the activity feed for an authorized workspace.',
   },
   {
+    action: 'ops.list',
+    method: 'GET',
+    path: '/api/ops/events?workspaceId=<id>&errorCode=<code>',
+    requiredScope: 'read',
+    description: 'List structured operational failure events for an authorized workspace.',
+  },
+  {
     action: 'keys.revoke',
     method: 'DELETE',
     path: '/api/keys/<keyId>',
@@ -124,24 +131,49 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
 ];
 
 /**
- * Actions that require the `admin` scope. `admin` names cross-tenant authority,
- * so it is platform-owner-only: a key may carry it only when its principal is a
- * platform owner, and only a platform owner may grant it. Listed separately so
- * the enforcement is visible rather than implied.
+ * Named key classes: the authority profiles a consumer is provisioned under.
+ *
+ * A class is a mint-time preset over the real scopes, never a second
+ * authorization dimension -- a key stores only its resolved `scopes`, and every
+ * route is decided by `requireScope`. The catalog exists so a consumer can be
+ * handed a profile by name ("analytics") whose reach is documented, instead of a
+ * hand-picked scope list whose reach is left implicit.
+ *
+ * Every class is still bounded by workspace membership, role, the workspace
+ * binding of a scoped key, provider availability, and the human confirmation /
+ * MFA gates. None of them exposes SQL or a direct database surface.
  */
-export const ADMIN_CAPABILITIES: CapabilityDescriptor[] = [
-  {
-    action: 'workspaces.delete.any',
-    method: 'DELETE',
-    path: '/api/workspaces/<id>',
-    requiredScope: 'admin',
+export interface KeyClassProfile {
+  label: string;
+  description: string;
+  scopes: OctoScope[];
+}
+
+export const KEY_CLASSES = {
+  analytics: {
+    label: 'Analytics',
     description:
-      'Delete a workspace the caller does not own. Also requires a human session and the confirmation secret.',
+      'Read-only workspace, job, activity, and share metadata, plus RAG retrieval. No file or gallery bytes and no mutations.',
+    scopes: ['read'],
   },
-];
+  'agent-read': {
+    label: 'Agent (read-only)',
+    description:
+      'Analytics access plus file, gallery, and media reads. No writes and no destructive actions.',
+    scopes: ['read', 'files'],
+  },
+  'program-write': {
+    label: 'Program (write)',
+    description:
+      'Agent-read access plus upload, restore, job enqueue/run, document ingestion, and share creation. No delete, archive, or revocation.',
+    scopes: ['read', 'write', 'files'],
+  },
+} as const satisfies Record<string, KeyClassProfile>;
+
+export type KeyClass = keyof typeof KEY_CLASSES;
 
 /**
- * Named permission presets for the key picker, mapped onto the five real scopes.
+ * Named permission presets for the key picker, mapped onto the four real scopes.
  * `custom` means an explicit scope list instead.
  */
 export const SCOPE_PRESETS: { id: string; label: string; scopes: OctoScope[] }[] = [

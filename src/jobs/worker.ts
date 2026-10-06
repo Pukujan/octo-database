@@ -33,6 +33,27 @@ export interface WorkerDeps {
   archive?: ArchiveDeps;
   /** Loads the file record an archive/restore job targets. */
   loadArchiveTarget?: (workspaceId: string, fileId: string) => Promise<ArchiveFileRecord | null>;
+  /**
+   * Resolves the file a thumbnail job targets, pinned to the job's workspace.
+   * The job payload is client-supplied and never trusted for the object key or
+   * MIME type; this lookup is the authority for both.
+   */
+  loadFileTarget?: (workspaceId: string, fileId: string) => Promise<{ storageKey: string; mimeType: string } | null>;
+  /**
+   * Records a structured operational failure (issue #140, slice O1). Best-effort:
+   * the implementation must swallow its own errors so capture never breaks the
+   * worker path. Absent in tests and non-server wiring.
+   */
+  recordOpsEvent?: (event: {
+    workspaceId: string;
+    source: 'worker';
+    eventType: string;
+    errorCode: string;
+    severity: 'warning' | 'error' | 'critical';
+    detail: Record<string, unknown>;
+    jobId: string;
+    jobType: string;
+  }) => Promise<void>;
   log?: (message: string) => void;
 }
 
@@ -50,21 +71,32 @@ export interface JobOutcome {
  * Handles a thumbnail job. Idempotency comes from the stable derivative key:
  * re-running regenerates or reuses `derived/{fileId}/thumb.webp` rather than
  * creating a second artifact.
+ *
+ * The payload supplies only the file id. The object key and MIME type come from
+ * the file record pinned to the job's workspace, so a job cannot be pointed at
+ * another tenant's object (a confused-deputy read) and cannot poison a
+ * derivative the caller does not own.
  */
-export async function handleThumbnailJob(
-  job: ClaimedJob,
-  store: ObjectStore
-): Promise<{ ok: true; detail: string } | { ok: false; code: string; summary: string }> {
+export async function handleThumbnailJob(job: ClaimedJob, deps: WorkerDeps): Promise<HandlerResult> {
   const fileId = job.payload['fileId'];
-  const storageKey = job.payload['storageKey'];
-  const mimeType = job.payload['mimeType'];
 
-  if (typeof fileId !== 'string' || typeof storageKey !== 'string' || typeof mimeType !== 'string') {
+  if (typeof fileId !== 'string') {
     // Malformed payload will never succeed on retry.
-    return { ok: false, code: 'INVALID_PAYLOAD', summary: 'Job payload is missing fileId, storageKey, or mimeType' };
+    return { ok: false, code: 'INVALID_PAYLOAD', summary: 'Job payload is missing fileId', retryable: false };
   }
 
-  const thumb = await ensureThumbnail(store, fileId, storageKey, mimeType);
+  if (!deps.loadFileTarget) {
+    return { ok: false, code: 'FILE_LOOKUP_UNAVAILABLE', summary: 'File lookup is not configured on this worker', retryable: false };
+  }
+
+  const target = await deps.loadFileTarget(job.workspaceId, fileId);
+  if (!target) {
+    // The file was deleted after the job was queued. Resolve it as a benign
+    // no-op rather than a failure the owner cannot clear.
+    return { ok: true, detail: `no-op: file ${fileId} no longer exists` };
+  }
+
+  const thumb = await ensureThumbnail(deps.store, fileId, target.storageKey, target.mimeType);
   if (!thumb) {
     return { ok: false, code: 'NO_DERIVATIVE', summary: `No thumbnail produced for ${fileId}` };
   }
@@ -127,7 +159,7 @@ export async function processJob(job: ClaimedJob, deps: WorkerDeps): Promise<Job
     let outcome: HandlerResult;
 
     if (job.jobType === 'thumbnail') {
-      outcome = await handleThumbnailJob(job, deps.store);
+      outcome = await handleThumbnailJob(job, deps);
     } else if (job.jobType === 'archive_file') {
       outcome = await handleArchiveJob(job, deps, 'archive');
     } else if (job.jobType === 'restore_file') {
@@ -147,11 +179,31 @@ export async function processJob(job: ClaimedJob, deps: WorkerDeps): Promise<Job
       outcome.retryable ??
       (outcome.code !== 'INVALID_PAYLOAD' && outcome.code !== 'UNKNOWN_JOB_TYPE');
     await deps.fail(job, outcome.code, outcome.summary, retryable);
+    await deps.recordOpsEvent?.({
+      workspaceId: job.workspaceId,
+      source: 'worker',
+      eventType: 'job.failed',
+      errorCode: outcome.code,
+      severity: retryable ? 'warning' : 'error',
+      detail: { summary: outcome.summary, retryable, attempt: job.attempt },
+      jobId: job.jobId,
+      jobType: job.jobType,
+    });
     await deps.activity(job, `Job ${job.jobType} ${retryable ? 'failed, will retry' : 'failed permanently'}: ${outcome.summary}`);
     return { jobId: job.jobId, status: retryable ? 'retry' : 'failed', detail: outcome.summary };
   } catch (err: unknown) {
     const summary = err instanceof Error ? err.message : String(err);
     await deps.fail(job, 'HANDLER_EXCEPTION', summary, true);
+    await deps.recordOpsEvent?.({
+      workspaceId: job.workspaceId,
+      source: 'worker',
+      eventType: 'job.exception',
+      errorCode: 'HANDLER_EXCEPTION',
+      severity: 'error',
+      detail: { summary, attempt: job.attempt },
+      jobId: job.jobId,
+      jobType: job.jobType,
+    });
     await deps.activity(job, `Job ${job.jobType} threw: ${summary}`);
     return { jobId: job.jobId, status: 'retry', detail: summary };
   }

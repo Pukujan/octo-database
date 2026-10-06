@@ -16,7 +16,7 @@ Do not claim a queued job executed or a branch-only file is installed.
 
 ## Helpers
 
-- ACS: `3a381eba11c6262c702f5d696878c371342e859a`.
+- ACS: `38f8f52e8d210db3ce258bf911ebb560c6e0fe4c`.
 - PCM: `4e2385474b4af9249ca009cbdcb38c4498932475`.
 - CGM 0.5.12: `6831f91e165b62d719c05eb492f7375fa932b560`, all eight modules.
 

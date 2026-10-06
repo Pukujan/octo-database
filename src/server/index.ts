@@ -32,6 +32,8 @@ import {
   AUTH_GUIDANCE,
   capabilitiesForScopes,
   hasScope,
+  KEY_CLASSES,
+  KeyClass,
   minimumRoleForCapability,
   OctoScope,
 } from '../api/capabilities';
@@ -40,6 +42,16 @@ import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
 import { sendStaticFile } from './static-file';
 import { guestSlug, personalSlug } from '../lib/provisioning-slug';
+import { signSessionToken, verifySessionToken } from '../lib/session-token';
+import {
+  generateTotpSecret,
+  totpProvisioningUri,
+  verifyTotpCode,
+  generateRecoveryCodes,
+  hashRecoveryCode,
+  encryptSecret,
+  decryptSecret,
+} from '../lib/mfa';
 import {
   dbCountTransientFiles,
   dbCreateWorkspaceAtomic,
@@ -50,6 +62,13 @@ import {
   dbGetAccountWideKeyId,
   dbGetAuthorizedWorkspaces,
   dbGetConfirmSecretHash,
+  dbGetMfa,
+  dbSetMfaPending,
+  dbConfirmMfa,
+  dbSetMfaRecoveryCodes,
+  dbConsumeMfaRecoveryCode,
+  dbClearMfa,
+  MfaRecord,
   dbGetFile,
   dbGetWorkspaceById,
   dbGetWorkspaceMembership,
@@ -74,10 +93,12 @@ import {
   dbRetryJob,
   dbFailJob,
   dbListActivity,
+  dbListOpsEvents,
   dbListJobs,
   dbListShares,
   dbListWorkspaceFiles,
   dbRecordActivity,
+  dbRecordOpsEvent,
   dbResolveShareById,
   dbResolveShareByTokenHash,
   dbRevokeShare,
@@ -89,6 +110,7 @@ import {
   queryService,
   bindRequestIdentity,
   runWithRequestIdentity,
+  requestIdentity,
   testDbConnection,
 } from './db';
 import { Principal, ROLE_HIERARCHY, WorkspaceRole } from '../types/auth';
@@ -339,10 +361,12 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
     };
   }
 
-  // 2. Direct session / principal ID token (e.g. from guest login).
-  // Shape-check before querying so a malformed token returns 401 rather than
-  // surfacing a Postgres uuid cast error as a 500.
-  if (!UUID_PATTERN.test(token)) {
+  // 2. Signed session token (guest login / OAuth callback). A raw principal UUID
+  // is deliberately NOT accepted: it is a public identifier that also rides in
+  // media query strings, so treating it as a bearer credential would let anyone
+  // who observes it act as that principal (ISS-1).
+  const sessionPrincipalId = verifySessionToken(token);
+  if (!sessionPrincipalId) {
     return null;
   }
 
@@ -356,7 +380,7 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
     is_platform_owner: boolean;
   }>(
     'SELECT id, auth_user_id, email, display_name, avatar_url, is_guest, is_platform_owner FROM octo.principals WHERE id = $1',
-    [token]
+    [sessionPrincipalId]
   );
 
   if (rows.length === 0) return null;
@@ -383,6 +407,12 @@ interface MediaAuthorization {
   principalId: string;
   workspaceId: string;
   fileId: string;
+  /**
+   * Set when a share token authorized the request. A fallback redirect must then
+   * stay share-scoped: widening a share authorization into a principal-scoped
+   * credential would hand a logged-out link holder a broader, longer-lived token.
+   */
+  share?: { shareId: string; validUntil: string | null };
 }
 
 /**
@@ -438,6 +468,7 @@ async function authorizeMediaRequest(
     principalId: share.createdBy,
     workspaceId: claims.workspaceId,
     fileId: claims.fileId,
+    share: { shareId: claims.shareId, validUntil: share.validUntil },
   };
 }
 
@@ -467,6 +498,22 @@ async function drainQueueOnce(targetWorkspaceId?: string, maxJobs = 10): Promise
       },
       archive: archiveDeps ?? undefined,
       loadArchiveTarget: archiveDeps ? loadArchiveRecord : undefined,
+      // Resolve the thumbnail target through the trusted service pool: the app
+      // pool is RLS-fenced and the scheduler drain runs with no caller identity.
+      // Pinning to the job's workspace is what stops a payload from pointing the
+      // worker at another tenant's object.
+      loadFileTarget: async (workspaceId, fileId) => {
+        const file = await dbGetArchiveRecord(workspaceId, fileId);
+        return file ? { storageKey: file.storageKey, mimeType: file.mimeType } : null;
+      },
+      recordOpsEvent: async (event) => {
+        // Best-effort: capture must never break the drain.
+        try {
+          await dbRecordOpsEvent(event);
+        } catch {
+          // swallow
+        }
+      },
     });
 
     // Only return outcomes belonging to the caller's workspace to prevent cross-workspace data leakage
@@ -591,6 +638,10 @@ function slugify(name: string): string {
  * never satisfy it, whatever its scopes -- that is the structural answer to "can
  * a blind agent delete a workspace".
  *
+ * When `options.requireMfa` is set and the principal has confirmed MFA, a valid
+ * TOTP code (or a one-time recovery code) is additionally required. A used
+ * recovery code is consumed. Principals without MFA enrolled are unaffected.
+ *
  * Fails closed: an account that never set a secret refuses with
  * CONFIRM_SECRET_NOT_SET rather than falling open. Returns true when the request
  * may proceed, having already written the refusal response otherwise.
@@ -598,7 +649,8 @@ function slugify(name: string): string {
 async function confirmGate(
   res: ServerResponse,
   auth: AuthContext,
-  suppliedSecret: unknown
+  suppliedSecret: unknown,
+  options: { requireMfa?: boolean; mfaCode?: unknown } = {}
 ): Promise<boolean> {
   if (auth.apiKey) {
     sendJson(res, 403, {
@@ -620,7 +672,41 @@ async function confirmGate(
     return false;
   }
 
+  if (options.requireMfa) {
+    const mfa = await dbGetMfa(auth.principal.id);
+    if (mfa?.confirmedAt) {
+      const ok = await verifyMfaCode(auth.principal.id, mfa, options.mfaCode);
+      if (!ok) {
+        sendJson(res, 403, {
+          error: 'MFA_CODE_INVALID: A valid authenticator code is required to complete this command.',
+        });
+        return false;
+      }
+    }
+  }
+
   return true;
+}
+
+/**
+ * Verifies a TOTP code against the enrolled secret, falling back to a one-time
+ * recovery code (which is consumed on success). Returns false for a missing or
+ * malformed code.
+ */
+async function verifyMfaCode(principalId: string, mfa: MfaRecord, supplied: unknown): Promise<boolean> {
+  if (typeof supplied !== 'string' || !supplied.trim()) return false;
+  let secret: string;
+  try {
+    secret = decryptSecret(mfa.secretEncrypted);
+  } catch {
+    // A key rotation or corrupt record must fail closed, not fall open.
+    return false;
+  }
+  if (verifyTotpCode(secret, supplied)) return true;
+
+  // Recovery codes are one-time. Consume atomically so two concurrent step-ups
+  // presenting the same code cannot both succeed.
+  return dbConsumeMfaRecoveryCode(principalId, hashRecoveryCode(supplied));
 }
 
 /** Attributes an agent action to its principal for audit. Best-effort. */
@@ -635,6 +721,35 @@ async function attributeAgentAction(
     await dbRecordActivity(workspaceId, eventType, summary, null, auth.principal.id);
   } catch {
     // Audit attribution must never break the request path.
+  }
+}
+
+/**
+ * Records a structured operational failure (issue #140, slice O1). Best-effort:
+ * a capture failure is swallowed so it can never turn a handled error into a
+ * crash. Workspace attribution prefers the request's bound workspace scope, then
+ * a UUID `workspaceId` query param, else null (a platform-level event).
+ */
+async function captureOpsEvent(
+  req: IncomingMessage,
+  url: URL,
+  event: { eventType: string; errorCode: string; detail: Record<string, unknown> }
+): Promise<void> {
+  try {
+    const scoped = requestIdentity.getStore()?.workspaceId ?? null;
+    const fromQuery = url.searchParams.get('workspaceId');
+    const workspaceId = scoped ?? (fromQuery && UUID_PATTERN.test(fromQuery) ? fromQuery : null);
+    await dbRecordOpsEvent({
+      workspaceId,
+      source: 'api',
+      eventType: event.eventType,
+      errorCode: event.errorCode,
+      severity: 'error',
+      detail: event.detail,
+      route: `${req.method} ${url.pathname}`,
+    });
+  } catch {
+    // Operational capture must never break the request path.
   }
 }
 
@@ -839,7 +954,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           await dbInsertMembership(ws.id, principal.id, 'owner');
         }
 
-        res.writeHead(302, { Location: `${origin}/#token=${principal.id}` });
+        res.writeHead(302, { Location: `${origin}/#token=${signSessionToken(principal.id)}` });
         res.end();
         return;
       } catch (err) {
@@ -892,7 +1007,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           name: workspace.name,
           role: 'owner',
         },
-        sessionToken: principal.id,
+        sessionToken: signSessionToken(principal.id),
       });
       return;
     }
@@ -905,12 +1020,16 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
       // The client needs to know whether the destructive-command gate is armed so
-      // it can prompt for setup rather than letting the user hit a 412.
+      // it can prompt for setup rather than letting the user hit a 412, and whether
+      // MFA is enrolled so it can prompt for a code.
       const confirmSecretSet = Boolean(await dbGetConfirmSecretHash(auth.principal.id));
+      const mfa = await dbGetMfa(auth.principal.id);
       sendJson(res, 200, {
         principal: auth.principal,
         apiKey: auth.apiKey ?? null,
         confirmSecretSet,
+        mfaEnabled: Boolean(mfa?.confirmedAt),
+        mfaRecoveryCodesRemaining: mfa?.recoveryCodeHashes.length ?? 0,
       });
       return;
     }
@@ -950,6 +1069,161 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
       await dbSetConfirmSecret(auth.principal.id, hashApiKeySecret(secret));
       sendJson(res, 200, { success: true, rotated: Boolean(existing) });
+      return;
+    }
+
+    // 2d. MFA (TOTP) status. Human session only, like the confirmation secret:
+    // MFA protects a person's own account, never an agent's.
+    if (pathname === '/api/me/mfa' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (auth.apiKey) {
+        sendJson(res, 403, { error: 'FORBIDDEN: MFA is managed from a human session, never an API key.' });
+        return;
+      }
+      const mfa = await dbGetMfa(auth.principal.id);
+      sendJson(res, 200, {
+        enabled: Boolean(mfa?.confirmedAt),
+        confirmedAt: mfa?.confirmedAt ?? null,
+        recoveryCodesRemaining: mfa?.recoveryCodeHashes.length ?? 0,
+      });
+      return;
+    }
+
+    // 2e. Begin MFA enrollment: mint a secret and return its provisioning URI
+    // once. The secret is stored encrypted and unconfirmed until a code proves it.
+    if (pathname === '/api/me/mfa/begin' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (auth.apiKey) {
+        sendJson(res, 403, { error: 'FORBIDDEN: MFA is managed from a human session, never an API key.' });
+        return;
+      }
+      const existing = await dbGetMfa(auth.principal.id);
+      if (existing?.confirmedAt) {
+        sendJson(res, 409, { error: 'MFA_ALREADY_ENABLED: Disable MFA before enrolling a new authenticator.' });
+        return;
+      }
+      const secret = generateTotpSecret();
+      let encrypted: string;
+      try {
+        encrypted = encryptSecret(secret);
+      } catch {
+        sendJson(res, 503, {
+          error: 'MFA_NOT_CONFIGURED: MFA enrollment requires OCTO_MFA_SECRET on the server.',
+        });
+        return;
+      }
+      await dbSetMfaPending(auth.principal.id, encrypted);
+      const label = auth.principal.email || auth.principal.displayName || auth.principal.id;
+      sendJson(res, 200, { secret, otpauthUri: totpProvisioningUri(secret, label) });
+      return;
+    }
+
+    // 2f. Confirm MFA enrollment with a code from the authenticator. Issues the
+    // one-time recovery codes exactly here.
+    if (pathname === '/api/me/mfa/confirm' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (auth.apiKey) {
+        sendJson(res, 403, { error: 'FORBIDDEN: MFA is managed from a human session, never an API key.' });
+        return;
+      }
+      const parsed = await readJsonObject(req);
+      const mfa = await dbGetMfa(auth.principal.id);
+      if (!mfa) {
+        sendJson(res, 400, { error: 'MFA_NOT_STARTED: Begin enrollment before confirming it.' });
+        return;
+      }
+      if (mfa.confirmedAt) {
+        sendJson(res, 409, { error: 'MFA_ALREADY_ENABLED: MFA is already enabled.' });
+        return;
+      }
+      let secret: string;
+      try {
+        secret = decryptSecret(mfa.secretEncrypted);
+      } catch {
+        sendJson(res, 500, { error: 'MFA_SECRET_UNREADABLE: Re-enroll the authenticator.' });
+        return;
+      }
+      if (!verifyTotpCode(secret, parsed.code)) {
+        sendJson(res, 403, { error: 'MFA_CODE_INVALID: That code did not match. Try the next one.' });
+        return;
+      }
+      const recoveryCodes = generateRecoveryCodes();
+      await dbConfirmMfa(auth.principal.id, recoveryCodes.map(hashRecoveryCode));
+      sendJson(res, 200, { recoveryCodes });
+      return;
+    }
+
+    // 2g. Disable MFA. Requires a valid current code or a one-time recovery code
+    // (the recovery path), so a lost authenticator does not lock the account out.
+    if (pathname === '/api/me/mfa/disable' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (auth.apiKey) {
+        sendJson(res, 403, { error: 'FORBIDDEN: MFA is managed from a human session, never an API key.' });
+        return;
+      }
+      const parsed = await readJsonObject(req);
+      const mfa = await dbGetMfa(auth.principal.id);
+      if (!mfa?.confirmedAt) {
+        sendJson(res, 409, { error: 'MFA_NOT_ENABLED: MFA is not enabled.' });
+        return;
+      }
+      if (!(await verifyMfaCode(auth.principal.id, mfa, parsed.code))) {
+        sendJson(res, 403, { error: 'MFA_CODE_INVALID: Enter a current authenticator code or a recovery code.' });
+        return;
+      }
+      await dbClearMfa(auth.principal.id);
+      sendJson(res, 200, { disabled: true });
+      return;
+    }
+
+    // 2h. Rotate recovery codes. Requires a current authenticator code (not a
+    // recovery code), and returns the new set once.
+    if (pathname === '/api/me/mfa/recovery-codes' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (auth.apiKey) {
+        sendJson(res, 403, { error: 'FORBIDDEN: MFA is managed from a human session, never an API key.' });
+        return;
+      }
+      const parsed = await readJsonObject(req);
+      const mfa = await dbGetMfa(auth.principal.id);
+      if (!mfa?.confirmedAt) {
+        sendJson(res, 409, { error: 'MFA_NOT_ENABLED: MFA is not enabled.' });
+        return;
+      }
+      let secret: string;
+      try {
+        secret = decryptSecret(mfa.secretEncrypted);
+      } catch {
+        sendJson(res, 500, { error: 'MFA_SECRET_UNREADABLE: Re-enroll the authenticator.' });
+        return;
+      }
+      if (!verifyTotpCode(secret, parsed.code)) {
+        sendJson(res, 403, { error: 'MFA_CODE_INVALID: A current authenticator code is required to rotate recovery codes.' });
+        return;
+      }
+      const recoveryCodes = generateRecoveryCodes();
+      await dbSetMfaRecoveryCodes(auth.principal.id, recoveryCodes.map(hashRecoveryCode));
+      sendJson(res, 200, { recoveryCodes });
       return;
     }
 
@@ -1048,6 +1322,18 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
 
+      // Creating a workspace mints a tenancy boundary and its first key. Like
+      // deletion, it is stamped by a human session plus the confirmation secret,
+      // so an agent holding the account-wide key cannot create workspaces at all.
+      // When the principal has MFA enrolled, a valid code is required too.
+      if (!(await confirmGate(res, auth, parsed.confirmSecret, { requireMfa: true, mfaCode: parsed.mfaCode })))
+        return;
+
+      // Slice 16: a second, independent guard. Even a compromised browser session
+      // that holds the confirmation secret may create at most one workspace per
+      // rolling day. The platform owner is exempt. The auto-provisioned personal
+      // sandbox does not count. Enforced inside dbCreateWorkspaceAtomic under a
+      // per-principal advisory lock so concurrent creates cannot race the quota.
       const workspaceId = randomUUID();
       const keyId = randomUUID();
       const rawSecret = `octo_live_ws_${randomUUID().replace(/-/g, '')}`;
@@ -1065,6 +1351,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           keyPrefix: 'octo_live_ws',
           keyName: `${name.trim()} workspace key`,
           keyScopes: ['read', 'write', 'files'],
+          enforceDailyLimit: !auth.principal.isPlatformOwner,
         });
 
         await dbRecordActivity(
@@ -1095,6 +1382,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           });
           return;
         }
+        if ((err as { code?: string }).code === 'WORKSPACE_DAILY_LIMIT') {
+          sendJson(res, 429, {
+            error: 'WORKSPACE_DAILY_LIMIT: You can create one workspace per day. Try again after 24 hours.',
+          });
+          return;
+        }
         throw err;
       }
       return;
@@ -1118,7 +1411,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       }
 
       const parsed = await readJsonObject(req);
-      if (!(await confirmGate(res, auth, parsed.confirmSecret))) return;
+      // Deletion is the most destructive command, so it is the first to require a
+      // per-principal MFA step-up: when the principal has an authenticator enrolled,
+      // a valid TOTP code (or a one-time recovery code) is required in addition to
+      // the confirmation secret. Principals without MFA enrolled are unaffected.
+      if (!(await confirmGate(res, auth, parsed.confirmSecret, { requireMfa: true, mfaCode: parsed.mfaCode })))
+        return;
 
       const workspace = await dbGetWorkspaceById(workspaceId);
       if (!workspace) {
@@ -1437,14 +1735,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
       if (!thumb) {
         // Not an image (or original missing/corrupt): send the caller to the full
-        // object instead of inventing a derivative.
+        // object instead of inventing a derivative. The fallback keeps the same
+        // scope that authorized this request, and a share-scoped fallback is
+        // capped at the share's own expiry.
+        const fallback = auth.share
+          ? { kind: 'share' as const, fileId, workspaceId, shareId: auth.share.shareId }
+          : { kind: 'principal' as const, fileId, workspaceId, principalId };
         res.writeHead(302, {
-          Location: signMediaUrl('/api/files/content', {
-            kind: 'principal',
-            fileId,
-            workspaceId,
-            principalId,
-          }),
+          Location: signMediaUrl('/api/files/content', fallback, 3600, auth.share?.validUntil ?? null),
         });
         res.end();
         return;
@@ -1702,6 +2000,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         name,
         workspaceId: requestedWorkspaceId,
         scopes: requestedScopes,
+        keyClass,
         expiresInDays,
       } = parsed;
 
@@ -1727,11 +2026,28 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         expiresAt = d.toISOString();
       }
 
+      // A key class names a documented authority profile and expands to its
+      // scopes; it is a preset over the real scopes, never a second
+      // authorization dimension. Class and an explicit scope list are mutually
+      // exclusive.
+      const ALLOWED_SCOPES = ['read', 'write', 'files', 'delete'];
+      if (keyClass !== undefined && requestedScopes !== undefined) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: keyClass and scopes are mutually exclusive' });
+        return;
+      }
+
       // Default is non-destructive: a new token can read and write files but
       // cannot delete anything unless the delete scope is requested explicitly.
-      const ALLOWED_SCOPES = ['read', 'write', 'files', 'delete', 'admin'];
       let scopes: string[] = ['read', 'write', 'files'];
-      if (requestedScopes !== undefined) {
+      if (keyClass !== undefined) {
+        if (typeof keyClass !== 'string' || !Object.prototype.hasOwnProperty.call(KEY_CLASSES, keyClass)) {
+          sendJson(res, 400, {
+            error: `BAD_REQUEST: keyClass must be one of: ${Object.keys(KEY_CLASSES).join(', ')}`,
+          });
+          return;
+        }
+        scopes = [...KEY_CLASSES[keyClass as KeyClass].scopes];
+      } else if (requestedScopes !== undefined) {
         if (!Array.isArray(requestedScopes) || requestedScopes.length === 0) {
           sendJson(res, 400, { error: 'BAD_REQUEST: scopes must be a non-empty array' });
           return;
@@ -1786,12 +2102,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         }
       }
 
-      // `admin` names platform-owner authority, so only a platform owner may hold
-      // or grant it. A key caller could otherwise mint itself a wider key.
-      if (scopes.includes('admin') && !auth.principal.isPlatformOwner) {
-        sendJson(res, 403, { error: 'FORBIDDEN: The admin scope is reserved for platform owners.' });
+      // Minting a credential grants authority, so it carries the same human stamp
+      // as workspace creation and deletion: a human session plus the confirmation
+      // secret. An API-key caller is refused outright, so a leaked agent token
+      // cannot mint itself a wider key. When the principal has MFA enrolled, a
+      // valid code is required too.
+      if (!(await confirmGate(res, auth, parsed.confirmSecret, { requireMfa: true, mfaCode: parsed.mfaCode })))
         return;
-      }
 
       const isAccountWide = !workspaceId;
 
@@ -1890,6 +2207,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
       }
+      // A share link grants read (or upload) access to this workspace's gallery,
+      // so minting one needs the write scope; the role check below still applies.
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
+        return;
+      }
 
       const parsed = (await readJsonObject(req)) as Record<string, any>;
       const { workspaceId, resourceType, resourceId, permission, expiresInHours, validUntil } = parsed;
@@ -1982,6 +2305,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
         return;
       }
+      // Listing a workspace's share links is a read of its metadata.
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
 
       const workspaceId = url.searchParams.get('workspaceId');
       if (!workspaceId) {
@@ -2011,6 +2339,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       const auth = await authenticateRequest(req);
       if (!auth) {
         sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      // Revoking a credential is destructive, so it needs the delete scope.
+      if (!requireScope(auth, 'delete')) {
+        scopeDenied(res, 'delete');
         return;
       }
 
@@ -2133,7 +2466,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
 
-      const scopes = auth.apiKey ? auth.apiKey.scopes : ['read', 'write', 'delete', 'files', 'admin'];
+      const scopes = auth.apiKey ? auth.apiKey.scopes : ['read', 'write', 'delete', 'files'];
       let workspace: { id: string; role: WorkspaceRole } | null = null;
       let unavailable: { action: string; reason: 'PROVIDER_UNAVAILABLE' }[] = [];
       let capabilities = capabilitiesForScopes(scopes);
@@ -2341,6 +2674,41 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       }
 
       sendJson(res, 200, await dbListActivity(workspaceId));
+      return;
+    }
+
+    // Operational events: GET /api/ops/events?workspaceId=...&errorCode=...
+    // Structured failure records for diagnosis (issue #140, slice O1).
+    if (pathname === '/api/ops/events' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      const errorCode = url.searchParams.get('errorCode');
+      sendJson(res, 200, { events: await dbListOpsEvents(workspaceId, errorCode) });
       return;
     }
 
@@ -2640,6 +3008,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     sendJson(res, 404, { error: `Not found: ${req.method} ${pathname}` });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
+    await captureOpsEvent(req, url, {
+      eventType: 'request.error',
+      errorCode: 'INTERNAL_SERVER_ERROR',
+      detail: { message, method: req.method, path: pathname },
+    });
     sendJson(res, 500, { error: `INTERNAL_SERVER_ERROR: ${message}` });
   }
 }

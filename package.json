@@ -11,6 +11,7 @@
     "production-smoke": "tsx scripts/production-smoke.ts",
     "capture-ops": "tsx scripts/capture-ops.ts",
     "backup": "tsx scripts/octo-backup.ts",
+    "sync": "tsx scripts/octo-sync.ts",
     "export-vectors": "tsx scripts/export-vectors.ts",
     "mcp": "tsx scripts/octo-mcp.ts",
     "typecheck": "tsc --noEmit",
@@ -22,6 +23,7 @@
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@supabase/supabase-js": "^2.117.0",
     "@types/pg": "^8.23.1",
+    "otplib": "^13.5.0",
     "pg": "^8.23.1",
     "sharp": "^0.35.5"
   },

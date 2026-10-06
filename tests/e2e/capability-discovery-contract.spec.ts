@@ -10,6 +10,7 @@
 import { expect, test, APIRequestContext } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { queryService } from '../../src/server/db';
+import { CONFIRM_SECRET, setConfirmSecret } from './confirm-secret';
 
 interface GuestSession {
   principal: { id: string; isGuest: boolean };
@@ -49,7 +50,9 @@ async function createGuest(request: APIRequestContext): Promise<GuestSession> {
     data: { displayName: `Capability E2E ${randomUUID()}` },
   });
   expect(response.status()).toBe(201);
-  return (await response.json()) as GuestSession;
+  const session = (await response.json()) as GuestSession;
+  await setConfirmSecret(request, session.sessionToken);
+  return session;
 }
 
 async function createWorkspaceKey(
@@ -61,7 +64,7 @@ async function createWorkspaceKey(
 ): Promise<MintedKey> {
   const response = await request.post('/api/keys', {
     headers: bearer(sessionToken),
-    data: { name: `${name} ${randomUUID()}`, workspaceId, scopes },
+    data: { name: `${name} ${randomUUID()}`, workspaceId, scopes, confirmSecret: CONFIRM_SECRET },
   });
   expect(response.status()).toBe(201);
   return (await response.json()) as MintedKey;
@@ -78,7 +81,7 @@ test.describe('Workspace capability discovery contract', () => {
     const owner = await createGuest(request);
     const otherWorkspaceResponse = await request.post('/api/workspaces', {
       headers: bearer(owner.sessionToken),
-      data: { name: `Capability Other ${randomUUID()}` },
+      data: { name: `Capability Other ${randomUUID()}`, confirmSecret: CONFIRM_SECRET },
     });
     expect(otherWorkspaceResponse.status()).toBe(201);
     const otherWorkspace = (await otherWorkspaceResponse.json()).workspace as { id: string };
@@ -204,7 +207,11 @@ test.describe('Workspace capability discovery contract', () => {
 
     const accountKeyResponse = await request.post('/api/keys', {
       headers: bearer(owner.sessionToken),
-      data: { name: `capability account writer ${randomUUID()}`, scopes: ['write'] },
+      data: {
+        name: `capability account writer ${randomUUID()}`,
+        scopes: ['write'],
+        confirmSecret: CONFIRM_SECRET,
+      },
     });
     expect(accountKeyResponse.status()).toBe(201);
     const accountKey = (await accountKeyResponse.json()) as MintedKey;

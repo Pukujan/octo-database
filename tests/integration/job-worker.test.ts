@@ -89,6 +89,12 @@ function makeDeps(queue: FakeQueue, store: ObjectStore, overrides: Partial<Worke
       }
     },
     activity: async () => {},
+    // The worker resolves the object key and MIME type from the file record, not
+    // from the payload. This fake returns the canonical key for the seeded images.
+    loadFileTarget: async (workspaceId, fileId) => ({
+      storageKey: `workspaces/${workspaceId}/${fileId}/photo.png`,
+      mimeType: 'image/png',
+    }),
     ...overrides,
   };
 }
@@ -223,11 +229,31 @@ describe('Worker idempotency and convergence', () => {
   it('fails permanently on a malformed payload instead of retrying forever', async () => {
     const store = new InMemoryObjectStore();
     const queue = new FakeQueue();
-    queue.enqueue({ jobId: 'job-bad-payload', workspaceId: 'ws-1', payload: { fileId: 'f-5' } });
+    queue.enqueue({ jobId: 'job-bad-payload', workspaceId: 'ws-1', payload: {} });
 
     const outcomes = await drainQueue(makeDeps(queue, store));
     expect(outcomes[0]!.status).toBe('failed');
     expect(queue.jobs[0]!.state).toBe('failed');
+  });
+
+  it('ignores a payload-supplied storage key and MIME type, using the file record', async () => {
+    const store = new InMemoryObjectStore();
+    // The real target is an image; the payload claims a different object that is
+    // absent, and a non-image MIME type. Trusting the payload would produce no
+    // derivative; resolving the record produces one.
+    await seedImage(store, 'workspaces/ws-1/f-7/photo.png');
+    const queue = new FakeQueue();
+    queue.enqueue({
+      jobId: 'job-confused-deputy',
+      workspaceId: 'ws-1',
+      payload: { fileId: 'f-7', storageKey: 'other-tenant/secret.png', mimeType: 'video/mp4' },
+    });
+
+    const outcomes = await drainQueue(makeDeps(queue, store));
+
+    expect(outcomes[0]!.status).toBe('completed');
+    expect(store.objects.has(derivedThumbnailKey('f-7'))).toBe(true);
+    expect(store.objects.has('other-tenant/secret.png')).toBe(false);
   });
 
   it('never lets two workers claim the same queued job', async () => {
