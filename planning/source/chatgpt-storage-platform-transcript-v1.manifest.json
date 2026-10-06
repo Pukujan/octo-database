@@ -1,0 +1,17 @@
+{
+  "source_url": "https://chatgpt.com/share/6abd6e9d-fb54-83ea-9043-2d842641c04e",
+  "captured_at": "2026-10-06T09:16:47.323Z",
+  "capture_method": "Headless Chromium (Playwright) fetched the public share page over HTTPS; the conversation was read from the server-rendered react-router turbo-stream payload (`linear_conversation`) that backs the page, in order. Rendered on the local Windows workstation.",
+  "visible_message_count": 75,
+  "user_message_count": 29,
+  "assistant_message_count": 46,
+  "conversation_title": "Cheap VPS Pricing",
+  "conversation_created": "2026-09-30T20:18:38.028Z",
+  "conversation_updated": "2026-09-30T20:18:43.019Z",
+  "sha256": "a8b126a8cd533cd228b54e56fb0d487bc27782a39d1934ba0942ef5fe98b620b",
+  "transcript_file": "chatgpt-storage-platform-transcript-v1.md",
+  "transcript_bytes": 200781,
+  "completeness_status": "complete",
+  "notes_limitations": "All visible user and assistant text messages are captured in order and verbatim. Non-prose ChatGPT chrome is normalized: reaction badges (U+E200 \"message_reaction\" … U+E201) render as \"[reaction: <emoji>]\" and inline search-citation markers render as \"[cite: <ref>]\"; every other character is unchanged, including the original spelling. Non-text message nodes (tool/plugin output, hidden system prompts, model reasoning recaps) are excluded — tool outputs are redacted by the share page itself. No spelling, punctuation, or wording was corrected.",
+  "supersedes": null
+}
