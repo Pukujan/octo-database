@@ -17,7 +17,9 @@ Personal files, family media, work projects, research systems, and AI agents oft
 
 > **Building a project that Octo serves?** Octo is that project's data layer. Do not
 > stand up a database of your own — provision the workspace database through Octo, then
-> run SQL with your Octo API key or connect with an ordinary Postgres client. See
+> run SQL with your Octo API key or connect with an ordinary Postgres client. A human
+> mints the project's workspace-scoped key once (creating a workspace and minting a key
+> are human-stamped; an API key can never do either). See
 > **[docs/consuming-octo.md](docs/consuming-octo.md)**.
 
 ---
