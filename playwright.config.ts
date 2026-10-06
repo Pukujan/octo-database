@@ -39,6 +39,14 @@ export default defineConfig({
         DATABASE_URL:
           process.env['DATABASE_URL'] ??
           'postgresql://postgres:postgres@localhost:54329/postgres',
+        // The privileged provisioning connection (Slice 20). In CI the schema owner
+        // is the same superuser DATABASE_URL points at, so the workspace-database
+        // E2E can provision a real database and then query it through the SQL
+        // surface (Slice 21). A deployment points this at its own admin credential.
+        OCTO_ADMIN_URL:
+          process.env['OCTO_ADMIN_URL'] ??
+          process.env['DATABASE_URL'] ??
+          'postgresql://postgres:postgres@localhost:54329/postgres',
         // When set, the server runs its request path as the fenced `octo_app` role
         // (Slice 14). Left unset locally, the server falls back to DATABASE_URL.
         ...(process.env['OCTO_DB_URL'] ? { OCTO_DB_URL: process.env['OCTO_DB_URL'] } : {}),

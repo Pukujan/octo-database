@@ -46,6 +46,14 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
       'Provision a real PostgreSQL database owned by a workspace and return its connection string exactly once. Not available to workspace-scoped keys.',
   },
   {
+    action: 'workspaces.query',
+    method: 'POST',
+    path: '/api/workspaces/<id>/query',
+    requiredScope: 'read',
+    description:
+      'Run SQL against a workspace\'s own provisioned database with just an Octo API key -- no connection string, host, or port. The server authenticates as the workspace\'s own role; read scope runs in a read-only transaction, and write scope is required to mutate. Available to workspace-scoped keys for their own workspace.',
+  },
+  {
     action: 'files.list',
     method: 'GET',
     path: '/api/files?workspaceId=<id>',

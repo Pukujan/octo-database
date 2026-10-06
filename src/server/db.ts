@@ -1574,6 +1574,34 @@ export async function dbInsertWorkspaceDatabase(
   return rows[0]!;
 }
 
+// 6c. Provisioned-database credentials (Slice 21). Secret material, not tenant
+// data: the encrypted password is read only on the trusted service pool, which is
+// the only role the credential table grants. The fenced app pool cannot read it.
+
+/** The workspace's encrypted database password, or null when none is stored. */
+export async function dbGetWorkspaceDatabaseCredential(workspaceId: string): Promise<string | null> {
+  const rows = await queryService<{ passwordEncrypted: string }>(
+    `SELECT password_encrypted AS "passwordEncrypted"
+     FROM octo.workspace_database_credentials WHERE workspace_id = $1`,
+    [workspaceId]
+  );
+  return rows[0]?.passwordEncrypted ?? null;
+}
+
+/** Stores (or replaces) the encrypted password for a workspace's database. */
+export async function dbSetWorkspaceDatabaseCredential(
+  workspaceId: string,
+  passwordEncrypted: string
+): Promise<void> {
+  await queryService(
+    `INSERT INTO octo.workspace_database_credentials (workspace_id, password_encrypted, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (workspace_id)
+     DO UPDATE SET password_encrypted = EXCLUDED.password_encrypted, updated_at = now()`,
+    [workspaceId, passwordEncrypted]
+  );
+}
+
 /** Files in a transient archive state block a workspace delete. */
 export async function dbCountTransientFiles(workspaceId: string): Promise<number> {
   const rows = await query<{ count: string }>(

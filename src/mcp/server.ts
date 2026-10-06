@@ -102,6 +102,29 @@ export function createOctoMcpServer(api: OctoApi): McpServer {
   );
 
   server.tool(
+    'query_workspace_database',
+    'Run SQL against a workspace\'s own provisioned database using only the Octo token -- no connection string, host, or port. Read scope runs in a read-only transaction; write scope is required to mutate. A workspace-scoped token may query its own workspace.',
+    {
+      workspaceId: z.string().describe('The workspace whose database to query'),
+      sql: z.string().describe('The SQL to run'),
+      params: z.array(z.unknown()).optional().describe('Bind parameters ($1, $2, ...)'),
+      rowLimit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Maximum rows to return (default 1000, max 10000)'),
+    },
+    async ({ workspaceId, sql, params, rowLimit }) => {
+      try {
+        return asText(await api.queryWorkspaceDatabase({ workspaceId, sql, params, rowLimit }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
     'list_files',
     'List the files in a workspace.',
     { workspaceId: z.string().describe('The workspace to list files from') },

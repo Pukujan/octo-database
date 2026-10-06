@@ -83,6 +83,8 @@ Before running on gravebuster, ensure:
    - `GOOGLE_OAUTH_CLIENT_ID` & `GOOGLE_OAUTH_CLIENT_SECRET`
    - `OCTO_MEDIA_SECRET=<random_32_byte_secret>`
    - `OCTO_SESSION_SECRET=<random_32_byte_secret>`
+   - `OCTO_MFA_SECRET=<random_32_byte_secret>` (the envelope key for stored secrets: per-principal MFA, and the workspace database passwords the SQL surface authenticates with)
+   - `OCTO_ADMIN_URL=postgresql://postgres:<strong_random_password>@octo-db:5432/postgres` (the privileged provisioning connection for per-workspace databases)
    - `OCTO_GRAPH_PASSWORD=<random_secret>` (and the matching `OCTO_GRAPH_URL`; leave both unset to run without the graph engine)
    - Cloudflare R2 & Google Drive credentials
 

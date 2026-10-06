@@ -111,6 +111,26 @@ export function buildConnectionString(roleName: string, password: string, dbName
   return url.toString();
 }
 
+/**
+ * The connection string the SERVER itself uses to reach a workspace database.
+ *
+ * Distinct from `buildConnectionString` on one point: this keeps the provisioning
+ * connection's own endpoint. The server runs in the same network as Postgres, where
+ * the client-facing `OCTO_DB_PUBLIC_HOST` (a Tailscale name) does not resolve, so
+ * the internal endpoint -- `octo-db:5432` -- is the one that works from here.
+ */
+export function buildInternalConnectionString(
+  roleName: string,
+  password: string,
+  dbName: string
+): string {
+  const url = new URL(adminUrl);
+  url.username = roleName;
+  url.password = password;
+  url.pathname = `/${dbName}`;
+  return url.toString();
+}
+
 export interface ProvisionedDatabase {
   dbName: string;
   roleName: string;
@@ -222,4 +242,26 @@ export async function dropProvisionedDatabase(dbName: string, roleName: string):
   } finally {
     client.release();
   }
+}
+
+/**
+ * Resets a provisioned role's password and returns the new value.
+ *
+ * The SQL surface (`src/server/query.ts`) must authenticate as the workspace's own
+ * role, so it needs the password. Databases provisioned before Slice 21 have none
+ * stored -- Slice 20 returned the string once and kept nothing -- so the surface
+ * rotates one on first use and the caller stores it encrypted. Rotation only ever
+ * produces a fresh credential for the same role; the role's authority is unchanged.
+ */
+export async function rotateRolePassword(roleName: string): Promise<string> {
+  assertSafeName(roleName);
+  const password = randomBytes(24).toString('base64url');
+  const pool = getAdminPool();
+  const client = await pool.connect();
+  try {
+    await client.query(`ALTER ROLE ${quoteIdent(roleName)} PASSWORD ${quoteLiteral(password)}`);
+  } finally {
+    client.release();
+  }
+  return password;
 }
