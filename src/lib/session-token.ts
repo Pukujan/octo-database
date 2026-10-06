@@ -10,18 +10,21 @@
  *   octo_sess_<principalId>.<exp>.<sig>
  * Nothing is stored server-side; expiry is the only revocation. That is the
  * minimum that closes the disclosure channel without a sessions table.
+ *
+ * The lifetime is short by default (20 minutes) and absolute: a signed-in browser
+ * does not stay usable for days. Set OCTO_SESSION_TTL_SECONDS to change it.
  */
 
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
 const TOKEN_PREFIX = 'octo_sess_';
-const DEFAULT_TTL_SECONDS = 7 * 24 * 3600;
+const DEFAULT_TTL_SECONDS = 20 * 60;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Session lifetime in seconds. Overridable with OCTO_SESSION_TTL_SECONDS so a
  * deployment can shorten or lengthen sessions without a code change; an unset,
- * non-numeric, or non-positive value falls back to the seven-day default. Read
+ * non-numeric, or non-positive value falls back to the 20-minute default. Read
  * per call so tests and config changes take effect without a restart.
  */
 export function sessionTtlSeconds(): number {

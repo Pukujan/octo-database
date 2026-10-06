@@ -16,8 +16,8 @@ if (!root) throw new Error('Octo app root is missing');
 
 // A signed-in session also ends on inactivity, not only at the token's absolute
 // expiry: a shared or walked-away-from machine must not stay signed in. The server
-// enforces the token lifetime; this is the client's own courtesy lock.
-const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+// enforces the token lifetime (20 minutes); this matches it client-side.
+const IDLE_TIMEOUT_MS = 20 * 60 * 1000;
 let lastActivity = Date.now();
 
 const state: {

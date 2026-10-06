@@ -11,7 +11,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { signSessionToken, verifySessionToken, sessionTtlSeconds } from '../../src/lib/session-token';
 
 const PRINCIPAL = 'a1b2c3d4-e5f6-4789-abcd-ef0123456789';
-const SEVEN_DAYS = 7 * 24 * 3600;
+const TWENTY_MINUTES = 20 * 60;
 
 describe('signed session tokens', () => {
   const original = process.env['OCTO_SESSION_SECRET'];
@@ -72,8 +72,8 @@ describe('configurable session lifetime', () => {
     else process.env['OCTO_SESSION_TTL_SECONDS'] = originalTtl;
   });
 
-  it('defaults to seven days when unset', () => {
-    expect(sessionTtlSeconds()).toBe(SEVEN_DAYS);
+  it('defaults to twenty minutes when unset', () => {
+    expect(sessionTtlSeconds()).toBe(TWENTY_MINUTES);
   });
 
   it('honours a configured lifetime', () => {
@@ -83,11 +83,11 @@ describe('configurable session lifetime', () => {
 
   it('falls back to the default for non-numeric or non-positive values', () => {
     process.env['OCTO_SESSION_TTL_SECONDS'] = 'not-a-number';
-    expect(sessionTtlSeconds()).toBe(SEVEN_DAYS);
+    expect(sessionTtlSeconds()).toBe(TWENTY_MINUTES);
     process.env['OCTO_SESSION_TTL_SECONDS'] = '0';
-    expect(sessionTtlSeconds()).toBe(SEVEN_DAYS);
+    expect(sessionTtlSeconds()).toBe(TWENTY_MINUTES);
     process.env['OCTO_SESSION_TTL_SECONDS'] = '-100';
-    expect(sessionTtlSeconds()).toBe(SEVEN_DAYS);
+    expect(sessionTtlSeconds()).toBe(TWENTY_MINUTES);
   });
 
   it('mints tokens that expire at the configured lifetime', () => {
