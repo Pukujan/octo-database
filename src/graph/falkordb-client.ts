@@ -36,6 +36,15 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 const GRAPH_NAME_PREFIX = 'octo_ws_';
 
 /**
+ * FalkorDB's error when the graph key does not exist. A workspace whose graph has
+ * not been projected yet has no data, so a read against it returns no rows rather
+ * than an error. The engine raises this before parsing the query, so while a graph
+ * is empty a malformed query also reads as empty; once the graph exists (slice E)
+ * every real failure -- bad Cypher, engine down -- propagates to the caller.
+ */
+const GRAPH_ABSENT_ERROR = 'Invalid graph operation on empty key';
+
+/**
  * Loads graph configuration from the environment.
  * Returns null when unconfigured so callers can report a clear, non-fatal state.
  */
@@ -109,11 +118,20 @@ export class GraphClient {
     const graphName = graphNameForWorkspace(workspaceId);
     const client = await this.connection();
     const graph: Graph = client.selectGraph(graphName);
-    const reply = await graph.roQuery<Record<string, unknown>>(cypher, {
-      ...(params ? { params } : {}),
-      TIMEOUT: this.config.queryTimeoutMs,
-    });
-    return { rows: reply.data ?? [], metadata: reply.metadata ?? [] };
+    try {
+      const reply = await graph.roQuery<Record<string, unknown>>(cypher, {
+        ...(params ? { params } : {}),
+        TIMEOUT: this.config.queryTimeoutMs,
+      });
+      return { rows: reply.data ?? [], metadata: reply.metadata ?? [] };
+    } catch (error) {
+      // An unprojected workspace reads as empty, not as an error. Every other
+      // failure -- malformed Cypher, engine down -- propagates to the caller.
+      if (error instanceof Error && error.message.includes(GRAPH_ABSENT_ERROR)) {
+        return { rows: [], metadata: [] };
+      }
+      throw error;
+    }
   }
 
   async close(): Promise<void> {

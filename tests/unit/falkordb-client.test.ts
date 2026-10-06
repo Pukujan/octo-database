@@ -118,4 +118,39 @@ describe('mediated read', () => {
     });
     expect(mocks.connect).toHaveBeenCalledTimes(2);
   });
+
+  it('reads an unprojected workspace as empty rather than as an error', async () => {
+    const roQuery = vi.fn(async () => {
+      throw new Error('ERR Invalid graph operation on empty key');
+    });
+    mocks.connect.mockResolvedValue(fakeClient(roQuery));
+
+    const graph = new GraphClient({
+      url: 'redis://:pw@octo-graph:6379',
+      queryTimeoutMs: 9000,
+      connectTimeoutMs: 5000,
+    });
+
+    await expect(graph.roQuery(WORKSPACE_ID, 'MATCH (n) RETURN n')).resolves.toEqual({
+      rows: [],
+      metadata: [],
+    });
+  });
+
+  it('propagates a real query failure, not just a missing graph', async () => {
+    const roQuery = vi.fn(async () => {
+      throw new Error("Invalid input 'THIS': expected end of input");
+    });
+    mocks.connect.mockResolvedValue(fakeClient(roQuery));
+
+    const graph = new GraphClient({
+      url: 'redis://:pw@octo-graph:6379',
+      queryTimeoutMs: 9000,
+      connectTimeoutMs: 5000,
+    });
+
+    await expect(graph.roQuery(WORKSPACE_ID, 'THIS IS NOT CYPHER')).rejects.toThrow(
+      /Invalid input/
+    );
+  });
 });
