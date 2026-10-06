@@ -115,6 +115,13 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
     description: 'Read the activity feed for an authorized workspace.',
   },
   {
+    action: 'ops.list',
+    method: 'GET',
+    path: '/api/ops/events?workspaceId=<id>&errorCode=<code>',
+    requiredScope: 'read',
+    description: 'List structured operational failure events for an authorized workspace.',
+  },
+  {
     action: 'keys.revoke',
     method: 'DELETE',
     path: '/api/keys/<keyId>',

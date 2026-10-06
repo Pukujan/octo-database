@@ -33,6 +33,21 @@ export interface WorkerDeps {
   archive?: ArchiveDeps;
   /** Loads the file record an archive/restore job targets. */
   loadArchiveTarget?: (workspaceId: string, fileId: string) => Promise<ArchiveFileRecord | null>;
+  /**
+   * Records a structured operational failure (issue #140, slice O1). Best-effort:
+   * the implementation must swallow its own errors so capture never breaks the
+   * worker path. Absent in tests and non-server wiring.
+   */
+  recordOpsEvent?: (event: {
+    workspaceId: string;
+    source: 'worker';
+    eventType: string;
+    errorCode: string;
+    severity: 'warning' | 'error' | 'critical';
+    detail: Record<string, unknown>;
+    jobId: string;
+    jobType: string;
+  }) => Promise<void>;
   log?: (message: string) => void;
 }
 
@@ -147,11 +162,31 @@ export async function processJob(job: ClaimedJob, deps: WorkerDeps): Promise<Job
       outcome.retryable ??
       (outcome.code !== 'INVALID_PAYLOAD' && outcome.code !== 'UNKNOWN_JOB_TYPE');
     await deps.fail(job, outcome.code, outcome.summary, retryable);
+    await deps.recordOpsEvent?.({
+      workspaceId: job.workspaceId,
+      source: 'worker',
+      eventType: 'job.failed',
+      errorCode: outcome.code,
+      severity: retryable ? 'warning' : 'error',
+      detail: { summary: outcome.summary, retryable, attempt: job.attempt },
+      jobId: job.jobId,
+      jobType: job.jobType,
+    });
     await deps.activity(job, `Job ${job.jobType} ${retryable ? 'failed, will retry' : 'failed permanently'}: ${outcome.summary}`);
     return { jobId: job.jobId, status: retryable ? 'retry' : 'failed', detail: outcome.summary };
   } catch (err: unknown) {
     const summary = err instanceof Error ? err.message : String(err);
     await deps.fail(job, 'HANDLER_EXCEPTION', summary, true);
+    await deps.recordOpsEvent?.({
+      workspaceId: job.workspaceId,
+      source: 'worker',
+      eventType: 'job.exception',
+      errorCode: 'HANDLER_EXCEPTION',
+      severity: 'error',
+      detail: { summary, attempt: job.attempt },
+      jobId: job.jobId,
+      jobType: job.jobType,
+    });
     await deps.activity(job, `Job ${job.jobType} threw: ${summary}`);
     return { jobId: job.jobId, status: 'retry', detail: summary };
   }
