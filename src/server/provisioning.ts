@@ -120,6 +120,35 @@ export interface ProvisionedDatabase {
 const MAX_NAME_ATTEMPTS = 5;
 
 /**
+ * Enables pgvector in a freshly created database, as the privileged connection.
+ *
+ * `vector` is not a *trusted* extension, so a `NOSUPERUSER` role cannot enable it
+ * itself ("permission denied to create extension"). The platform image ships it
+ * (`pgvector/pgvector:pg16`), and vector search is Octo's own first retrieval
+ * capability, so a provisioned database is made vector-ready here rather than
+ * leaving the workspace unable to use it.
+ *
+ * Best effort: a cluster without the extension still provisions a plain database,
+ * so provisioning does not depend on an optional extension being installed.
+ */
+async function enablePgvector(dbName: string): Promise<void> {
+  const url = new URL(adminUrl);
+  url.pathname = `/${dbName}`;
+  const client = new pg.Client({ connectionString: url.toString(), connectionTimeoutMillis: 5000 });
+  try {
+    await client.connect();
+    await client.query('CREATE EXTENSION IF NOT EXISTS vector');
+  } catch (err) {
+    console.warn(
+      `[provisioning] pgvector not enabled in ${dbName}:`,
+      err instanceof Error ? err.message : String(err)
+    );
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
+
+/**
  * Creates the role and database for a workspace and returns the client's
  * connection string. The caller writes the catalog row afterwards.
  *
@@ -155,6 +184,7 @@ export async function provisionDatabase(slug: string): Promise<ProvisionedDataba
       await client.query(`CREATE DATABASE ${quoteIdent(dbName)} OWNER ${quoteIdent(roleName)}`);
       await client.query(`REVOKE CONNECT ON DATABASE ${quoteIdent(dbName)} FROM PUBLIC`);
       await client.query(`GRANT CONNECT ON DATABASE ${quoteIdent(dbName)} TO ${quoteIdent(roleName)}`);
+      await enablePgvector(dbName);
 
       return { dbName, roleName, password, connectionString: buildConnectionString(roleName, password, dbName) };
     }
