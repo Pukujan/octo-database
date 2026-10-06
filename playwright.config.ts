@@ -45,6 +45,10 @@ export default defineConfig({
         ...(process.env['OCTO_SERVICE_URL']
           ? { OCTO_SERVICE_URL: process.env['OCTO_SERVICE_URL'] }
           : {}),
+        // The graph engine is optional. Passed through only when a runner supplies
+        // it, so the configured-path eval runs where a FalkorDB is present and the
+        // unconfigured path (503, not advertised) runs everywhere else.
+        ...(process.env['OCTO_GRAPH_URL'] ? { OCTO_GRAPH_URL: process.env['OCTO_GRAPH_URL'] } : {}),
       },
     },
     {
