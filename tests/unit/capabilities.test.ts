@@ -58,6 +58,8 @@ describe('Capability discovery', () => {
     expect(byAction.get('files.archive')?.requiredScope).toBe('delete');
     expect(byAction.get('files.restore')?.requiredScope).toBe('write');
     expect(byAction.get('activity.list')?.requiredScope).toBe('read');
+    expect(byAction.get('ops.list')?.requiredScope).toBe('read');
+    expect(byAction.get('ops.summary')?.requiredScope).toBe('read');
     expect(byAction.get('keys.revoke')?.requiredScope).toBe('delete');
   });
 

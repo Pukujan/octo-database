@@ -181,5 +181,50 @@ export function createOctoMcpServer(api: OctoApi): McpServer {
     }
   );
 
+  server.tool(
+    'list_ops_events',
+    'List structured operational failure events for a workspace, newest first. Optionally filter to one error code. Read-only.',
+    {
+      workspaceId: z.string().describe('The workspace to read failures from'),
+      errorCode: z.string().optional().describe('Only events with this error code'),
+    },
+    async ({ workspaceId, errorCode }) => {
+      try {
+        return asText(await api.listOpsEvents({ workspaceId, errorCode }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'get_ops_summary',
+    'Classified failures for a workspace: counts by error code, failures by job type and day, and the jobs needing attention (failed, or running with an expired lease). Read-only; the diagnosis surface for a failed run.',
+    { workspaceId: z.string().describe('The workspace to summarize') },
+    async ({ workspaceId }) => {
+      try {
+        return asText(await api.getOpsSummary({ workspaceId }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'retry_job',
+    'Requeue a failed job so the worker runs it again. Requires the write scope and an owner or admin role in the workspace; a read-only key cannot call it. Use get_ops_summary to find the job id.',
+    {
+      workspaceId: z.string().describe('The workspace the job belongs to'),
+      jobId: z.string().describe('The failed job id (from get_ops_summary or list_ops_events)'),
+    },
+    async ({ workspaceId, jobId }) => {
+      try {
+        return asText(await api.retryJob({ workspaceId, jobId }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
   return server;
 }
