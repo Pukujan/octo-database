@@ -92,10 +92,12 @@ import {
   dbRetryJob,
   dbFailJob,
   dbListActivity,
+  dbListOpsEvents,
   dbListJobs,
   dbListShares,
   dbListWorkspaceFiles,
   dbRecordActivity,
+  dbRecordOpsEvent,
   dbResolveShareById,
   dbResolveShareByTokenHash,
   dbRevokeShare,
@@ -107,6 +109,7 @@ import {
   queryService,
   bindRequestIdentity,
   runWithRequestIdentity,
+  requestIdentity,
   testDbConnection,
 } from './db';
 import { Principal, ROLE_HIERARCHY, WorkspaceRole } from '../types/auth';
@@ -485,6 +488,14 @@ async function drainQueueOnce(targetWorkspaceId?: string, maxJobs = 10): Promise
       },
       archive: archiveDeps ?? undefined,
       loadArchiveTarget: archiveDeps ? loadArchiveRecord : undefined,
+      recordOpsEvent: async (event) => {
+        // Best-effort: capture must never break the drain.
+        try {
+          await dbRecordOpsEvent(event);
+        } catch {
+          // swallow
+        }
+      },
     });
 
     // Only return outcomes belonging to the caller's workspace to prevent cross-workspace data leakage
@@ -692,6 +703,35 @@ async function attributeAgentAction(
     await dbRecordActivity(workspaceId, eventType, summary, null, auth.principal.id);
   } catch {
     // Audit attribution must never break the request path.
+  }
+}
+
+/**
+ * Records a structured operational failure (issue #140, slice O1). Best-effort:
+ * a capture failure is swallowed so it can never turn a handled error into a
+ * crash. Workspace attribution prefers the request's bound workspace scope, then
+ * a UUID `workspaceId` query param, else null (a platform-level event).
+ */
+async function captureOpsEvent(
+  req: IncomingMessage,
+  url: URL,
+  event: { eventType: string; errorCode: string; detail: Record<string, unknown> }
+): Promise<void> {
+  try {
+    const scoped = requestIdentity.getStore()?.workspaceId ?? null;
+    const fromQuery = url.searchParams.get('workspaceId');
+    const workspaceId = scoped ?? (fromQuery && UUID_PATTERN.test(fromQuery) ? fromQuery : null);
+    await dbRecordOpsEvent({
+      workspaceId,
+      source: 'api',
+      eventType: event.eventType,
+      errorCode: event.errorCode,
+      severity: 'error',
+      detail: event.detail,
+      route: `${req.method} ${url.pathname}`,
+    });
+  } catch {
+    // Operational capture must never break the request path.
   }
 }
 
@@ -2619,6 +2659,41 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       return;
     }
 
+    // Operational events: GET /api/ops/events?workspaceId=...&errorCode=...
+    // Structured failure records for diagnosis (issue #140, slice O1).
+    if (pathname === '/api/ops/events' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      const errorCode = url.searchParams.get('errorCode');
+      sendJson(res, 200, { events: await dbListOpsEvents(workspaceId, errorCode) });
+      return;
+    }
+
     // Manual retry: POST /api/jobs/:id/retry?workspaceId=...
     // Recovery path for a job stuck after retry exhaustion.
     if (pathname.startsWith('/api/jobs/') && pathname.endsWith('/retry') && req.method === 'POST') {
@@ -2915,6 +2990,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     sendJson(res, 404, { error: `Not found: ${req.method} ${pathname}` });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
+    await captureOpsEvent(req, url, {
+      eventType: 'request.error',
+      errorCode: 'INTERNAL_SERVER_ERROR',
+      detail: { message, method: req.method, path: pathname },
+    });
     sendJson(res, 500, { error: `INTERNAL_SERVER_ERROR: ${message}` });
   }
 }

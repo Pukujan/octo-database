@@ -1129,6 +1129,80 @@ export async function dbListActivity(
   );
 }
 
+export interface OpsEventInput {
+  workspaceId: string | null;
+  source: 'api' | 'worker';
+  eventType: string;
+  errorCode: string | null;
+  severity: 'warning' | 'error' | 'critical';
+  detail: Record<string, unknown>;
+  jobId?: string | null;
+  route?: string | null;
+  jobType?: string | null;
+}
+
+/**
+ * Records a structured operational failure. Writes through the service pool: a
+ * failure can happen before a caller identity exists (auth errors, pre-workspace
+ * 500s), and the writer must not itself be subject to the fence it is reporting on.
+ * Callers treat this as best-effort — capture must never break the request path.
+ */
+export async function dbRecordOpsEvent(input: OpsEventInput): Promise<void> {
+  await queryService(
+    `INSERT INTO octo.ops_events
+       (workspace_id, source, event_type, error_code, severity, detail, job_id, route, job_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      input.workspaceId,
+      input.source,
+      input.eventType,
+      input.errorCode,
+      input.severity,
+      JSON.stringify(input.detail),
+      input.jobId ?? null,
+      input.route ?? null,
+      input.jobType ?? null,
+    ]
+  );
+}
+
+/** Recent operational events for a workspace, newest first, optionally by error code. */
+export async function dbListOpsEvents(
+  workspaceId: string,
+  errorCode: string | null,
+  limit = 100
+): Promise<
+  {
+    id: string;
+    source: string;
+    eventType: string;
+    errorCode: string | null;
+    severity: string;
+    detail: Record<string, unknown>;
+    jobId: string | null;
+    route: string | null;
+    jobType: string | null;
+    createdAt: string;
+  }[]
+> {
+  const params: unknown[] = [workspaceId];
+  let filter = 'workspace_id = $1';
+  if (errorCode) {
+    params.push(errorCode);
+    filter += ` AND error_code = $${params.length}`;
+  }
+  params.push(limit);
+  return query(
+    `SELECT id, source, event_type AS "eventType", error_code AS "errorCode", severity,
+            detail, job_id AS "jobId", route, job_type AS "jobType", created_at AS "createdAt"
+     FROM octo.ops_events
+     WHERE ${filter}
+     ORDER BY created_at DESC
+     LIMIT $${params.length}`,
+    params
+  );
+}
+
 // 6. Retrieval Operations (Slice 8)
 export async function dbEnsureEmbeddingConfig(
   workspaceId: string,
