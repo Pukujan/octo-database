@@ -86,6 +86,13 @@ export class OctoApi {
     return this.request('GET', '/api/workspaces');
   }
 
+  provisionDatabase(input: { workspaceId: string }): Promise<unknown> {
+    return this.request(
+      'POST',
+      `/api/workspaces/${encodeURIComponent(input.workspaceId)}/database`
+    );
+  }
+
   listFiles(workspaceId: string): Promise<unknown> {
     return this.request('GET', `/api/files?workspaceId=${encodeURIComponent(workspaceId)}`);
   }
@@ -136,5 +143,34 @@ export class OctoApi {
       query: input.query,
       ...(input.limit === undefined ? {} : { limit: input.limit }),
     });
+  }
+
+  graphQuery(input: {
+    workspaceId: string;
+    query: string;
+    params?: Record<string, string | number | boolean | null>;
+  }): Promise<unknown> {
+    return this.request('POST', '/api/graph/query', {
+      workspaceId: input.workspaceId,
+      query: input.query,
+      ...(input.params === undefined ? {} : { params: input.params }),
+    });
+  }
+
+  listOpsEvents(input: { workspaceId: string; errorCode?: string }): Promise<unknown> {
+    const params = new URLSearchParams({ workspaceId: input.workspaceId });
+    if (input.errorCode !== undefined) params.set('errorCode', input.errorCode);
+    return this.request('GET', `/api/ops/events?${params.toString()}`);
+  }
+
+  getOpsSummary(input: { workspaceId: string }): Promise<unknown> {
+    return this.request('GET', `/api/ops/summary?workspaceId=${encodeURIComponent(input.workspaceId)}`);
+  }
+
+  retryJob(input: { workspaceId: string; jobId: string }): Promise<unknown> {
+    return this.request(
+      'POST',
+      `/api/jobs/${encodeURIComponent(input.jobId)}/retry?workspaceId=${encodeURIComponent(input.workspaceId)}`
+    );
   }
 }

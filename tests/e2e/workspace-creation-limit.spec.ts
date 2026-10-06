@@ -88,8 +88,9 @@ test.describe('Workspace creation daily limit', () => {
     await page.getByRole('dialog').locator('input[name="name"]').fill(`UI First ${Date.now()}`);
     await page.getByRole('dialog').getByLabel('Confirmation secret', { exact: true }).fill('e2e-confirm-secret');
     await page.getByRole('dialog').getByRole('button', { name: 'Create Workspace' }).click();
-    await expect(page.getByRole('dialog').getByText('Workspace created')).toBeVisible();
-    await page.getByRole('dialog').getByRole('button', { name: 'Done' }).click();
+    await expect(page.locator('section.one-time-notice').getByText('Workspace created')).toBeVisible();
+    await page.locator('section.one-time-notice').getByRole('button', { name: 'Done' }).click();
+    await expect(page.locator('section.one-time-notice')).toHaveCount(0);
 
     // Second creation within the same day is refused, and the modal says so.
     await page.click('button:has-text("New Workspace")');
