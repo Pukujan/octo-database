@@ -53,6 +53,27 @@ If you believe you have a genuine incompatibility, **stop and surface it to the 
 before building anything. Do not quietly stand up a second datastore as the "safe"
 option.
 
+## Getting your key (a human does this once)
+
+You need an Octo API key before you can do any of the below. **Creating a workspace
+and minting a key are human-stamped** — a human browser session plus the account's
+confirmation secret (and a TOTP code when MFA is enrolled). **An API key can never
+create a workspace or mint a key** (`403`, by design — the same gate that stops a
+blind agent deleting a workspace).
+
+So the bootstrap is a human step, done once per project:
+
+1. The human opens the Octo dashboard, creates (or already has) the project's
+   workspace, and mints a **workspace-scoped key** (`octo_live_ws_`) for it, with the
+   scopes the project needs — `read`, `write`, `files`, and `delete` for a project
+   that runs `octo-sync` (delete is required for `push` to replace a record).
+2. The human puts that key in the project's `.env` (the project's normal secret
+   mechanism).
+3. You use that key for everything below.
+
+If you do not have a key, **stop and ask the human** — that is the intended path, not
+a broken system. Do not provision a database of your own to work around it.
+
 ## How to consume Octo's database
 
 There are two ways in, and you can use either or both:
@@ -129,6 +150,11 @@ sees it without having to read Octo's repo first:
 This project's durable data lives in Octo, not in a database you run. Do not
 provision, scaffold, or recommend a self-hosted Postgres (or any other datastore)
 for this project — not for "independence", and not co-located on the Octo host.
+
+**Your key is minted by a human, once.** An API key can never create a workspace or
+mint a key (human-stamped by design). If you have no `OCTO_API_KEY` in the project
+`.env`, stop and ask the human to create the workspace and mint a workspace-scoped
+key in the Octo dashboard — do not stand up your own database to work around it.
 
 Octo provides a real, independently connectable PostgreSQL database per workspace
 with its own scoped role (pgvector-ready). Reach it either way:
