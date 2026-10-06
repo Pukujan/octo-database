@@ -33,6 +33,9 @@ export default defineConfig({
         OCTO_MEDIA_SECRET: process.env['OCTO_MEDIA_SECRET'] ?? 'e2e-media-secret',
         // Key material for the per-principal MFA secret envelope (Slice 17).
         OCTO_MFA_SECRET: process.env['OCTO_MFA_SECRET'] ?? 'e2e-mfa-secret',
+        // Signs bearer session tokens (ISS-1). A stable value across the server
+        // and test processes lets the e2e suite forge a correctly-signed token.
+        OCTO_SESSION_SECRET: process.env['OCTO_SESSION_SECRET'] ?? 'e2e-session-secret',
         DATABASE_URL:
           process.env['DATABASE_URL'] ??
           'postgresql://postgres:postgres@localhost:54329/postgres',
