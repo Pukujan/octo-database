@@ -47,7 +47,7 @@ import {
 import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { GraphClient, loadGraphConfigFromEnv } from '../graph/falkordb-client';
-import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
+import { hashApiKeySecret, authorizeKeyMint, parseKeyScopes } from '../api/keys';
 import { acceptConfirmChallenge, hasConfirmChallenge, issueConfirmChallenge } from '../auth/confirm-challenge';
 import { sendStaticFile } from './static-file';
 import {
@@ -103,6 +103,7 @@ import {
   dbMarkFilePublished,
   dbHasOpenFileJob,
   dbInsertApiKey,
+  dbUpdateApiKeyScopes,
   dbInsertFile,
   dbInsertGuestPrincipal,
   dbInsertWorkspaceDatabase,
@@ -2501,7 +2502,6 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       // scopes; it is a preset over the real scopes, never a second
       // authorization dimension. Class and an explicit scope list are mutually
       // exclusive.
-      const ALLOWED_SCOPES = ['read', 'write', 'files', 'delete'];
       if (keyClass !== undefined && requestedScopes !== undefined) {
         sendJson(res, 400, { error: 'BAD_REQUEST: keyClass and scopes are mutually exclusive' });
         return;
@@ -2519,16 +2519,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         }
         scopes = [...KEY_CLASSES[keyClass as KeyClass].scopes];
       } else if (requestedScopes !== undefined) {
-        if (!Array.isArray(requestedScopes) || requestedScopes.length === 0) {
-          sendJson(res, 400, { error: 'BAD_REQUEST: scopes must be a non-empty array' });
+        const parsedScopes = parseKeyScopes(requestedScopes);
+        if (!parsedScopes.ok) {
+          sendJson(res, 400, { error: parsedScopes.error });
           return;
         }
-        const unknown = requestedScopes.filter((s: unknown) => !ALLOWED_SCOPES.includes(s as string));
-        if (unknown.length > 0) {
-          sendJson(res, 400, { error: `BAD_REQUEST: unknown scopes: ${unknown.join(', ')}` });
-          return;
-        }
-        scopes = requestedScopes as string[];
+        scopes = parsedScopes.scopes;
       }
 
       if (
@@ -2632,6 +2628,42 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         },
         rawSecret,
       });
+      return;
+    }
+
+    // 8a. Edit allowances on an existing key: PATCH /api/keys/:id
+    // The secret does not change. A human session must confirm, so a key cannot
+    // widen itself.
+    if (pathname.startsWith('/api/keys/') && req.method === 'PATCH') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+
+      const keyId = pathname.slice('/api/keys/'.length);
+      if (!keyId || !UUID_PATTERN.test(keyId)) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: keyId must be a valid UUID' });
+        return;
+      }
+
+      const parsed = await readJsonObject(req);
+      const parsedScopes = parseKeyScopes(parsed.scopes);
+      if (!parsedScopes.ok) {
+        sendJson(res, 400, { error: parsedScopes.error });
+        return;
+      }
+
+      if (!(await confirmGate(res, auth, parsed.confirmSecret, { requireMfa: true, mfaCode: parsed.mfaCode })))
+        return;
+
+      const updated = await dbUpdateApiKeyScopes(keyId, auth.principal.id, parsedScopes.scopes);
+      if (!updated) {
+        sendJson(res, 404, { error: 'KEY_NOT_FOUND: no such key owned by this principal' });
+        return;
+      }
+
+      sendJson(res, 200, { ...updated, isAccountWide: updated.workspaceId === null });
       return;
     }
 

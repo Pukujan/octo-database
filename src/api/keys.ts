@@ -93,6 +93,28 @@ export function authorizeKeyMint(caller: KeyMintCaller, request: KeyMintRequest)
   return { ok: true, workspaceId: request.workspaceId, scopes: request.scopes };
 }
 
+/** The allowances a key can hold. Routes check these, not finer capability names. */
+export const KEY_SCOPE_VALUES = ['read', 'write', 'files', 'delete'] as const;
+
+/**
+ * Accepts an explicit allowance list. Empty and unknown values are refused.
+ * Duplicates collapse so a repeated checkbox cannot store the same scope twice.
+ */
+export function parseKeyScopes(
+  requested: unknown
+): { ok: true; scopes: string[] } | { ok: false; error: string } {
+  if (!Array.isArray(requested) || requested.length === 0) {
+    return { ok: false, error: 'BAD_REQUEST: scopes must be a non-empty array' };
+  }
+  const unknown = requested.filter(
+    (scope) => typeof scope !== 'string' || !(KEY_SCOPE_VALUES as readonly string[]).includes(scope)
+  );
+  if (unknown.length > 0) {
+    return { ok: false, error: `BAD_REQUEST: unknown scopes: ${unknown.join(', ')}` };
+  }
+  return { ok: true, scopes: [...new Set(requested as string[])] };
+}
+
 /**
  * Computes a SHA-256 hash of a raw API key secret.
  */
