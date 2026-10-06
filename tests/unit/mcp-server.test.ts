@@ -44,11 +44,14 @@ describe('Octo MCP adapter', () => {
       'create_workspace',
       'delete_file',
       'download_file',
+      'get_ops_summary',
       'list_files',
+      'list_ops_events',
       'list_workspaces',
       'mint_key',
       'provision_database',
       'query_workspace',
+      'retry_job',
       'upload_file',
       'whoami',
     ]);
@@ -155,6 +158,64 @@ describe('Octo MCP adapter', () => {
     );
 
     const result = await client.callTool({ name: 'create_workspace', arguments: { name: 'Nope' } });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('403');
+  });
+
+  it('reads the ops summary from the summary route', async () => {
+    const calls: string[] = [];
+    const client = await connect(apiWith(200, '{"failureCounts":[],"unhealthyJobs":[]}', calls));
+
+    const result = await client.callTool({
+      name: 'get_ops_summary',
+      arguments: { workspaceId: 'ws-42' },
+    });
+
+    expect(calls).toEqual(['http://octo.test/api/ops/summary?workspaceId=ws-42']);
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain('failureCounts');
+  });
+
+  it('filters ops events by error code through the events route', async () => {
+    const calls: string[] = [];
+    const client = await connect(apiWith(200, '{"events":[]}', calls));
+
+    await client.callTool({
+      name: 'list_ops_events',
+      arguments: { workspaceId: 'w1', errorCode: 'INVALID_PAYLOAD' },
+    });
+
+    expect(calls).toEqual([
+      'http://octo.test/api/ops/events?workspaceId=w1&errorCode=INVALID_PAYLOAD',
+    ]);
+  });
+
+  it('retries a job through the retry route', async () => {
+    const calls: string[] = [];
+    const client = await connect(apiWith(200, '{"success":true,"jobId":"j1"}', calls));
+
+    const result = await client.callTool({
+      name: 'retry_job',
+      arguments: { workspaceId: 'w1', jobId: 'j1' },
+    });
+
+    expect(calls).toEqual(['http://octo.test/api/jobs/j1/retry?workspaceId=w1']);
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('reports a read-only key refused a retry as a tool error, not a success', async () => {
+    // retry_job is the one place an agent gains a repair action; a read-only key
+    // must be refused by the server (write scope + admin role), and that refusal
+    // must surface as an error rather than a silent success.
+    const client = await connect(
+      apiWith(403, '{"error":"FORBIDDEN: write scope required"}')
+    );
+
+    const result = await client.callTool({
+      name: 'retry_job',
+      arguments: { workspaceId: 'w1', jobId: 'j1' },
+    });
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('403');

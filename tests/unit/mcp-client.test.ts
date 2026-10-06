@@ -186,4 +186,46 @@ describe('OctoApi', () => {
 
     await expect(api.me()).resolves.toBeNull();
   });
+
+  it('lists ops events, adding the error-code filter only when given', async () => {
+    const { impl, calls } = recordingFetch(200, '{"events":[]}');
+    const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
+
+    await api.listOpsEvents({ workspaceId: 'w1' });
+    await api.listOpsEvents({ workspaceId: 'w1', errorCode: 'INVALID_PAYLOAD' });
+
+    expect(calls[0]!.url).toBe('http://localhost:3001/api/ops/events?workspaceId=w1');
+    expect(calls[1]!.url).toBe(
+      'http://localhost:3001/api/ops/events?workspaceId=w1&errorCode=INVALID_PAYLOAD'
+    );
+  });
+
+  it('reads the ops summary for a workspace', async () => {
+    const { impl, calls } = recordingFetch(200, '{"failureCounts":[]}');
+    const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
+
+    await api.getOpsSummary({ workspaceId: 'ws 1' });
+
+    expect(calls[0]!.url).toBe('http://localhost:3001/api/ops/summary?workspaceId=ws%201');
+    expect(calls[0]!.init.method).toBe('GET');
+  });
+
+  it('retries a job with the workspace in the query string', async () => {
+    const { impl, calls } = recordingFetch(200, '{"success":true,"jobId":"j 1"}');
+    const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
+
+    await api.retryJob({ workspaceId: 'w 1', jobId: 'j 1' });
+
+    expect(calls[0]!.url).toBe('http://localhost:3001/api/jobs/j%201/retry?workspaceId=w%201');
+    expect(calls[0]!.init.method).toBe('POST');
+  });
+
+  it('surfaces a refused retry as a typed error', async () => {
+    const { impl } = recordingFetch(403, '{"error":"FORBIDDEN: write scope required"}');
+    const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
+
+    await expect(api.retryJob({ workspaceId: 'w1', jobId: 'j1' })).rejects.toMatchObject({
+      status: 403,
+    });
+  });
 });

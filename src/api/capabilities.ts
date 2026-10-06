@@ -130,6 +130,14 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
     description: 'List structured operational failure events for an authorized workspace.',
   },
   {
+    action: 'ops.summary',
+    method: 'GET',
+    path: '/api/ops/summary?workspaceId=<id>',
+    requiredScope: 'read',
+    description:
+      'Classified failures for an authorized workspace: counts by error code, by job type and day, and the jobs needing attention.',
+  },
+  {
     action: 'keys.revoke',
     method: 'DELETE',
     path: '/api/keys/<keyId>',

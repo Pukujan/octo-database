@@ -1201,6 +1201,72 @@ export async function dbListOpsEvents(
   );
 }
 
+export interface OpsSummary {
+  failureCounts: {
+    errorCode: string | null;
+    source: string;
+    severity: string;
+    eventCount: number;
+    firstSeen: string;
+    lastSeen: string;
+  }[];
+  failuresByJobTypeDay: {
+    jobType: string;
+    day: string;
+    errorCode: string | null;
+    eventCount: number;
+  }[];
+  unhealthyJobs: {
+    jobId: string;
+    jobType: string;
+    state: string;
+    attempt: number;
+    maxAttempts: number;
+    leaseExpiresAt: string | null;
+    errorCode: string | null;
+    errorSummary: string | null;
+    updatedAt: string;
+  }[];
+}
+
+/**
+ * The O2 classification views, read over HTTP (issue #140, slice O3).
+ *
+ * The views are `security_invoker`, so reading them through the fenced `query()`
+ * on the app pool applies the caller's own RLS context: the member policy and the
+ * slice-14 tenant fence still narrow the rows. This function adds no aggregation
+ * of its own -- it selects from the views, so the SQL stays in one place.
+ */
+export async function dbGetOpsSummary(workspaceId: string): Promise<OpsSummary> {
+  const [failureCounts, failuresByJobTypeDay, unhealthyJobs] = await Promise.all([
+    query<OpsSummary['failureCounts'][number]>(
+      `SELECT error_code AS "errorCode", source, severity, event_count::int AS "eventCount",
+              first_seen AS "firstSeen", last_seen AS "lastSeen"
+       FROM octo.ops_failure_counts
+       WHERE workspace_id = $1
+       ORDER BY event_count DESC, error_code`,
+      [workspaceId]
+    ),
+    query<OpsSummary['failuresByJobTypeDay'][number]>(
+      `SELECT job_type AS "jobType", day, error_code AS "errorCode", event_count::int AS "eventCount"
+       FROM octo.ops_failures_by_job_type_day
+       WHERE workspace_id = $1
+       ORDER BY day DESC, job_type`,
+      [workspaceId]
+    ),
+    query<OpsSummary['unhealthyJobs'][number]>(
+      `SELECT job_id AS "jobId", job_type AS "jobType", state, attempt, max_attempts AS "maxAttempts",
+              lease_expires_at AS "leaseExpiresAt", error_code AS "errorCode",
+              error_summary AS "errorSummary", updated_at AS "updatedAt"
+       FROM octo.ops_unhealthy_jobs
+       WHERE workspace_id = $1
+       ORDER BY updated_at DESC`,
+      [workspaceId]
+    ),
+  ]);
+  return { failureCounts, failuresByJobTypeDay, unhealthyJobs };
+}
+
 // 6. Retrieval Operations (Slice 8)
 export async function dbEnsureEmbeddingConfig(
   workspaceId: string,
