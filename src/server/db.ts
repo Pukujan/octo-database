@@ -243,10 +243,8 @@ export async function dbUpsertGooglePrincipal(
   isGuest: boolean;
   isPlatformOwner: boolean;
 }> {
-  const isOwner =
-    email.toLowerCase() === 'pujan3645@gmail.com' ||
-    (Boolean(process.env['PLATFORM_OWNER_EMAIL']) &&
-      email.toLowerCase() === process.env['PLATFORM_OWNER_EMAIL']!.toLowerCase());
+  const ownerEmail = process.env['PLATFORM_OWNER_EMAIL'];
+  const isOwner = Boolean(ownerEmail) && email.toLowerCase() === ownerEmail!.toLowerCase();
   const sql = `
     INSERT INTO octo.principals (id, auth_user_id, email, display_name, avatar_url, is_guest, is_platform_owner)
     VALUES (gen_random_uuid(), $1, $2, $3, $4, false, $5)
