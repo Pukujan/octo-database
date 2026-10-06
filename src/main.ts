@@ -4,6 +4,7 @@ import type { FileRecord } from './storage/file-service';
 import type { ApiKey } from './api/keys';
 import type { GalleryItem } from './media/gallery-service';
 import type { ShareSummary } from './media/share-service';
+import { isSessionExpired } from './lib/session-expiry';
 
 type View = 'overview' | 'files' | 'gallery' | 'operations' | 'access';
 type Job = { id: string; jobType: string; state: string; attempts: number; maxAttempts: number; errorSummary?: string | null; createdAt: string; completedAt?: string | null };
@@ -12,6 +13,12 @@ type Modal = 'workspace' | 'text-file' | 'key' | 'share' | 'workspace-created' |
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Octo app root is missing');
+
+// A signed-in session also ends on inactivity, not only at the token's absolute
+// expiry: a shared or walked-away-from machine must not stay signed in. The server
+// enforces the token lifetime (20 minutes); this matches it client-side.
+const IDLE_TIMEOUT_MS = 20 * 60 * 1000;
+let lastActivity = Date.now();
 
 const state: {
   principal: Principal | null; token: string | null; workspaces: WorkspaceSummary[]; workspace: WorkspaceSummary | null;
@@ -40,8 +47,7 @@ async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const response = await fetch(path, { ...init, headers });
   if (response.status === 401 && state.token && !path.startsWith('/api/auth/')) {
-    clearSession();
-    render();
+    expireSession();
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -61,6 +67,20 @@ function clearSession(): void {
   // or share link must not render for whoever signs in next on this machine.
   state.oneTimeSecret = ''; state.oneTimeLabel = ''; state.shareUrl = '';
   state.modal = null; state.loadError = '';
+}
+
+// A session can end two ways: the server rejects the token (401), or the client
+// watchdog sees it expired or the user idle too long. Both land here so the login
+// screen explains why, instead of silently dropping the user onto it.
+function expireSession(): void {
+  clearSession();
+  state.notice = 'Your session expired. Please sign in again.';
+  render();
+}
+
+function sessionWatchdog(): void {
+  if (!state.token) return;
+  if (isSessionExpired(state.token, Date.now()) || Date.now() - lastActivity >= IDLE_TIMEOUT_MS) expireSession();
 }
 
 async function loadWorkspace(id: string): Promise<void> {
@@ -92,6 +112,8 @@ async function loadWorkspace(id: string): Promise<void> {
 
 async function enterSession(token: string, principal?: Principal): Promise<void> {
   state.token = token;
+  state.notice = '';
+  lastActivity = Date.now();
   localStorage.setItem('octo_token', token);
   const identity = await api<{ principal: Principal; confirmSecretSet?: boolean; mfaEnabled?: boolean; mfaRecoveryCodesRemaining?: number }>('/api/me');
   state.principal = principal ?? identity.principal;
@@ -121,7 +143,12 @@ async function bootstrap(): Promise<void> {
   } catch { state.googleAuthEnabled = false; }
   const saved = localStorage.getItem('octo_token');
   if (saved) {
-    try { await enterSession(saved); return; } catch { clearSession(); }
+    if (isSessionExpired(saved, Date.now())) {
+      clearSession();
+      state.notice = 'Your session expired. Please sign in again.';
+    } else {
+      try { await enterSession(saved); return; } catch { clearSession(); }
+    }
   }
   render();
 }
@@ -173,7 +200,7 @@ function modalMarkup(): string {
 }
 
 function renderLogin(): void {
-  root!.innerHTML = '<main class="login-screen"><section class="login-card"><div class="brand-lockup"><span class="brand-mark">◉</span><span>octo</span></div><p class="eyebrow">WORKSPACE DATA PLATFORM</p><h1>Welcome to Octo</h1><p class="login-copy">A calm home for your workspace data, files, and activity.</p><div class="login-actions">' + (state.googleAuthEnabled ? '<button class="button google-button" data-action="google" type="button"><span class="google-g">G</span>Sign in with Google</button>' : '<button class="button google-button" disabled type="button" aria-label="Google sign-in not configured"><span class="google-g">G</span>Google sign-in not configured</button>') + '<button class="button primary" data-action="guest" type="button">Continue as Guest<span aria-hidden="true">→</span></button></div><p class="login-note">Your workspaces stay separate and scoped to your account.</p></section><div class="login-art" aria-hidden="true"><div class="orb orb-one"></div><div class="orb orb-two"></div><div class="art-grid"></div><div class="art-caption"><span class="live-dot"></span> Your workspace, in one place</div></div></main>';
+  root!.innerHTML = '<main class="login-screen"><section class="login-card"><div class="brand-lockup"><span class="brand-mark">◉</span><span>octo</span></div><p class="eyebrow">WORKSPACE DATA PLATFORM</p><h1>Welcome to Octo</h1><p class="login-copy">A calm home for your workspace data, files, and activity.</p>' + (state.notice ? '<p class="login-notice" role="alert">' + esc(state.notice) + '</p>' : '') + '<div class="login-actions">' + (state.googleAuthEnabled ? '<button class="button google-button" data-action="google" type="button"><span class="google-g">G</span>Sign in with Google</button>' : '<button class="button google-button" disabled type="button" aria-label="Google sign-in not configured"><span class="google-g">G</span>Google sign-in not configured</button>') + '<button class="button primary" data-action="guest" type="button">Continue as Guest<span aria-hidden="true">→</span></button></div><p class="login-note">Your workspaces stay separate and scoped to your account.</p></section><div class="login-art" aria-hidden="true"><div class="orb orb-one"></div><div class="orb orb-two"></div><div class="art-grid"></div><div class="art-caption"><span class="live-dot"></span> Your workspace, in one place</div></div></main>';
 }
 
 function renderOverview(): string {
@@ -381,5 +408,13 @@ root.addEventListener('submit', async (event) => {
     render();
   }
 });
+
+// Idle is measured against real interaction, not page loads: scrolling, typing,
+// moving the pointer, and switching tabs all count. The interval checks cheaply and
+// only re-renders when it actually expires the session.
+for (const event of ['click', 'keydown', 'pointerdown', 'scroll', 'touchstart'] as const) {
+  window.addEventListener(event, () => { lastActivity = Date.now(); }, { passive: true });
+}
+window.setInterval(sessionWatchdog, 30_000);
 
 void bootstrap();
