@@ -18,6 +18,14 @@
 # MIGRATE_BASELINE=1 to record every present migration as applied without running
 # it — only when the tracking table is empty. Confirm the schema is already current
 # before using it.
+#
+# Baseline against the migration set the database ALREADY has — the commit that
+# created it — never the set you are about to deploy. MIGRATE_BASELINE records every
+# file in MIGRATIONS_DIR, so baselining from a checkout that also contains a new
+# migration records that new migration as applied, and it is then skipped forever
+# (the schema silently drifts behind the code). To adopt a database created by commit
+# C while deploying D: check out C, run the baseline there, then deploy D so this
+# runner applies only what D adds. See docs/self-hosting.md § 3a.
 
 set -euo pipefail
 

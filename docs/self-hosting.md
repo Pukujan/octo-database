@@ -100,11 +100,22 @@ neither a half-applied migration nor a false "applied" record.
   them, so the first `deploy.sh` run finds nothing to do.
 - **Existing database that predates tracking** (it has the schema but an empty
   `octo.schema_migrations`): a normal run would try to re-apply old migrations and
-  fail on the non-idempotent ones. Adopt it once, after confirming its schema is
-  already current:
+  fail on the non-idempotent ones (plain `CREATE POLICY`), which aborts the deploy
+  before the containers are swapped. Adopt it once, after confirming its schema is
+  already current — and **baseline against the migration set the database already
+  has**, i.e. the commit that created it, **not** the set you are deploying.
+  `MIGRATE_BASELINE=1` records every migration file present, so baselining from a
+  checkout that also contains a new migration marks that new migration as applied
+  and it is then skipped forever, leaving the schema silently behind the code:
   ```bash
-  MIGRATE_BASELINE=1 ./migrate.sh   # records every present migration as applied, runs none
+  # Suppose the live database was created by commit C, and you are deploying D.
+  git checkout C
+  MIGRATE_BASELINE=1 ./migrate.sh   # records exactly the migrations C contains, runs none
+  git checkout D
+  ./deploy.sh                       # applies only the migrations D adds on top of C
   ```
+  (A fresh database needs none of this: its init scripts already record every
+  migration.)
 - **Running it directly** (e.g. to apply a new migration without a full deploy):
   ```bash
   ./migrate.sh
