@@ -160,6 +160,7 @@ test.describe('MFA step-up for creation and minting', () => {
     await page.getByRole('dialog').getByLabel('Confirmation secret', { exact: true }).fill(CONFIRM_SECRET);
     await page.getByRole('dialog').getByRole('button', { name: 'Create Workspace' }).click();
 
-    await expect(page.getByRole('dialog').getByText('Workspace created')).toBeVisible();
+    // Creation closes the modal and shows the one-time key as an inline notice.
+    await expect(page.locator('section.one-time-notice').getByText('Workspace created')).toBeVisible();
   });
 });
