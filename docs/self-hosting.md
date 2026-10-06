@@ -28,11 +28,17 @@ Octo runs as a three-container Docker Compose project on gravebuster:
                           │  octo-db              │  internal only
                           │  pgvector/pgvector:16 │  volume: octo-db-data
                           └───────────────────────┘
+
+                          ┌───────────────────────┐
+                          │  octo-graph           │  internal only
+                          │  falkordb-server:6.0.1│  in-memory, rebuildable
+                          └───────────────────────┘
 ```
 
 - **`octo-web`** (`caddy:2-alpine`): Serves Vite static production assets from `/srv`, serves `/healthz` for container liveness, and reverse-proxies `/api/*` and `/health` to `octo-api:3001`.
 - **`octo-api`** (`node:22-bookworm-slim`): Platform server running `tsx src/server/index.ts`.
 - **`octo-db`** (`pgvector/pgvector:pg16`): Dedicated Postgres database with Supabase auth scaffolding and canonical migrations loaded on init.
+- **`octo-graph`** (`falkordb/falkordb-server:6.0.1`): The per-workspace graph engine, on the internal network only with no published port. Agents reach a graph only through Octo's mediated API/MCP, which derives the graph name from the authenticated workspace and holds the password. It is an in-memory, rebuildable projection of Postgres, so it carries no data volume and the API does not depend on it.
 
 ---
 
@@ -77,6 +83,7 @@ Before running on gravebuster, ensure:
    - `GOOGLE_OAUTH_CLIENT_ID` & `GOOGLE_OAUTH_CLIENT_SECRET`
    - `OCTO_MEDIA_SECRET=<random_32_byte_secret>`
    - `OCTO_SESSION_SECRET=<random_32_byte_secret>`
+   - `OCTO_GRAPH_PASSWORD=<random_secret>` (and the matching `OCTO_GRAPH_URL`; leave both unset to run without the graph engine)
    - Cloudflare R2 & Google Drive credentials
 
 3. **Initial build and start**:

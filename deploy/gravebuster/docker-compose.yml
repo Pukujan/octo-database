@@ -45,6 +45,31 @@ services:
     networks:
       - octo-internal
 
+  # FalkorDB: the per-workspace graph engine (issue #12). One graph per workspace,
+  # named server-side from the authenticated workspace UUID inside Octo's mediation
+  # path. It joins the internal network only -- no published port -- so the sole way
+  # to reach a graph is through Octo's API/MCP, which holds the password. requirepass
+  # is an access gate, not a tenant boundary: anyone holding it can query every
+  # graph, so nothing outside octo_internal may have it.
+  #
+  # Pinned to an explicit upstream tag, never ${IMAGE_TAG}, so rollback.sh keeps
+  # addressing the same engine build. No depends_on from octo-api: the graph is
+  # optional and must never gate API startup. A graph is a rebuildable projection of
+  # canonical Postgres, so AOF is off and there is no data volume -- durability is
+  # Postgres, not this container.
+  octo-graph:
+    image: falkordb/falkordb-server:6.0.1
+    container_name: octo-graph
+    restart: unless-stopped
+    environment:
+      # --maxmemory sits below the container cap so the engine refuses writes and
+      # degrades, instead of growing into an OOM kill. It is in-memory: the cap
+      # protects the host.
+      REDIS_ARGS: "--requirepass ${OCTO_GRAPH_PASSWORD:-graphpassword} --maxmemory ${OCTO_GRAPH_MAXMEMORY:-768mb}"
+    mem_limit: ${OCTO_GRAPH_MEMORY_LIMIT:-1g}
+    networks:
+      - octo-internal
+
   octo-db:
     image: pgvector/pgvector:pg16
     container_name: octo-db

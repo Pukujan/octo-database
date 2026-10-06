@@ -55,6 +55,18 @@ services:
     networks:
       - octo-local-net
 
+  # Local mirror of the gravebuster graph engine (issue #12): same pinned tag, same
+  # no-published-port confinement, so a local run exercises the same mediation path.
+  octo-graph:
+    image: falkordb/falkordb-server:6.0.1
+    container_name: octo-local-graph
+    restart: unless-stopped
+    environment:
+      REDIS_ARGS: "--requirepass ${OCTO_GRAPH_PASSWORD:-graphpassword} --maxmemory ${OCTO_GRAPH_MAXMEMORY:-768mb}"
+    mem_limit: ${OCTO_GRAPH_MEMORY_LIMIT:-1g}
+    networks:
+      - octo-local-net
+
 networks:
   octo-local-net:
     driver: bridge
