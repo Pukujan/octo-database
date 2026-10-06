@@ -9,6 +9,11 @@ import { isSessionExpired } from './lib/session-expiry';
 type View = 'overview' | 'files' | 'gallery' | 'operations' | 'access';
 type Job = { id: string; jobType: string; state: string; attempts: number; maxAttempts: number; errorSummary?: string | null; createdAt: string; completedAt?: string | null };
 type Activity = { id: string; eventType: string; summary: string; createdAt: string };
+type OpsSummary = {
+  failureCounts: { errorCode: string | null; source: string; severity: string; eventCount: number; firstSeen: string; lastSeen: string }[];
+  failuresByJobTypeDay: { jobType: string; day: string; errorCode: string | null; eventCount: number }[];
+  unhealthyJobs: { jobId: string; jobType: string; state: string; attempt: number; maxAttempts: number; errorCode: string | null; errorSummary: string | null; updatedAt: string }[];
+};
 type Modal = 'workspace' | 'text-file' | 'key' | 'share' | 'workspace-created' | 'key-created' | 'share-created' | 'delete-workspace' | 'preview' | 'mfa-enroll' | 'mfa-recovery' | null;
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -22,12 +27,12 @@ let lastActivity = Date.now();
 
 const state: {
   principal: Principal | null; token: string | null; workspaces: WorkspaceSummary[]; workspace: WorkspaceSummary | null;
-  files: FileRecord[]; gallery: GalleryItem[]; keys: ApiKey[]; shares: ShareSummary[]; jobs: Job[]; activity: Activity[];
+  files: FileRecord[]; gallery: GalleryItem[]; keys: ApiKey[]; shares: ShareSummary[]; jobs: Job[]; activity: Activity[]; opsSummary: OpsSummary | null;
   googleAuthEnabled: boolean; confirmSecretSet: boolean; mfaEnabled: boolean; view: View; loading: boolean; theme: 'midnight' | 'paper';
   modal: Modal; modalError: string; oneTimeSecret: string; oneTimeLabel: string; shareUrl: string; previewItem: GalleryItem | null; notice: string;
   loadError: string; mfaSetupUri: string; mfaSetupSecret: string; mfaRecoveryCodes: string[]; mfaRecoveryRemaining: number;
 } = {
-  principal: null, token: null, workspaces: [], workspace: null, files: [], gallery: [], keys: [], shares: [], jobs: [], activity: [],
+  principal: null, token: null, workspaces: [], workspace: null, files: [], gallery: [], keys: [], shares: [], jobs: [], activity: [], opsSummary: null,
   googleAuthEnabled: false, confirmSecretSet: false, mfaEnabled: false, view: 'overview', loading: false,
   theme: localStorage.getItem('octo-design-system') === 'paper' ? 'paper' : 'midnight', modal: null, modalError: '',
   oneTimeSecret: '', oneTimeLabel: '', shareUrl: '', previewItem: null, notice: '', loadError: '',
@@ -62,7 +67,7 @@ function clearSession(): void {
   localStorage.removeItem('octo_token');
   localStorage.removeItem('octo_principal');
   state.token = null; state.principal = null; state.workspaces = []; state.workspace = null;
-  state.files = []; state.gallery = []; state.keys = []; state.shares = []; state.jobs = []; state.activity = [];
+  state.files = []; state.gallery = []; state.keys = []; state.shares = []; state.jobs = []; state.activity = []; state.opsSummary = null;
   // One-time material is not session state to carry forward: a minted key secret
   // or share link must not render for whoever signs in next on this machine.
   state.oneTimeSecret = ''; state.oneTimeLabel = ''; state.shareUrl = '';
@@ -90,10 +95,11 @@ async function loadWorkspace(id: string): Promise<void> {
   state.loading = true;
   render();
   const query = '?workspaceId=' + encodeURIComponent(id);
-  const labels = ['files', 'gallery', 'jobs', 'activity', 'shares', 'API keys'];
+  const labels = ['files', 'gallery', 'jobs', 'activity', 'shares', 'API keys', 'failure classifications'];
   const results = await Promise.allSettled([
     api<FileRecord[]>('/api/files' + query), api<GalleryItem[]>('/api/gallery' + query), api<Job[]>('/api/jobs' + query),
     api<Activity[]>('/api/activity' + query), api<ShareSummary[]>('/api/workspaces/shares' + query), api<ApiKey[]>('/api/keys'),
+    api<OpsSummary>('/api/ops/summary' + query),
   ]);
   const failed = results.map((result, index) => (result.status === 'rejected' ? labels[index] : null)).filter(Boolean);
   // A failed request and an empty workspace look identical in the UI, but only the
@@ -106,6 +112,7 @@ async function loadWorkspace(id: string): Promise<void> {
   state.activity = results[3].status === 'fulfilled' ? results[3].value : [];
   state.shares = results[4].status === 'fulfilled' ? results[4].value.map((share) => ({ ...share, active: !share.revokedAt && (!share.validUntil || Date.parse(share.validUntil) > Date.now()) })) : [];
   state.keys = results[5].status === 'fulfilled' ? results[5].value : [];
+  state.opsSummary = results[6].status === 'fulfilled' ? results[6].value : null;
   state.loading = false;
   render();
 }
@@ -221,7 +228,31 @@ function renderOperations(): string {
   const queued = state.jobs.filter((job) => job.state === 'queued').length;
   const failed = state.jobs.filter((job) => job.state === 'failed').length;
   const jobs = state.jobs.length ? '<div class="table-wrap"><table><thead><tr><th>Job</th><th>State</th><th>Attempts</th><th>Created</th><th></th></tr></thead><tbody>' + state.jobs.map((job) => '<tr><td><strong>' + esc(job.jobType) + '</strong>' + (job.errorSummary ? '<small class="error-detail">' + esc(job.errorSummary) + '</small>' : '') + '</td><td><span class="state-pill state-' + esc(job.state) + '">' + esc(job.state) + '</span></td><td>' + job.attempts + ' / ' + job.maxAttempts + '</td><td>' + when(job.createdAt) + '</td><td>' + (job.state === 'failed' ? '<button class="text-button" data-action="retry" data-id="' + esc(job.id) + '">Retry</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' : '<div class="empty-panel compact"><strong>No recent jobs</strong><p>File processing jobs will appear here.</p></div>';
-  return '<div class="metric-grid metric-grid-three"><article class="metric-card"><span class="metric-label">Queued:</span><strong>' + queued + '</strong><small>Waiting for a worker</small></article><article class="metric-card"><span class="metric-label">Failed:</span><strong class="' + (failed ? 'metric-warning' : '') + '">' + failed + '</strong><small>May need another try</small></article><article class="metric-card"><span class="metric-label">Recent jobs</span><strong>' + state.jobs.length + '</strong><small>Latest workspace records</small></article></div><section class="panel"><div class="panel-head"><div><p class="eyebrow">WORKSPACE QUEUE</p><h2>Operations</h2><p class="panel-copy">Review processing and retry failed work.</p></div><button class="button primary" data-action="run-worker">Run worker pass</button></div>' + jobs + '</section><section class="panel activity-panel"><div class="panel-head"><div><p class="eyebrow">EVENT LOG</p><h2>Recent activity</h2></div></div>' + activityRows(state.activity) + '</section>';
+  return '<div class="metric-grid metric-grid-three"><article class="metric-card"><span class="metric-label">Queued:</span><strong>' + queued + '</strong><small>Waiting for a worker</small></article><article class="metric-card"><span class="metric-label">Failed:</span><strong class="' + (failed ? 'metric-warning' : '') + '">' + failed + '</strong><small>May need another try</small></article><article class="metric-card"><span class="metric-label">Recent jobs</span><strong>' + state.jobs.length + '</strong><small>Latest workspace records</small></article></div>' + opsFailurePanel() + '<section class="panel"><div class="panel-head"><div><p class="eyebrow">WORKSPACE QUEUE</p><h2>Operations</h2><p class="panel-copy">Review processing and retry failed work.</p></div><button class="button primary" data-action="run-worker">Run worker pass</button></div>' + jobs + '</section><section class="panel activity-panel"><div class="panel-head"><div><p class="eyebrow">EVENT LOG</p><h2>Recent activity</h2></div></div>' + activityRows(state.activity) + '</section>';
+}
+
+// The classified-failure panel (issue #140, slice O5). It reads what the O3 summary
+// route returns from the O2 views: which error codes are recurring, how failures
+// trend by job type and day, and which jobs are currently stuck -- so a reader can
+// see what is actually failing instead of only that the count is non-zero.
+function opsFailurePanel(): string {
+  const summary = state.opsSummary;
+  if (!summary) {
+    return '<section class="panel"><div class="panel-head"><div><p class="eyebrow">FAILURE ANALYSIS</p><h2>What is failing</h2></div></div><div class="empty-panel compact"><strong>No failure data</strong><p>Classified failures appear here once the workspace records errors.</p></div></section>';
+  }
+  const counts = summary.failureCounts;
+  const countsBody = counts.length
+    ? '<div class="table-wrap"><table><thead><tr><th>Error code</th><th>Source</th><th>Events</th><th>Last seen</th></tr></thead><tbody>' + counts.map((row) => '<tr><td><strong>' + esc(row.errorCode ?? 'Unclassified') + '</strong><small>' + esc(row.severity) + '</small></td><td>' + esc(row.source) + '</td><td>' + row.eventCount + '</td><td>' + when(row.lastSeen) + '</td></tr>').join('') + '</tbody></table></div>'
+    : '<div class="empty-panel compact"><strong>No classified failures</strong><p>Nothing has been recorded against this workspace.</p></div>';
+  const byDay = summary.failuresByJobTypeDay;
+  const dayBody = byDay.length
+    ? '<div class="table-wrap"><table><thead><tr><th>Day</th><th>Job type</th><th>Error code</th><th>Events</th></tr></thead><tbody>' + byDay.map((row) => '<tr><td>' + esc(row.day) + '</td><td><strong>' + esc(row.jobType) + '</strong></td><td>' + esc(row.errorCode ?? '—') + '</td><td>' + row.eventCount + '</td></tr>').join('') + '</tbody></table></div>'
+    : '<div class="empty-panel compact"><strong>No daily failures</strong><p>No failures were recorded on any day.</p></div>';
+  const unhealthy = summary.unhealthyJobs;
+  const unhealthyBody = unhealthy.length
+    ? '<div class="table-wrap"><table><thead><tr><th>Job</th><th>State</th><th>Attempts</th><th>Last update</th><th></th></tr></thead><tbody>' + unhealthy.map((row) => '<tr><td><strong>' + esc(row.jobType) + '</strong>' + (row.errorCode ? '<small class="error-detail">' + esc(row.errorCode) + '</small>' : '') + '</td><td><span class="state-pill state-' + esc(row.state) + '">' + esc(row.state) + '</span></td><td>' + row.attempt + ' / ' + row.maxAttempts + '</td><td>' + when(row.updatedAt) + '</td><td>' + (row.state === 'failed' ? '<button class="text-button" data-action="retry" data-id="' + esc(row.jobId) + '">Retry</button>' : '<span class="muted">—</span>') + '</td></tr>').join('') + '</tbody></table></div>'
+    : '<div class="empty-panel compact"><strong>No unhealthy jobs</strong><p>Every job is either done, queued, or holding a live lease.</p></div>';
+  return '<section class="panel"><div class="panel-head"><div><p class="eyebrow">FAILURE ANALYSIS</p><h2>What is failing</h2><p class="panel-copy">Failures classified by error code, by job type and day, and the jobs currently needing attention.</p></div></div><h3 class="subhead">By error code</h3>' + countsBody + '<h3 class="subhead">By job type and day</h3>' + dayBody + '<h3 class="subhead">Jobs needing attention</h3>' + unhealthyBody + '</section>';
 }
 
 function renderAccess(): string {
