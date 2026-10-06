@@ -39,6 +39,7 @@ import {
 } from '../api/capabilities';
 import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
+import { GraphClient, loadGraphConfigFromEnv } from '../graph/falkordb-client';
 import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
 import { sendStaticFile } from './static-file';
 import { provisioningConfigured, provisionDatabase, dropProvisionedDatabase } from './provisioning';
@@ -157,6 +158,15 @@ try {
 } catch (e) {
   console.warn('Google Drive archival disabled:', (e as Error).message);
 }
+
+/**
+ * Graph engine (issue #12). Optional, like the embedding provider: unset
+ * `OCTO_GRAPH_URL` leaves the graph surface reporting "not configured" rather
+ * than a half-wired engine. The client derives each graph name from the
+ * authenticated workspace UUID, so no request value can name a graph.
+ */
+const graphConfig = loadGraphConfigFromEnv();
+const graphClient: GraphClient | null = graphConfig ? new GraphClient(graphConfig) : null;
 
 /**
  * Archive lifecycle wiring for the worker and the on-demand restore path. Null
@@ -2630,6 +2640,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           'files.delete': Boolean(objectStore),
           'files.archive': Boolean(objectStore && archiveDeps),
           'files.restore': Boolean(objectStore && archiveDeps),
+          'graph.query': Boolean(graphClient),
         };
         const supported = [] as typeof capabilities;
         for (const capability of capabilities) {
@@ -3113,6 +3124,71 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         // Provenance: each match carries the version and the exact embedding/chunker
         // configuration that produced it.
       });
+      return;
+    }
+
+    // Graph: POST /api/graph/query -- a mediated read against one workspace's graph.
+    if (pathname === '/api/graph/query' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
+
+      const parsed = (await readJsonObject(req)) as Record<string, any>;
+      const { workspaceId, query: cypher, params } = parsed;
+
+      if (!workspaceId || !cypher) {
+        sendJson(res, 400, { error: 'workspaceId and query are required' });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      // Authorize before probing provider configuration: an unauthorized caller
+      // must not learn whether the graph engine is configured.
+      if (!graphClient) {
+        sendJson(res, 503, {
+          error: 'GRAPH_NOT_CONFIGURED: set OCTO_GRAPH_URL to query a workspace graph',
+        });
+        return;
+      }
+
+      // Only scalar parameters reach the engine; the client's read-only path
+      // (GRAPH.RO_QUERY) and the derived graph name are the isolation boundary.
+      const safeParams: Record<string, string | number | boolean | null> = {};
+      if (params && typeof params === 'object') {
+        for (const [name, value] of Object.entries(params as Record<string, unknown>)) {
+          if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
+            safeParams[name] = value as string | number | boolean | null;
+          }
+        }
+      }
+
+      try {
+        const result = await graphClient.roQuery(
+          workspaceId,
+          cypher,
+          Object.keys(safeParams).length ? safeParams : undefined
+        );
+        sendJson(res, 200, { query: cypher, rows: result.rows, metadata: result.metadata });
+      } catch {
+        sendJson(res, 502, { error: 'GRAPH_QUERY_FAILED: the graph engine rejected the query' });
+      }
       return;
     }
 

@@ -60,6 +60,7 @@ describe('Capability discovery', () => {
     expect(byAction.get('activity.list')?.requiredScope).toBe('read');
     expect(byAction.get('ops.list')?.requiredScope).toBe('read');
     expect(byAction.get('ops.summary')?.requiredScope).toBe('read');
+    expect(byAction.get('graph.query')?.requiredScope).toBe('read');
     expect(byAction.get('keys.revoke')?.requiredScope).toBe('delete');
   });
 
