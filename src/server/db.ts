@@ -417,12 +417,13 @@ export async function dbListWorkspaceFiles(workspaceId: string): Promise<
     storageKey: string;
     createdAt: string;
     archiveState: string;
+    publishedAt: string | null;
   }[]
 > {
   const sql = `
     SELECT id, name, size_bytes AS "sizeBytes", mime_type AS "mimeType",
            storage_key AS "storageKey", created_at AS "createdAt",
-           archive_state AS "archiveState"
+           archive_state AS "archiveState", published_at AS "publishedAt"
     FROM octo.files
     WHERE workspace_id = $1 AND status = 'active'
     ORDER BY created_at DESC;
@@ -442,11 +443,14 @@ export async function dbGetFile(
   archiveState: string;
   archiveLocator: string | null;
   archiveHash: string | null;
+  publishedAt: string | null;
+  publicKey: string | null;
 } | null> {
   const sql = `
     SELECT id, name, storage_key AS "storageKey", size_bytes AS "sizeBytes",
            mime_type AS "mimeType", archive_state AS "archiveState",
-           archive_locator AS "archiveLocator", archive_hash AS "archiveHash"
+           archive_locator AS "archiveLocator", archive_hash AS "archiveHash",
+           published_at AS "publishedAt", public_key AS "publicKey"
     FROM octo.files
     WHERE id = $1 AND workspace_id = $2 AND status = 'active'
     LIMIT 1;
@@ -460,6 +464,8 @@ export async function dbGetFile(
     archiveState: string;
     archiveLocator: string | null;
     archiveHash: string | null;
+    publishedAt: string | null;
+    publicKey: string | null;
   }>(sql, [fileId, workspaceId]);
   return rows[0] ?? null;
 }
@@ -544,40 +550,74 @@ export async function dbUpdateArchiveState(
   }
 }
 
-/** Deletes a file only when no archive/restore transition is queued or running. */
+type FileDeleteClient = {
+  query: (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
+};
+
+type LockedFileRow = {
+  id: string;
+  storageKey: string;
+  archiveState: string;
+  publicKey: string | null;
+};
+
+async function lockIdleFile(
+  client: FileDeleteClient,
+  workspaceId: string,
+  fileId: string
+): Promise<{ status: 'missing' } | { status: 'busy' } | { status: 'ready'; row: LockedFileRow }> {
+  const files = await client.query(
+    `SELECT id, storage_key AS "storageKey", archive_state AS "archiveState",
+            public_key AS "publicKey"
+     FROM octo.files WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+    [fileId, workspaceId]
+  );
+  const file = files.rows[0] as LockedFileRow | undefined;
+  if (!file) return { status: 'missing' };
+
+  // No FOR UPDATE here: octo.jobs carries only a SELECT policy, so a locking read
+  // returns zero rows for the non-owner app role and the busy check silently passes.
+  // Serialization against enqueue does not need it — the file row lock above is the
+  // gate, and dbEnqueueFileTransition (service pool) also locks the file row.
+  const transitions = await client.query(
+    `SELECT id FROM octo.jobs
+     WHERE workspace_id = $1 AND job_type IN ('archive_file', 'restore_file')
+       AND payload->>'fileId' = $2 AND state IN ('queued', 'running')`,
+    [workspaceId, fileId]
+  );
+  if (
+    transitions.rows.length > 0 ||
+    file.archiveState === 'archiving' ||
+    file.archiveState === 'restoring'
+  ) {
+    return { status: 'busy' };
+  }
+  return { status: 'ready', row: file };
+}
+
+/**
+ * Deletes a file only when no archive/restore transition is queued or running.
+ * A published file is not removed here: the caller deletes the public object
+ * first, then calls `dbFinishFileDelete`, so a failed public delete leaves the row.
+ */
 export async function dbDeleteFileIfIdle(
   workspaceId: string,
   fileId: string
 ): Promise<
-  | { status: 'deleted'; storageKey: string }
+  | { status: 'deleted'; storageKey: string; publicKey: null }
+  | { status: 'awaiting_public_delete'; storageKey: string; publicKey: string }
   | { status: 'missing' }
   | { status: 'busy' }
 > {
   return withTransaction(async (client) => {
-    const files = await client.query(
-      `SELECT id, storage_key AS "storageKey", archive_state AS "archiveState"
-       FROM octo.files WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
-      [fileId, workspaceId]
-    );
-    const file = files.rows[0] as { id: string; storageKey: string; archiveState: string } | undefined;
-    if (!file) return { status: 'missing' };
-
-    // No FOR UPDATE here: octo.jobs carries only a SELECT policy, so a locking read
-    // returns zero rows for the non-owner app role and the busy check silently passes.
-    // Serialization against enqueue does not need it — the file row lock above is the
-    // gate, and dbEnqueueFileTransition (service pool) also locks the file row.
-    const transitions = await client.query(
-      `SELECT id FROM octo.jobs
-       WHERE workspace_id = $1 AND job_type IN ('archive_file', 'restore_file')
-         AND payload->>'fileId' = $2 AND state IN ('queued', 'running')`,
-      [workspaceId, fileId]
-    );
-    if (
-      transitions.rows.length > 0 ||
-      file.archiveState === 'archiving' ||
-      file.archiveState === 'restoring'
-    ) {
-      return { status: 'busy' };
+    const locked = await lockIdleFile(client, workspaceId, fileId);
+    if (locked.status !== 'ready') return locked;
+    if (locked.row.publicKey) {
+      return {
+        status: 'awaiting_public_delete' as const,
+        storageKey: locked.row.storageKey,
+        publicKey: locked.row.publicKey,
+      };
     }
 
     const deleted = await client.query(
@@ -586,8 +626,74 @@ export async function dbDeleteFileIfIdle(
       [fileId, workspaceId]
     );
     const row = deleted.rows[0] as { storageKey: string } | undefined;
+    return row
+      ? { status: 'deleted' as const, storageKey: row.storageKey, publicKey: null }
+      : { status: 'missing' as const };
+  });
+}
+
+/** Removes a file row after its public object has already been deleted. */
+export async function dbFinishFileDelete(
+  workspaceId: string,
+  fileId: string
+): Promise<{ status: 'deleted'; storageKey: string } | { status: 'missing' } | { status: 'busy' }> {
+  return withTransaction(async (client) => {
+    const locked = await lockIdleFile(client, workspaceId, fileId);
+    if (locked.status !== 'ready') return locked;
+    const deleted = await client.query(
+      `DELETE FROM octo.files WHERE id = $1 AND workspace_id = $2
+       RETURNING storage_key AS "storageKey"`,
+      [fileId, workspaceId]
+    );
+    const row = deleted.rows[0] as { storageKey: string } | undefined;
     return row ? { status: 'deleted', storageKey: row.storageKey } : { status: 'missing' };
   });
+}
+
+/**
+ * Records a publish. The service connection is required because operators are
+ * not owner/admin, and the files update policy would change zero rows for them.
+ * The WHERE clause still demands the file be active in this workspace.
+ */
+export async function dbMarkFilePublished(
+  fileId: string,
+  workspaceId: string,
+  publicKey: string
+): Promise<string | null> {
+  const rows = await queryService<{ publishedAt: Date | string }>(
+    `UPDATE octo.files
+     SET published_at = now(), public_key = $3, updated_at = now()
+     WHERE id = $1 AND workspace_id = $2 AND status = 'active' AND archive_state = 'active_r2'
+     RETURNING published_at AS "publishedAt"`,
+    [fileId, workspaceId, publicKey]
+  );
+  const value = rows[0]?.publishedAt;
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : String(value);
+}
+
+export async function dbClearFilePublished(fileId: string, workspaceId: string): Promise<void> {
+  await queryService(
+    `UPDATE octo.files
+     SET published_at = NULL, public_key = NULL, updated_at = now()
+     WHERE id = $1 AND workspace_id = $2`,
+    [fileId, workspaceId]
+  );
+}
+
+/** Public-route lookup. Returns no workspace id, storage key, or file name. */
+export async function dbGetPublishedObject(
+  fileId: string
+): Promise<{ mimeType: string; publicKey: string } | null> {
+  const rows = await queryService<{ mimeType: string; publicKey: string }>(
+    `SELECT mime_type AS "mimeType", public_key AS "publicKey"
+     FROM octo.files
+     WHERE id = $1 AND status = 'active'
+       AND published_at IS NOT NULL AND public_key IS NOT NULL
+     LIMIT 1`,
+    [fileId]
+  );
+  return rows[0] ?? null;
 }
 
 // 3. API Key Operations

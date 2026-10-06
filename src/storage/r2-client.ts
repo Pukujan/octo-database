@@ -5,6 +5,7 @@
  */
 
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -40,6 +41,43 @@ export interface ObjectSummary {
   size: number;
   lastModified?: Date;
   etag?: string;
+}
+
+export interface PublicCopyInput {
+  Bucket: string;
+  Key: string;
+  CopySource: string;
+  ContentType: string;
+  MetadataDirective: 'REPLACE';
+}
+
+/** Each path segment is encoded. Slashes between segments stay slashes. */
+export function encodeCopySource(bucket: string, key: string): string {
+  const encodedKey = key
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return `${encodeURIComponent(bucket)}/${encodedKey}`;
+}
+
+/**
+ * One-object copy into the public bucket. The destination key is the file id.
+ * This input is not a list request and sets no ACL.
+ */
+export function buildPublicCopyInput(args: {
+  sourceBucket: string;
+  sourceKey: string;
+  destBucket: string;
+  destKey: string;
+  contentType: string;
+}): PublicCopyInput {
+  return {
+    Bucket: args.destBucket,
+    Key: args.destKey,
+    CopySource: encodeCopySource(args.sourceBucket, args.sourceKey),
+    ContentType: args.contentType,
+    MetadataDirective: 'REPLACE',
+  };
 }
 
 /**
@@ -140,11 +178,39 @@ export class R2StorageProvider {
    * Deletes an object from the R2 bucket.
    */
   async deleteObject(key: string): Promise<void> {
+    await this.deleteObjectInBucket(this.bucket, key);
+  }
+
+  /** Deletes one object in a named bucket. Used for the public bucket, not a listing. */
+  async deleteObjectInBucket(bucket: string, key: string): Promise<void> {
     const command = new DeleteObjectCommand({
-      Bucket: this.bucket,
+      Bucket: bucket,
       Key: key,
     });
 
+    await this.client.send(command);
+  }
+
+  /**
+   * Copies one private object into another bucket under a new key.
+   * Content type is replaced from the catalog so the public object is not
+   * served as a generic byte stream.
+   */
+  async copyToBucket(
+    destBucket: string,
+    sourceKey: string,
+    destKey: string,
+    contentType: string
+  ): Promise<void> {
+    const command = new CopyObjectCommand(
+      buildPublicCopyInput({
+        sourceBucket: this.bucket,
+        sourceKey,
+        destBucket,
+        destKey,
+        contentType,
+      })
+    );
     await this.client.send(command);
   }
 
