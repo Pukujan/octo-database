@@ -488,6 +488,14 @@ async function drainQueueOnce(targetWorkspaceId?: string, maxJobs = 10): Promise
       },
       archive: archiveDeps ?? undefined,
       loadArchiveTarget: archiveDeps ? loadArchiveRecord : undefined,
+      // Resolve the thumbnail target through the trusted service pool: the app
+      // pool is RLS-fenced and the scheduler drain runs with no caller identity.
+      // Pinning to the job's workspace is what stops a payload from pointing the
+      // worker at another tenant's object.
+      loadFileTarget: async (workspaceId, fileId) => {
+        const file = await dbGetArchiveRecord(workspaceId, fileId);
+        return file ? { storageKey: file.storageKey, mimeType: file.mimeType } : null;
+      },
       recordOpsEvent: async (event) => {
         // Best-effort: capture must never break the drain.
         try {
