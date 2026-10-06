@@ -53,7 +53,6 @@ import {
 } from '../lib/mfa';
 import {
   dbCountTransientFiles,
-  dbCountCreatedWorkspacesSince,
   dbCreateWorkspaceAtomic,
   dbDeleteFileIfIdle,
   dbEnqueueFileTransition,
@@ -1280,20 +1279,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       // Slice 16: a second, independent guard. Even a compromised browser session
       // that holds the confirmation secret may create at most one workspace per
       // rolling day. The platform owner is exempt. The auto-provisioned personal
-      // sandbox does not count (see dbCountCreatedWorkspacesSince).
-      if (!auth.principal.isPlatformOwner) {
-        const createdLastDay = await dbCountCreatedWorkspacesSince(
-          auth.principal.id,
-          new Date(Date.now() - 24 * 60 * 60 * 1000)
-        );
-        if (createdLastDay >= 1) {
-          sendJson(res, 429, {
-            error: 'WORKSPACE_DAILY_LIMIT: You can create one workspace per day. Try again after 24 hours.',
-          });
-          return;
-        }
-      }
-
+      // sandbox does not count. Enforced inside dbCreateWorkspaceAtomic under a
+      // per-principal advisory lock so concurrent creates cannot race the quota.
       const workspaceId = randomUUID();
       const keyId = randomUUID();
       const rawSecret = `octo_live_ws_${randomUUID().replace(/-/g, '')}`;
@@ -1311,6 +1298,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           keyPrefix: 'octo_live_ws',
           keyName: `${name.trim()} workspace key`,
           keyScopes: ['read', 'write', 'files'],
+          enforceDailyLimit: !auth.principal.isPlatformOwner,
         });
 
         await dbRecordActivity(
@@ -1338,6 +1326,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         if ((err as { code?: string }).code === '23505') {
           sendJson(res, 409, {
             error: `SLUG_TAKEN: a workspace with slug '${resolvedSlug}' already exists`,
+          });
+          return;
+        }
+        if ((err as { code?: string }).code === 'WORKSPACE_DAILY_LIMIT') {
+          sendJson(res, 429, {
+            error: 'WORKSPACE_DAILY_LIMIT: You can create one workspace per day. Try again after 24 hours.',
           });
           return;
         }
