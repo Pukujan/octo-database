@@ -52,6 +52,7 @@ describe('Octo MCP adapter', () => {
       'provision_database',
       'query_graph',
       'query_workspace',
+      'query_workspace_database',
       'retry_job',
       'upload_file',
       'whoami',
@@ -250,5 +251,37 @@ describe('Octo MCP adapter', () => {
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('503');
+  });
+
+  it('runs SQL against a workspace database through the query route', async () => {
+    const calls: string[] = [];
+    const client = await connect(
+      apiWith(200, '{"columns":["n"],"rows":[{"n":1}],"rowCount":1,"statementCount":1,"truncated":false}', calls)
+    );
+
+    const result = await client.callTool({
+      name: 'query_workspace_database',
+      arguments: { workspaceId: 'w1', sql: 'SELECT 1 AS n' },
+    });
+
+    expect(calls).toEqual(['http://octo.test/api/workspaces/w1/query']);
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain('rowCount');
+  });
+
+  it('reports a SQL error as a tool error, not a success', async () => {
+    // A statement the database rejects must surface as an error rather than an
+    // empty success that reads as "the query ran and returned nothing".
+    const client = await connect(
+      apiWith(400, '{"error":"SQL_ERROR","message":"syntax error at or near \\"SELEC\\"","code":"42601"}')
+    );
+
+    const result = await client.callTool({
+      name: 'query_workspace_database',
+      arguments: { workspaceId: 'w1', sql: 'SELEC 1' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('400');
   });
 });

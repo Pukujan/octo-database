@@ -93,6 +93,23 @@ export class OctoApi {
     );
   }
 
+  queryWorkspaceDatabase(input: {
+    workspaceId: string;
+    sql: string;
+    params?: unknown[];
+    rowLimit?: number;
+  }): Promise<unknown> {
+    return this.request(
+      'POST',
+      `/api/workspaces/${encodeURIComponent(input.workspaceId)}/query`,
+      {
+        sql: input.sql,
+        ...(input.params === undefined ? {} : { params: input.params }),
+        ...(input.rowLimit === undefined ? {} : { rowLimit: input.rowLimit }),
+      }
+    );
+  }
+
   listFiles(workspaceId: string): Promise<unknown> {
     return this.request('GET', `/api/files?workspaceId=${encodeURIComponent(workspaceId)}`);
   }

@@ -20,8 +20,9 @@ That includes:
 
 All four are the same mistake. You are not the project's database operator — Octo is.
 
-Instead: **provision the workspace database through Octo, then connect to it with an
-ordinary Postgres client.** That is the whole job.
+Instead: **provision the workspace database through Octo, then reach it either with
+your Octo API key (run SQL through Octo) or with an ordinary Postgres client.** That is
+the whole job.
 
 ## Why
 
@@ -54,12 +55,39 @@ option.
 
 ## How to consume Octo's database
 
+There are two ways in, and you can use either or both:
+
+- **Through Octo (no connection string).** Run SQL with just your Octo API key —
+  `POST /api/workspaces/<id>/query` or the MCP tool `query_workspace_database`. Nothing
+  to store, nothing to leak, works from anywhere the Octo API is reachable.
+- **Directly (a Postgres client).** Provision once, store the connection string, connect
+  with `pg`, Prisma, Drizzle, `psql`, whatever the project already uses.
+
+### Through Octo — the SQL surface (Slice 21)
+
+```
+POST /api/workspaces/<id>/query      Authorization: Bearer <octo_live_...>
+{ "sql": "select * from items where label = $1", "params": ["alpha"], "rowLimit": 100 }
+```
+
+- **Read scope** runs in a read-only transaction: `SELECT` works, writes are refused by
+  the database. **Write scope** is required to mutate.
+- A **workspace-scoped key works here** for its own workspace (unlike provisioning) —
+  this is exactly what a scoped key is for. The workspace binding is still enforced.
+- The server authenticates as the workspace's own role. The credential never crosses the
+  wire, and the SQL executes with no more authority than the workspace already has.
+- A multi-statement request (a whole migration) is allowed for a write caller with no
+  parameters; a parameterized or read-only request is a single statement.
+
+### Directly — provision and connect
+
 1. **Provision once.** MCP tool `provision_database`, or
    `POST /api/workspaces/<id>/database`. Requires an account-wide key with the
    `write` scope (a workspace-scoped key cannot provision).
    Returns `{ dbName, roleName, connectionString }`.
 2. **Store the connection string immediately.** It is shown **exactly once**. Put it in
-   the project's normal secret/env mechanism. If you lose it, the owner must rotate it.
+   the project's normal secret/env mechanism. If you lose it, use the SQL surface (which
+   needs no string), or the owner can rotate it.
 3. **Connect with any Postgres client** — `pg`, PostgREST, Prisma, Drizzle, `psql`,
    whatever the project already uses. The role owns only its own database and reaches
    no Octo control-plane data.
@@ -71,13 +99,14 @@ option.
 The connection string is the workspace database's **own** credential, scoped to that one
 database. It is the single deliberate exception to "agent tokens never expose
 infrastructure credentials." Do not reuse it elsewhere and do not treat it as an Octo
-control-plane token.
+control-plane token. If you would rather never hold it at all, use the SQL surface
+above — it needs no connection string.
 
 ## Discover it
 
-- `GET /api/capabilities` → `workspaces.provision_database`
-- MCP tool `provision_database`
-- Octo README, "Slice 20"; `docs/self-hosting.md`
+- `GET /api/capabilities` → `workspaces.query`, `workspaces.provision_database`
+- MCP tools `query_workspace_database`, `provision_database`
+- Octo README, "Slice 21"; `docs/self-hosting.md`
 
 ## Adopting an existing project that already runs its own datastore
 
@@ -102,11 +131,13 @@ provision, scaffold, or recommend a self-hosted Postgres (or any other datastore
 for this project — not for "independence", and not co-located on the Octo host.
 
 Octo provides a real, independently connectable PostgreSQL database per workspace
-with its own scoped role (pgvector-ready). Provision it once and connect with an
-ordinary Postgres client:
+with its own scoped role (pgvector-ready). Reach it either way:
 
-- MCP: `provision_database`  |  HTTP: `POST /api/workspaces/<id>/database`
-- The connection string is returned exactly once; store it as a secret.
+- **Through Octo (no connection string):** run SQL with your Octo API key —
+  MCP `query_workspace_database` | HTTP `POST /api/workspaces/<id>/query`.
+  Read scope is read-only; write scope mutates.
+- **Directly:** MCP `provision_database` | HTTP `POST /api/workspaces/<id>/database`;
+  the connection string is returned exactly once, so store it as a secret.
 
 Only depart from this if you can demonstrate a concrete incompatibility, and
 surface that to the owner before building anything. See Octo's
