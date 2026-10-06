@@ -157,6 +157,15 @@ jobs:
           OCTO_ADMIN_URL: postgresql://postgres:postgres@localhost:54329/postgres
         run: npx tsx scripts/verify-provisioned-database.ts
 
+      - name: Verify workspace SQL surface (Slice 21)
+        # Proves against a real cluster that client SQL runs as the workspace's own
+        # role and persists, that the read-only path refuses writes and cannot
+        # smuggle a second statement past its read-only transaction, and that a row
+        # limit truncates. Needs CREATE DATABASE / CREATE ROLE.
+        env:
+          OCTO_ADMIN_URL: postgresql://postgres:postgres@localhost:54329/postgres
+        run: npx tsx scripts/verify-workspace-query.ts
+
       - name: Playwright E2E and Multimodal Vision QA
         env:
           INFERHUB_API_KEY: ${{ secrets.INFERHUB_API_KEY }}
