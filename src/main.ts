@@ -4,26 +4,38 @@ import type { FileRecord } from './storage/file-service';
 import type { ApiKey } from './api/keys';
 import type { GalleryItem } from './media/gallery-service';
 import type { ShareSummary } from './media/share-service';
+import { isSessionExpired } from './lib/session-expiry';
 
 type View = 'overview' | 'files' | 'gallery' | 'operations' | 'access';
 type Job = { id: string; jobType: string; state: string; attempts: number; maxAttempts: number; errorSummary?: string | null; createdAt: string; completedAt?: string | null };
 type Activity = { id: string; eventType: string; summary: string; createdAt: string };
-type Modal = 'workspace' | 'text-file' | 'key' | 'share' | 'workspace-created' | 'key-created' | 'share-created' | 'delete-workspace' | 'preview' | 'mfa-enroll' | 'mfa-recovery' | null;
+type OpsSummary = {
+  failureCounts: { errorCode: string | null; source: string; severity: string; eventCount: number; firstSeen: string; lastSeen: string }[];
+  failuresByJobTypeDay: { jobType: string; day: string; errorCode: string | null; eventCount: number }[];
+  unhealthyJobs: { jobId: string; jobType: string; state: string; attempt: number; maxAttempts: number; errorCode: string | null; errorSummary: string | null; updatedAt: string }[];
+};
+type Modal = 'workspace' | 'text-file' | 'key' | 'share' | 'key-created' | 'share-created' | 'delete-workspace' | 'preview' | 'mfa-enroll' | 'mfa-recovery' | null;
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Octo app root is missing');
 
+// A signed-in session also ends on inactivity, not only at the token's absolute
+// expiry: a shared or walked-away-from machine must not stay signed in. The server
+// enforces the token lifetime (20 minutes); this matches it client-side.
+const IDLE_TIMEOUT_MS = 20 * 60 * 1000;
+let lastActivity = Date.now();
+
 const state: {
   principal: Principal | null; token: string | null; workspaces: WorkspaceSummary[]; workspace: WorkspaceSummary | null;
-  files: FileRecord[]; gallery: GalleryItem[]; keys: ApiKey[]; shares: ShareSummary[]; jobs: Job[]; activity: Activity[];
+  files: FileRecord[]; gallery: GalleryItem[]; keys: ApiKey[]; shares: ShareSummary[]; jobs: Job[]; activity: Activity[]; opsSummary: OpsSummary | null;
   googleAuthEnabled: boolean; confirmSecretSet: boolean; mfaEnabled: boolean; view: View; loading: boolean; theme: 'midnight' | 'paper';
-  modal: Modal; modalError: string; oneTimeSecret: string; oneTimeLabel: string; shareUrl: string; previewItem: GalleryItem | null; notice: string;
+  modal: Modal; modalError: string; oneTimeSecret: string; oneTimeLabel: string; oneTimeKind: 'key' | 'workspace' | null; shareUrl: string; previewItem: GalleryItem | null; notice: string;
   loadError: string; mfaSetupUri: string; mfaSetupSecret: string; mfaRecoveryCodes: string[]; mfaRecoveryRemaining: number;
 } = {
-  principal: null, token: null, workspaces: [], workspace: null, files: [], gallery: [], keys: [], shares: [], jobs: [], activity: [],
+  principal: null, token: null, workspaces: [], workspace: null, files: [], gallery: [], keys: [], shares: [], jobs: [], activity: [], opsSummary: null,
   googleAuthEnabled: false, confirmSecretSet: false, mfaEnabled: false, view: 'overview', loading: false,
   theme: localStorage.getItem('octo-design-system') === 'paper' ? 'paper' : 'midnight', modal: null, modalError: '',
-  oneTimeSecret: '', oneTimeLabel: '', shareUrl: '', previewItem: null, notice: '', loadError: '',
+  oneTimeSecret: '', oneTimeLabel: '', oneTimeKind: null, shareUrl: '', previewItem: null, notice: '', loadError: '',
   mfaSetupUri: '', mfaSetupSecret: '', mfaRecoveryCodes: [], mfaRecoveryRemaining: 0,
 };
 
@@ -40,8 +52,7 @@ async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const response = await fetch(path, { ...init, headers });
   if (response.status === 401 && state.token && !path.startsWith('/api/auth/')) {
-    clearSession();
-    render();
+    expireSession();
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -56,11 +67,25 @@ function clearSession(): void {
   localStorage.removeItem('octo_token');
   localStorage.removeItem('octo_principal');
   state.token = null; state.principal = null; state.workspaces = []; state.workspace = null;
-  state.files = []; state.gallery = []; state.keys = []; state.shares = []; state.jobs = []; state.activity = [];
+  state.files = []; state.gallery = []; state.keys = []; state.shares = []; state.jobs = []; state.activity = []; state.opsSummary = null;
   // One-time material is not session state to carry forward: a minted key secret
   // or share link must not render for whoever signs in next on this machine.
   state.oneTimeSecret = ''; state.oneTimeLabel = ''; state.shareUrl = '';
   state.modal = null; state.loadError = '';
+}
+
+// A session can end two ways: the server rejects the token (401), or the client
+// watchdog sees it expired or the user idle too long. Both land here so the login
+// screen explains why, instead of silently dropping the user onto it.
+function expireSession(): void {
+  clearSession();
+  state.notice = 'Your session expired. Please sign in again.';
+  render();
+}
+
+function sessionWatchdog(): void {
+  if (!state.token) return;
+  if (isSessionExpired(state.token, Date.now()) || Date.now() - lastActivity >= IDLE_TIMEOUT_MS) expireSession();
 }
 
 async function loadWorkspace(id: string): Promise<void> {
@@ -70,10 +95,11 @@ async function loadWorkspace(id: string): Promise<void> {
   state.loading = true;
   render();
   const query = '?workspaceId=' + encodeURIComponent(id);
-  const labels = ['files', 'gallery', 'jobs', 'activity', 'shares', 'API keys'];
+  const labels = ['files', 'gallery', 'jobs', 'activity', 'shares', 'API keys', 'failure classifications'];
   const results = await Promise.allSettled([
     api<FileRecord[]>('/api/files' + query), api<GalleryItem[]>('/api/gallery' + query), api<Job[]>('/api/jobs' + query),
     api<Activity[]>('/api/activity' + query), api<ShareSummary[]>('/api/workspaces/shares' + query), api<ApiKey[]>('/api/keys'),
+    api<OpsSummary>('/api/ops/summary' + query),
   ]);
   const failed = results.map((result, index) => (result.status === 'rejected' ? labels[index] : null)).filter(Boolean);
   // A failed request and an empty workspace look identical in the UI, but only the
@@ -86,12 +112,15 @@ async function loadWorkspace(id: string): Promise<void> {
   state.activity = results[3].status === 'fulfilled' ? results[3].value : [];
   state.shares = results[4].status === 'fulfilled' ? results[4].value.map((share) => ({ ...share, active: !share.revokedAt && (!share.validUntil || Date.parse(share.validUntil) > Date.now()) })) : [];
   state.keys = results[5].status === 'fulfilled' ? results[5].value : [];
+  state.opsSummary = results[6].status === 'fulfilled' ? results[6].value : null;
   state.loading = false;
   render();
 }
 
 async function enterSession(token: string, principal?: Principal): Promise<void> {
   state.token = token;
+  state.notice = '';
+  lastActivity = Date.now();
   localStorage.setItem('octo_token', token);
   const identity = await api<{ principal: Principal; confirmSecretSet?: boolean; mfaEnabled?: boolean; mfaRecoveryCodesRemaining?: number }>('/api/me');
   state.principal = principal ?? identity.principal;
@@ -121,7 +150,12 @@ async function bootstrap(): Promise<void> {
   } catch { state.googleAuthEnabled = false; }
   const saved = localStorage.getItem('octo_token');
   if (saved) {
-    try { await enterSession(saved); return; } catch { clearSession(); }
+    if (isSessionExpired(saved, Date.now())) {
+      clearSession();
+      state.notice = 'Your session expired. Please sign in again.';
+    } else {
+      try { await enterSession(saved); return; } catch { clearSession(); }
+    }
   }
   render();
 }
@@ -150,21 +184,27 @@ function activityRows(items: Activity[]): string {
   return '<div class="activity-list">' + items.slice(0, 5).map((item) => '<div class="activity-row"><span class="activity-dot"></span><span><strong>' + esc(item.summary) + '</strong><small>' + esc(item.eventType) + '</small></span><time>' + date(item.createdAt) + '</time></div>').join('') + '</div>';
 }
 
+// The confirmation secret gates destructive/high-impact actions. Every field that
+// asks for it explains what it is: it is easy to mistake for the account password,
+// and the only other mention is the Access settings row. The helper sits beside the
+// label (not inside it) so the field's accessible name stays exactly "Confirmation secret".
+const CONFIRM_SECRET_HELP = 'Your confirmation secret authorizes destructive or high-impact actions (creating a workspace, minting a key, deleting data). Set or change it under Access.';
+const confirmSecretField = (input: string): string => '<div class="field-group"><label>Confirmation secret' + input + '</label><small class="field-help">' + CONFIRM_SECRET_HELP + '</small></div>';
+
 function modalMarkup(): string {
   if (!state.modal) return '';
   const close = '<button class="icon-button modal-close" type="button" data-action="close-modal" aria-label="Close dialog">×</button>';
   const shell = (title: string, body: string, footer = '') => '<dialog open class="modal" aria-labelledby="modal-title"><div class="modal-head"><div><p class="eyebrow">OCTO WORKSPACE</p><h2 id="modal-title">' + title + '</h2></div>' + close + '</div><div class="modal-body">' + body + (state.modalError ? '<p class="form-error" role="alert">' + esc(state.modalError) + '</p>' : '') + '</div>' + (footer ? '<div class="modal-foot">' + footer + '</div>' : '') + '</dialog><div class="modal-scrim" data-action="close-modal"></div>';
-  if (state.modal === 'workspace') { const setup = state.confirmSecretSet ? '' : '<label>New confirmation secret<input name="newSecret" autocomplete="new-password" type="password" required /></label><button class="button secondary" type="button" data-action="set-secret">Set confirmation secret</button>'; const mfa = state.mfaEnabled ? '<label>Authenticator code<input name="mfaCode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code or recovery code" required /></label>' : ''; return shell('New Workspace', '<form data-form="workspace"><label>Workspace name<input name="name" required autocomplete="off" placeholder="e.g. Research" /></label><label>Description <span class="optional">Optional</span><textarea name="description" rows="3" placeholder="What belongs in this workspace?"></textarea></label><label>Archive after <span class="optional">Optional</span><select name="retentionDays"><option value="0">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="180">180 days</option></select></label>' + setup + mfa + '<label>Confirmation secret<input name="secret" required type="password" autocomplete="current-password" /></label><button class="button primary" type="submit">Create Workspace</button></form>'); }
+  if (state.modal === 'workspace') { const setup = state.confirmSecretSet ? '' : '<label>New confirmation secret<input name="newSecret" autocomplete="new-password" type="password" required /></label><button class="button secondary" type="button" data-action="set-secret">Set confirmation secret</button>'; const mfa = state.mfaEnabled ? '<label>Authenticator code<input name="mfaCode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code or recovery code" required /></label>' : ''; return shell('New Workspace', '<form data-form="workspace"><label>Workspace name<input name="name" required autocomplete="off" placeholder="e.g. Research" /></label><label>Description <span class="optional">Optional</span><textarea name="description" rows="3" placeholder="What belongs in this workspace?"></textarea></label><label>Archive after <span class="optional">Optional</span><select name="retentionDays"><option value="0">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="180">180 days</option></select></label>' + setup + mfa + confirmSecretField('<input name="secret" required type="password" autocomplete="current-password" />') + '<button class="button primary" type="submit">Create Workspace</button></form>'); }
   if (state.modal === 'text-file') return shell('New text file', '<form data-form="text-file"><label>File name<input name="name" required placeholder="notes.txt" /></label><label>Contents<textarea name="content" rows="8" placeholder="Write something useful…"></textarea></label><button class="button primary" type="submit">Save file</button></form>');
-  if (state.modal === 'key') { const setup = state.confirmSecretSet ? '' : '<label>New confirmation secret<input name="newSecret" autocomplete="new-password" type="password" required /></label><button class="button secondary" type="button" data-action="set-secret">Set confirmation secret</button>'; const mfa = state.mfaEnabled ? '<label>Authenticator code<input name="mfaCode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code or recovery code" required /></label>' : ''; return shell('Generate API Key', '<form data-form="key"><label>Key name<input name="name" required placeholder="e.g. Ingest Agent" /></label><label>Scope<select name="scope"><option value="workspace">This workspace</option><option value="account">Account-wide</option></select></label><label>Expires in <span class="optional">Optional</span><select name="expires"><option value="">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select></label>' + setup + mfa + '<label>Confirmation secret<input name="secret" required type="password" autocomplete="current-password" /></label><button class="button primary" type="submit">Generate API Key</button></form>'); }
+  if (state.modal === 'key') { const setup = state.confirmSecretSet ? '' : '<label>New confirmation secret<input name="newSecret" autocomplete="new-password" type="password" required /></label><button class="button secondary" type="button" data-action="set-secret">Set confirmation secret</button>'; const mfa = state.mfaEnabled ? '<label>Authenticator code<input name="mfaCode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code or recovery code" required /></label>' : ''; return shell('Generate API Key', '<form data-form="key"><label>Key name<input name="name" required placeholder="e.g. Ingest Agent" /></label><label>Scope<select name="scope"><option value="workspace">This workspace</option><option value="account">Account-wide</option></select></label><label>Expires in <span class="optional">Optional</span><select name="expires"><option value="">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select></label>' + setup + mfa + confirmSecretField('<input name="secret" required type="password" autocomplete="current-password" />') + '<button class="button primary" type="submit">Generate API Key</button></form>'); }
   if (state.modal === 'share') return shell('Create share link', '<form data-form="share"><p class="muted">Anyone with this link can view this workspace gallery.</p><label>Expires in<select name="expires"><option value="0">No expiry</option><option value="24">24 hours</option><option value="168">7 days</option><option value="720">30 days</option></select></label><button class="button primary" type="submit">Create link</button></form>');
-  if (state.modal === 'workspace-created') return shell('Workspace created', '<p class="muted">Save this workspace key now. It will not be shown again.</p><div class="secret-box"><code>' + esc(state.oneTimeSecret) + '</code><button type="button" class="text-button" data-action="copy-secret">Copy</button></div>', '<button class="button primary" data-action="done-secret" type="button">Done</button>');
   if (state.modal === 'key-created') return shell('New API Key Minted', '<p class="muted">Copy this secret now. It is shown only once.</p><div class="secret-box"><code>' + esc(state.oneTimeSecret) + '</code><button type="button" class="text-button" data-action="copy-secret">Copy</button></div>', '<button class="button primary" data-action="done-secret" type="button">Done</button>');
   if (state.modal === 'share-created') return shell('Copy this link now', '<p class="muted">This read-only link is shown once. Anyone with it can view the shared gallery.</p><div class="secret-box"><code>' + esc(state.shareUrl) + '</code><button type="button" class="text-button" data-action="copy-share">Copy</button></div>', '<button class="button primary" data-action="done-secret" type="button">Done</button>');
   if (state.modal === 'delete-workspace') {
     const setup = state.confirmSecretSet ? '' : '<label>New confirmation secret<input name="newSecret" autocomplete="new-password" type="password" required /></label><button class="button secondary" type="button" data-action="set-secret">Set confirmation secret</button>';
     const mfa = state.mfaEnabled ? '<label>Authenticator code<input name="mfaCode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code or recovery code" required /></label>' : '';
-    return shell('Delete ' + esc(state.workspace?.name) + '?', '<p class="muted">This permanently removes the workspace and its catalog.</p><form data-form="delete-workspace">' + setup + '<label>Type ' + esc(state.workspace?.slug) + ' to confirm<input name="slug" required aria-label="Type workspace slug to confirm" /></label>' + mfa + '<label>Confirmation secret<input name="secret" required type="password" autocomplete="current-password" /></label><button class="button danger-button" type="submit">Delete workspace</button></form>');
+    return shell('Delete ' + esc(state.workspace?.name) + '?', '<p class="muted">This permanently removes the workspace and its catalog.</p><form data-form="delete-workspace">' + setup + '<label>Type ' + esc(state.workspace?.slug) + ' to confirm<input name="slug" required aria-label="Type workspace slug to confirm" /></label>' + mfa + confirmSecretField('<input name="secret" required type="password" autocomplete="current-password" />') + '<button class="button danger-button" type="submit">Delete workspace</button></form>');
   }
   if (state.modal === 'mfa-enroll') return shell('Set up two-factor authentication', '<p class="muted">Add this secret to your authenticator app, then enter the 6-digit code it shows.</p><div class="secret-box"><code>' + esc(state.mfaSetupSecret) + '</code></div><p class="muted"><small>Or open: ' + esc(state.mfaSetupUri) + '</small></p><form data-form="mfa-enroll"><label>Authenticator code<input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" required /></label><button class="button primary" type="submit">Confirm and enable</button></form>');
   if (state.modal === 'mfa-recovery') return shell('Save your recovery codes', '<p class="muted">Each code works once if you lose your authenticator. They are shown only now.</p><div class="secret-box"><code>' + esc(state.mfaRecoveryCodes.join('\n')) + '</code><button type="button" class="text-button" data-action="copy-recovery">Copy</button></div>', '<button class="button primary" data-action="done-recovery" type="button">Done</button>');
@@ -173,7 +213,7 @@ function modalMarkup(): string {
 }
 
 function renderLogin(): void {
-  root!.innerHTML = '<main class="login-screen"><section class="login-card"><div class="brand-lockup"><span class="brand-mark">◉</span><span>octo</span></div><p class="eyebrow">WORKSPACE DATA PLATFORM</p><h1>Welcome to Octo</h1><p class="login-copy">A calm home for your workspace data, files, and activity.</p><div class="login-actions">' + (state.googleAuthEnabled ? '<button class="button google-button" data-action="google" type="button"><span class="google-g">G</span>Sign in with Google</button>' : '<button class="button google-button" disabled type="button" aria-label="Google sign-in not configured"><span class="google-g">G</span>Google sign-in not configured</button>') + '<button class="button primary" data-action="guest" type="button">Continue as Guest<span aria-hidden="true">→</span></button></div><p class="login-note">Your workspaces stay separate and scoped to your account.</p></section><div class="login-art" aria-hidden="true"><div class="orb orb-one"></div><div class="orb orb-two"></div><div class="art-grid"></div><div class="art-caption"><span class="live-dot"></span> Your workspace, in one place</div></div></main>';
+  root!.innerHTML = '<main class="login-screen"><section class="login-card"><div class="brand-lockup"><span class="brand-mark">◉</span><span>octo</span></div><p class="eyebrow">WORKSPACE DATA PLATFORM</p><h1>Welcome to Octo</h1><p class="login-copy">A calm home for your workspace data, files, and activity.</p>' + (state.notice ? '<p class="login-notice" role="alert">' + esc(state.notice) + '</p>' : '') + '<div class="login-actions">' + (state.googleAuthEnabled ? '<button class="button google-button" data-action="google" type="button"><span class="google-g">G</span>Sign in with Google</button>' : '<button class="button google-button" disabled type="button" aria-label="Google sign-in not configured"><span class="google-g">G</span>Google sign-in not configured</button>') + '<button class="button primary" data-action="guest" type="button">Continue as Guest<span aria-hidden="true">→</span></button></div><p class="login-note">Your workspaces stay separate and scoped to your account.</p></section><div class="login-art" aria-hidden="true"><div class="orb orb-one"></div><div class="orb orb-two"></div><div class="art-grid"></div><div class="art-caption"><span class="live-dot"></span> Your workspace, in one place</div></div></main>';
 }
 
 function renderOverview(): string {
@@ -194,18 +234,42 @@ function renderOperations(): string {
   const queued = state.jobs.filter((job) => job.state === 'queued').length;
   const failed = state.jobs.filter((job) => job.state === 'failed').length;
   const jobs = state.jobs.length ? '<div class="table-wrap"><table><thead><tr><th>Job</th><th>State</th><th>Attempts</th><th>Created</th><th></th></tr></thead><tbody>' + state.jobs.map((job) => '<tr><td><strong>' + esc(job.jobType) + '</strong>' + (job.errorSummary ? '<small class="error-detail">' + esc(job.errorSummary) + '</small>' : '') + '</td><td><span class="state-pill state-' + esc(job.state) + '">' + esc(job.state) + '</span></td><td>' + job.attempts + ' / ' + job.maxAttempts + '</td><td>' + when(job.createdAt) + '</td><td>' + (job.state === 'failed' ? '<button class="text-button" data-action="retry" data-id="' + esc(job.id) + '">Retry</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' : '<div class="empty-panel compact"><strong>No recent jobs</strong><p>File processing jobs will appear here.</p></div>';
-  return '<div class="metric-grid metric-grid-three"><article class="metric-card"><span class="metric-label">Queued:</span><strong>' + queued + '</strong><small>Waiting for a worker</small></article><article class="metric-card"><span class="metric-label">Failed:</span><strong class="' + (failed ? 'metric-warning' : '') + '">' + failed + '</strong><small>May need another try</small></article><article class="metric-card"><span class="metric-label">Recent jobs</span><strong>' + state.jobs.length + '</strong><small>Latest workspace records</small></article></div><section class="panel"><div class="panel-head"><div><p class="eyebrow">WORKSPACE QUEUE</p><h2>Operations</h2><p class="panel-copy">Review processing and retry failed work.</p></div><button class="button primary" data-action="run-worker">Run worker pass</button></div>' + jobs + '</section><section class="panel activity-panel"><div class="panel-head"><div><p class="eyebrow">EVENT LOG</p><h2>Recent activity</h2></div></div>' + activityRows(state.activity) + '</section>';
+  return '<div class="metric-grid metric-grid-three"><article class="metric-card"><span class="metric-label">Queued:</span><strong>' + queued + '</strong><small>Waiting for a worker</small></article><article class="metric-card"><span class="metric-label">Failed:</span><strong class="' + (failed ? 'metric-warning' : '') + '">' + failed + '</strong><small>May need another try</small></article><article class="metric-card"><span class="metric-label">Recent jobs</span><strong>' + state.jobs.length + '</strong><small>Latest workspace records</small></article></div>' + opsFailurePanel() + '<section class="panel"><div class="panel-head"><div><p class="eyebrow">WORKSPACE QUEUE</p><h2>Operations</h2><p class="panel-copy">Review processing and retry failed work.</p></div><button class="button primary" data-action="run-worker">Run worker pass</button></div>' + jobs + '</section><section class="panel activity-panel"><div class="panel-head"><div><p class="eyebrow">EVENT LOG</p><h2>Recent activity</h2></div></div>' + activityRows(state.activity) + '</section>';
+}
+
+// The classified-failure panel (issue #140, slice O5). It reads what the O3 summary
+// route returns from the O2 views: which error codes are recurring, how failures
+// trend by job type and day, and which jobs are currently stuck -- so a reader can
+// see what is actually failing instead of only that the count is non-zero.
+function opsFailurePanel(): string {
+  const summary = state.opsSummary;
+  if (!summary) {
+    return '<section class="panel"><div class="panel-head"><div><p class="eyebrow">FAILURE ANALYSIS</p><h2>What is failing</h2></div></div><div class="empty-panel compact"><strong>No failure data</strong><p>Classified failures appear here once the workspace records errors.</p></div></section>';
+  }
+  const counts = summary.failureCounts;
+  const countsBody = counts.length
+    ? '<div class="table-wrap"><table><thead><tr><th>Error code</th><th>Source</th><th>Events</th><th>Last seen</th></tr></thead><tbody>' + counts.map((row) => '<tr><td><strong>' + esc(row.errorCode ?? 'Unclassified') + '</strong><small>' + esc(row.severity) + '</small></td><td>' + esc(row.source) + '</td><td>' + row.eventCount + '</td><td>' + when(row.lastSeen) + '</td></tr>').join('') + '</tbody></table></div>'
+    : '<div class="empty-panel compact"><strong>No classified failures</strong><p>Nothing has been recorded against this workspace.</p></div>';
+  const byDay = summary.failuresByJobTypeDay;
+  const dayBody = byDay.length
+    ? '<div class="table-wrap"><table><thead><tr><th>Day</th><th>Job type</th><th>Error code</th><th>Events</th></tr></thead><tbody>' + byDay.map((row) => '<tr><td>' + esc(row.day) + '</td><td><strong>' + esc(row.jobType) + '</strong></td><td>' + esc(row.errorCode ?? '—') + '</td><td>' + row.eventCount + '</td></tr>').join('') + '</tbody></table></div>'
+    : '<div class="empty-panel compact"><strong>No daily failures</strong><p>No failures were recorded on any day.</p></div>';
+  const unhealthy = summary.unhealthyJobs;
+  const unhealthyBody = unhealthy.length
+    ? '<div class="table-wrap"><table><thead><tr><th>Job</th><th>State</th><th>Attempts</th><th>Last update</th><th></th></tr></thead><tbody>' + unhealthy.map((row) => '<tr><td><strong>' + esc(row.jobType) + '</strong>' + (row.errorCode ? '<small class="error-detail">' + esc(row.errorCode) + '</small>' : '') + '</td><td><span class="state-pill state-' + esc(row.state) + '">' + esc(row.state) + '</span></td><td>' + row.attempt + ' / ' + row.maxAttempts + '</td><td>' + when(row.updatedAt) + '</td><td>' + (row.state === 'failed' ? '<button class="text-button" data-action="retry" data-id="' + esc(row.jobId) + '">Retry</button>' : '<span class="muted">—</span>') + '</td></tr>').join('') + '</tbody></table></div>'
+    : '<div class="empty-panel compact"><strong>No unhealthy jobs</strong><p>Every job is either done, queued, or holding a live lease.</p></div>';
+  return '<section class="panel"><div class="panel-head"><div><p class="eyebrow">FAILURE ANALYSIS</p><h2>What is failing</h2><p class="panel-copy">Failures classified by error code, by job type and day, and the jobs currently needing attention.</p></div></div><h3 class="subhead">By error code</h3>' + countsBody + '<h3 class="subhead">By job type and day</h3>' + dayBody + '<h3 class="subhead">Jobs needing attention</h3>' + unhealthyBody + '</section>';
 }
 
 function renderAccess(): string {
   const keyRows = state.keys.length ? '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>' + state.keys.map((key) => '<tr><td><strong>' + esc(key.name) + '</strong><small><code>' + esc(key.prefix) + '…</code></small></td><td>' + (key.isAccountWide ? 'Account-wide' : 'Workspace') + '</td><td>' + date(key.createdAt) + '</td><td>' + date(key.lastUsedAt) + '</td><td><button class="text-button danger" data-action="revoke-key" data-id="' + esc(key.id) + '">Revoke</button></td></tr>').join('') + '</tbody></table></div>' : '<div class="empty-panel compact"><strong>No API keys yet</strong><p>Create one for an application or agent.</p></div>';
   const shareRows = state.shares.length ? '<div class="table-wrap"><table><thead><tr><th>Link</th><th>Permission</th><th>Created</th><th>Visits</th><th></th></tr></thead><tbody>' + state.shares.map((share) => '<tr><td><strong>' + (share.active ? 'Active gallery link' : 'Revoked') + '</strong><small>Expires ' + date(share.validUntil) + '</small></td><td>' + esc(share.permission) + '</td><td>' + date(share.createdAt) + '</td><td>' + share.accessCount + '</td><td>' + (share.active ? '<button class="text-button danger" data-action="revoke-share" data-id="' + esc(share.id) + '">Revoke</button>' : '<span class="muted">—</span>') + '</td></tr>').join('') + '</tbody></table></div>' : '<div class="empty-panel compact"><strong>No share links</strong><p>Create a read-only gallery link for this workspace.</p></div>';
-  const keyNotice = state.oneTimeSecret ? '<section class="one-time-notice" role="status"><div><strong>New API Key Minted</strong><p>Copy this secret now. It is shown only once.</p><code>' + esc(state.oneTimeSecret) + '</code></div><button class="text-button" data-action="copy-secret">Copy</button><button class="text-button" data-action="done-secret">Done</button></section>' : '';
+  const keyNotice = state.oneTimeKind === 'key' && state.oneTimeSecret ? '<section class="one-time-notice" role="status"><div><strong>New API Key Minted</strong><p>Copy this secret now. It is shown only once.</p><code>' + esc(state.oneTimeSecret) + '</code></div><button class="text-button" data-action="copy-secret">Copy</button><button class="text-button" data-action="done-secret">Done</button></section>' : '';
   const shareNotice = state.shareUrl ? '<section class="one-time-notice" role="status"><div><strong>Copy this link now</strong><p>This read-only link is shown once.</p><code>' + esc(state.shareUrl) + '</code></div><button class="text-button" data-action="copy-share">Copy</button><button class="text-button" data-action="done-secret">Done</button></section>' : '';
   const mfaBody = state.mfaEnabled
     ? '<p class="muted">Enabled. ' + state.mfaRecoveryRemaining + ' recovery codes remaining.</p><form data-form="mfa-rotate" class="access-create-form"><input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Authenticator code" aria-label="Authenticator code" required /><button class="button secondary" type="submit">Rotate recovery codes</button></form><form data-form="mfa-disable" class="access-create-form"><input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Code or recovery code" aria-label="Authenticator or recovery code" required /><button class="button danger-button" type="submit">Disable two-factor</button></form>'
     : '<p class="muted">Not enabled. Require a code from your authenticator for destructive commands like deleting a workspace.</p><button class="button secondary" type="button" data-action="mfa-begin">Set up two-factor authentication</button>';
-  return keyNotice + shareNotice + '<section class="panel"><div class="panel-head"><div><p class="eyebrow">MACHINE ACCESS</p><h2>API keys</h2><p class="panel-copy">Keys are shown once when created.</p></div><form data-form="key" class="access-create-form"><input name="name" required placeholder="e.g. Ingest Agent" aria-label="API key name" /><select name="scope" aria-label="API key scope"><option value="workspace">This workspace</option><option value="account">Account-wide</option></select><select name="expires" aria-label="API key expiration"><option value="">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select>' + (state.confirmSecretSet ? '' : '<input name="newSecret" required type="password" placeholder="New confirmation secret" aria-label="New confirmation secret" autocomplete="new-password" /><button class="button secondary" type="button" data-action="set-secret">Set secret</button>') + (state.mfaEnabled ? '<input name="mfaCode" required inputmode="numeric" autocomplete="one-time-code" placeholder="Authenticator code" aria-label="Authenticator code" />' : '') + '<input name="secret" required type="password" placeholder="Confirmation secret" aria-label="Confirmation secret" autocomplete="current-password" /><button class="button primary" type="submit">Generate API Key</button></form></div>' + keyRows + '</section><section class="panel"><div class="panel-head"><div><p class="eyebrow">SHARED CONTENT</p><h2>Share links</h2><p class="panel-copy">Read-only access to this workspace gallery.</p></div><div class="share-create-controls"><label class="sr-only" for="share-expiry">Share link expiration</label><select id="share-expiry"><option value="0">No expiry</option><option value="1">1 hour</option><option value="24">24 hours</option><option value="168">7 days</option></select><button class="button secondary" data-action="new-share">Create link</button></div></div>' + shareRows + '</section><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">SECURITY</p><h2>Two-factor authentication</h2><p class="panel-copy">Per-account step-up for destructive commands.</p></div></div>' + mfaBody + '</section><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">WORKSPACE</p><h2>' + esc(state.workspace?.name) + '</h2><p class="panel-copy">' + esc(state.workspace?.description || 'No description') + '</p></div><span class="role-tag">' + esc(state.workspace?.role) + '</span></div><dl class="detail-list"><div><dt>Workspace slug</dt><dd>' + esc(state.workspace?.slug) + '</dd></div><div><dt>File retention</dt><dd>' + (state.workspace?.retentionDays ? state.workspace.retentionDays + ' days' : 'No automatic archive') + '</dd></div><div><dt>Confirmation secret</dt><dd>' + (state.confirmSecretSet ? 'Configured' : 'Not configured') + '</dd></div><div><dt>Two-factor</dt><dd>' + (state.mfaEnabled ? 'Enabled' : 'Not enabled') + '</dd></div></dl><button class="button danger-button" data-action="delete-workspace">Delete Workspace</button></section>';
+  return keyNotice + shareNotice + '<section class="panel"><div class="panel-head"><div><p class="eyebrow">MACHINE ACCESS</p><h2>API keys</h2><p class="panel-copy">Keys are shown once when created.</p></div><form data-form="key" class="access-create-form"><input name="name" required placeholder="e.g. Ingest Agent" aria-label="API key name" /><select name="scope" aria-label="API key scope"><option value="workspace">This workspace</option><option value="account">Account-wide</option></select><select name="expires" aria-label="API key expiration"><option value="">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select>' + (state.confirmSecretSet ? '' : '<input name="newSecret" required type="password" placeholder="New confirmation secret" aria-label="New confirmation secret" autocomplete="new-password" /><button class="button secondary" type="button" data-action="set-secret">Set secret</button>') + (state.mfaEnabled ? '<input name="mfaCode" required inputmode="numeric" autocomplete="one-time-code" placeholder="Authenticator code" aria-label="Authenticator code" />' : '') + '<input name="secret" required type="password" placeholder="Confirmation secret" aria-label="Confirmation secret" autocomplete="current-password" title="Your confirmation secret authorizes destructive or high-impact actions. Set or change it under Access." /><button class="button primary" type="submit">Generate API Key</button></form></div>' + keyRows + '</section><section class="panel"><div class="panel-head"><div><p class="eyebrow">SHARED CONTENT</p><h2>Share links</h2><p class="panel-copy">Read-only access to this workspace gallery.</p></div><div class="share-create-controls"><label class="sr-only" for="share-expiry">Share link expiration</label><select id="share-expiry"><option value="0">No expiry</option><option value="1">1 hour</option><option value="24">24 hours</option><option value="168">7 days</option></select><button class="button secondary" data-action="new-share">Create link</button></div></div>' + shareRows + '</section><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">SECURITY</p><h2>Two-factor authentication</h2><p class="panel-copy">Per-account step-up for destructive commands.</p></div></div>' + mfaBody + '</section><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">WORKSPACE</p><h2>' + esc(state.workspace?.name) + '</h2><p class="panel-copy">' + esc(state.workspace?.description || 'No description') + '</p></div><span class="role-tag">' + esc(state.workspace?.role) + '</span></div><dl class="detail-list"><div><dt>Workspace slug</dt><dd>' + esc(state.workspace?.slug) + '</dd></div><div><dt>File retention</dt><dd>' + (state.workspace?.retentionDays ? state.workspace.retentionDays + ' days' : 'No automatic archive') + '</dd></div><div><dt>Confirmation secret</dt><dd>' + (state.confirmSecretSet ? 'Configured' : 'Not configured') + '</dd></div><div><dt>Two-factor</dt><dd>' + (state.mfaEnabled ? 'Enabled' : 'Not enabled') + '</dd></div></dl><button class="button danger-button" data-action="delete-workspace">Delete Workspace</button></section>';
 }
 
 function renderApp(): void {
@@ -214,9 +278,13 @@ function renderApp(): void {
   const select = state.workspaces.map((workspace) => '<option value="' + esc(workspace.id) + '" ' + (workspace.id === state.workspace?.id ? 'selected' : '') + '>' + esc(workspace.name) + '</option>').join('');
   const toast = state.notice ? '<div class="toast" role="status">' + esc(state.notice) + '</div>' : '';
   const loadError = state.loadError ? '<div class="load-error" role="alert">' + esc(state.loadError) + '</div>' : '';
+  // A workspace's one-time key is shown as an app-level notice (not a blocking
+  // dialog), so it is visible on whichever view is active and cannot strand the
+  // user on a stale workspace.
+  const workspaceNotice = state.oneTimeKind === 'workspace' && state.oneTimeSecret ? '<section class="one-time-notice" role="status"><div><strong>Workspace created</strong><p><strong>' + esc(state.oneTimeLabel) + '</strong> is now your active workspace. Save its workspace key now — it is shown only once.</p><code>' + esc(state.oneTimeSecret) + '</code></div><button class="text-button" data-action="copy-secret">Copy</button><button class="text-button" data-action="done-secret">Done</button></section>' : '';
   const workspaceName = state.workspace?.name || 'No Authorized Workspaces';
   const guestSuffix = state.principal?.isGuest && !workspaceName.endsWith(' (Guest)') ? ' (Guest)' : '';
-  root!.innerHTML = '<div class="app-shell" data-theme="' + state.theme + '"><aside class="sidebar"><a class="brand-lockup" href="/" aria-label="Octo home"><span class="brand-mark">◉</span><span>octo</span></a><div class="workspace-label">WORKSPACE</div><label class="sr-only" for="workspace-select">Select workspace</label><select id="workspace-select" class="workspace-picker" ' + (state.workspaces.length ? '' : 'disabled') + '>' + (select || '<option>No workspaces</option>') + '</select><nav class="main-nav" aria-label="Workspace navigation">' + navButton('overview', 'Overview', '◫') + navButton('files', 'Files', '⌑') + navButton('gallery', 'Gallery', '▧') + navButton('operations', 'Operations', '⌁') + navButton('access', 'Access', '⌑') + '</nav><div class="sidebar-spacer"></div><div class="sidebar-note"><span class="live-dot"></span><span>Workspace data is live</span></div><div class="profile"><span class="avatar">' + esc((state.principal?.displayName || state.principal?.email || 'O').slice(0, 1).toUpperCase()) + '</span><span class="profile-copy"><strong>' + esc(state.principal?.displayName || (state.principal?.isGuest ? 'Personal (Guest)' : state.principal?.email)) + '</strong><small>' + (state.principal?.isPlatformOwner ? 'Platform owner' : state.principal?.isGuest ? 'Guest session' : 'Workspace member') + '</small></span></div></aside><main class="main-area"><header class="topbar"><div class="breadcrumbs"><span>Workspace Control Dashboard</span><span class="crumb-divider">/</span><strong>' + labels[state.view] + '</strong></div><div class="topbar-actions"><span class="workspace-chip">' + esc(state.workspace?.role ?? 'No workspace') + '</span><button class="icon-button theme-toggle" type="button" data-action="theme" aria-label="Switch color theme" title="Switch color theme">' + (state.theme === 'midnight' ? '☼' : '◐') + '</button><button class="button quiet small" type="button" data-action="sign-out">Sign out</button></div></header><div class="page-wrap"><div class="page-heading"><div><p class="eyebrow">' + (state.principal?.isGuest ? 'PERSONAL WORKSPACE' : 'OCTO / ' + labels[state.view].toUpperCase()) + '</p><h1>' + esc(workspaceName + guestSuffix) + '</h1><p class="page-subtitle">' + (state.view === 'overview' ? 'Everything important in this workspace, at a glance.' : state.view === 'files' ? 'Find and manage workspace files.' : state.view === 'gallery' ? 'A visual view of your workspace media.' : state.view === 'operations' ? 'Recent jobs and activity for this workspace.' : 'Manage workspace credentials and shares.') + '</p></div><div class="page-actions"><button class="button secondary" data-action="new-workspace">+ New Workspace</button></div></div>' + loadError + (state.loading ? '<div class="loading-bar" aria-label="Loading workspace"></div>' : '') + body + '<input class="sr-only" type="file" id="binary-upload" aria-label="Upload file" multiple>' + '</div></main>' + toast + modalMarkup() + '</div>';
+  root!.innerHTML = '<div class="app-shell" data-theme="' + state.theme + '"><aside class="sidebar"><a class="brand-lockup" href="/" aria-label="Octo home"><span class="brand-mark">◉</span><span>octo</span></a><div class="workspace-label">WORKSPACE</div><label class="sr-only" for="workspace-select">Select workspace</label><select id="workspace-select" class="workspace-picker" ' + (state.workspaces.length ? '' : 'disabled') + '>' + (select || '<option>No workspaces</option>') + '</select><nav class="main-nav" aria-label="Workspace navigation">' + navButton('overview', 'Overview', '◫') + navButton('files', 'Files', '⌑') + navButton('gallery', 'Gallery', '▧') + navButton('operations', 'Operations', '⌁') + navButton('access', 'Access', '⌑') + '</nav><div class="sidebar-spacer"></div><div class="sidebar-note"><span class="live-dot"></span><span>Workspace data is live</span></div><div class="profile"><span class="avatar">' + esc((state.principal?.displayName || state.principal?.email || 'O').slice(0, 1).toUpperCase()) + '</span><span class="profile-copy"><strong>' + esc(state.principal?.displayName || (state.principal?.isGuest ? 'Personal (Guest)' : state.principal?.email)) + '</strong><small>' + (state.principal?.isPlatformOwner ? 'Platform owner' : state.principal?.isGuest ? 'Guest session' : 'Workspace member') + '</small></span></div></aside><main class="main-area"><header class="topbar"><div class="breadcrumbs"><span>Workspace Control Dashboard</span><span class="crumb-divider">/</span><strong>' + labels[state.view] + '</strong></div><div class="topbar-actions"><span class="workspace-chip">' + esc(state.workspace?.role ?? 'No workspace') + '</span><button class="icon-button theme-toggle" type="button" data-action="theme" aria-label="Switch color theme" title="Switch color theme">' + (state.theme === 'midnight' ? '☼' : '◐') + '</button><button class="button quiet small" type="button" data-action="sign-out">Sign out</button></div></header><div class="page-wrap"><div class="page-heading"><div><p class="eyebrow">' + (state.principal?.isGuest ? 'PERSONAL WORKSPACE' : 'OCTO / ' + labels[state.view].toUpperCase()) + '</p><h1>' + esc(workspaceName + guestSuffix) + '</h1><p class="page-subtitle">' + (state.view === 'overview' ? 'Everything important in this workspace, at a glance.' : state.view === 'files' ? 'Find and manage workspace files.' : state.view === 'gallery' ? 'A visual view of your workspace media.' : state.view === 'operations' ? 'Recent jobs and activity for this workspace.' : 'Manage workspace credentials and shares.') + '</p></div><div class="page-actions"><button class="button secondary" data-action="new-workspace">+ New Workspace</button></div></div>' + loadError + workspaceNotice + (state.loading ? '<div class="loading-bar" aria-label="Loading workspace"></div>' : '') + body + '<input class="sr-only" type="file" id="binary-upload" aria-label="Upload file" multiple>' + '</div></main>' + toast + modalMarkup() + '</div>';
 }
 
 function render(): void {
@@ -310,7 +378,7 @@ root.addEventListener('click', async (event) => {
     }
     else if (action === 'delete-workspace') openModal('delete-workspace');
     else if (action === 'close-modal') closeModal();
-    else if (action === 'done-secret') { state.oneTimeSecret = ''; state.shareUrl = ''; closeModal(); }
+    else if (action === 'done-secret') { state.oneTimeSecret = ''; state.oneTimeKind = null; state.shareUrl = ''; closeModal(); }
     else if (action === 'copy-secret') await navigator.clipboard.writeText(state.oneTimeSecret);
     else if (action === 'copy-share') await navigator.clipboard.writeText(state.shareUrl);
     else if (action === 'download') await downloadFile(id);
@@ -348,13 +416,17 @@ root.addEventListener('submit', async (event) => {
     if (form.dataset.form === 'workspace') {
       const result = await api<{ workspace: WorkspaceSummary; rawSecret: string }>('/api/workspaces', { method: 'POST', body: JSON.stringify({ name: String(data.get('name') ?? '').trim(), description: String(data.get('description') ?? '').trim() || undefined, retentionDays: Number(data.get('retentionDays')) || null, confirmSecret: String(data.get('secret') ?? ''), mfaCode: String(data.get('mfaCode') ?? '') || undefined }) });
       state.workspaces = await api<WorkspaceSummary[]>('/api/workspaces');
-      state.oneTimeSecret = result.rawSecret; state.oneTimeLabel = result.workspace.name; state.modal = 'workspace-created'; render();
+      // The new workspace becomes active at once, and its one-time key is shown as a
+      // dismissible notice instead of a blocking dialog (matching the key-mint path).
+      state.oneTimeSecret = result.rawSecret; state.oneTimeLabel = result.workspace.name; state.oneTimeKind = 'workspace';
+      state.modal = null; render();
+      await loadWorkspace(result.workspace.id);
     } else if (form.dataset.form === 'text-file') {
       await api('/api/files/upload', { method: 'POST', body: JSON.stringify({ workspaceId: wsId(), name: String(data.get('name') ?? '').trim(), mimeType: 'text/plain', data: String(data.get('content') ?? ''), dataEncoding: 'utf8' }) });
       closeModal(); await loadWorkspace(wsId());
     } else if (form.dataset.form === 'key') {
       const result = await api<{ apiKey: ApiKey; rawSecret: string }>('/api/keys', { method: 'POST', body: JSON.stringify({ name: String(data.get('name') ?? '').trim(), workspaceId: data.get('scope') === 'account' ? null : wsId(), expiresInDays: Number(data.get('expires')) || undefined, confirmSecret: String(data.get('secret') ?? ''), mfaCode: String(data.get('mfaCode') ?? '') || undefined }) });
-      state.keys = [result.apiKey, ...state.keys]; state.oneTimeSecret = result.rawSecret; state.modal = null; render();
+      state.keys = [result.apiKey, ...state.keys]; state.oneTimeSecret = result.rawSecret; state.oneTimeKind = 'key'; state.modal = null; render();
     } else if (form.dataset.form === 'share') {
       const expiry = Number(data.get('expires')) || null;
       const result = await api<{ rawToken: string; share: Omit<ShareSummary, 'active'> }>('/api/workspaces/shares', { method: 'POST', body: JSON.stringify({ workspaceId: wsId(), resourceType: 'gallery', permission: 'read', expiresInHours: expiry }) });
@@ -381,5 +453,13 @@ root.addEventListener('submit', async (event) => {
     render();
   }
 });
+
+// Idle is measured against real interaction, not page loads: scrolling, typing,
+// moving the pointer, and switching tabs all count. The interval checks cheaply and
+// only re-renders when it actually expires the session.
+for (const event of ['click', 'keydown', 'pointerdown', 'scroll', 'touchstart'] as const) {
+  window.addEventListener(event, () => { lastActivity = Date.now(); }, { passive: true });
+}
+window.setInterval(sessionWatchdog, 30_000);
 
 void bootstrap();

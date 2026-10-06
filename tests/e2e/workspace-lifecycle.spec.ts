@@ -51,10 +51,13 @@ test.describe('Workspace data plane', () => {
       .fill('e2e-confirm-secret');
     await page.getByRole('dialog').getByRole('button', { name: 'Create Workspace' }).click();
 
-    // 2. The one-time secret dialog appears carrying a workspace key.
-    await expect(page.getByRole('dialog').getByText('Workspace created')).toBeVisible();
-    await expect(page.getByRole('dialog').getByText(/octo_live_ws_/)).toBeVisible();
-    await page.getByRole('dialog').getByRole('button', { name: 'Done' }).click();
+    // 2. The one-time workspace key appears as a dismissible notice (the dialog
+    //    auto-closes), and the new workspace is already the active one.
+    await expect(page.locator('section.one-time-notice').getByText('Workspace created')).toBeVisible();
+    await expect(page.locator('section.one-time-notice').getByText(/octo_live_ws_/)).toBeVisible();
+    await expect(page.locator('h1')).toContainText(wsName);
+    await page.locator('section.one-time-notice').getByRole('button', { name: 'Done' }).click();
+    await expect(page.locator('section.one-time-notice')).toHaveCount(0);
 
     const wsId = await page.evaluate(async (name: string) => {
       const token = localStorage.getItem('octo_token');
@@ -64,8 +67,12 @@ test.describe('Workspace data plane', () => {
       return (list as { id: string; name: string }[]).find((w) => w.name === name)!.id;
     }, wsName);
 
-    // 3. Switch to the new workspace and upload a file.
+    // 3. Switch to the new workspace and upload a file. Creating the workspace
+    //    kicks off a background load that re-renders the whole app; opening the
+    //    modal before it settles lets that render wipe the modal's inputs, so
+    //    wait for the network to go quiet first.
     await selectWorkspace(page, wsName);
+    await page.waitForLoadState('networkidle');
     await page.getByRole('button', { name: 'New text file' }).click();
     await page.fill('input[placeholder="notes.txt"]', 'lifecycle.txt');
     await page.fill('textarea[placeholder="Write something useful…"]', 'round-trip payload');

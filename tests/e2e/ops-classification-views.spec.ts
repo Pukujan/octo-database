@@ -1,8 +1,8 @@
 /**
- * Playwright E2E: ops classification views (issue #140, slice O2).
+ * Playwright E2E: ops classification views (issue #140, slices O2, O3 and O5).
  *
- * The views are a pure-SQL analytics surface with no HTTP route, so this seeds a
- * known row set directly and asserts both the aggregation and the fence:
+ * The views are a pure-SQL analytics surface, so the first block seeds a known
+ * row set directly and asserts both the aggregation and the fence:
  *
  *   - the counts/grouping a reader would act on, and
  *   - that reading through a view does NOT bypass RLS (`security_invoker`).
@@ -10,9 +10,13 @@
  * The second point is the load-bearing one. A plain definer view owned by the
  * migration role would silently return every workspace's rows; scoped to W1 the
  * count must be W1's 3, not the cross-workspace 5.
+ *
+ * The second block (O3) pins the same views read back over HTTP: a real failing
+ * job must show up through `GET /api/ops/summary`, and the route must refuse a
+ * caller who is not a member of the workspace.
  */
 
-import { expect, test } from '@playwright/test';
+import { expect, test, APIRequestContext } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { ownerQuery } from './owner-db';
@@ -187,5 +191,137 @@ test.describe('Ops classification views (slice O2)', () => {
       await cleanup();
       await app?.end().catch(() => undefined);
     }
+  });
+});
+
+/**
+ * Slice O3: the same views read back over HTTP through the fenced route.
+ *
+ * The route is the exposure slice -- no new aggregation -- so the property to pin
+ * is that a real failure is classified and returned, and that the caller's own
+ * authorization still applies: a non-member is refused, and so is an anonymous
+ * caller.
+ */
+interface GuestSession {
+  principal: { id: string };
+  workspace: { id: string };
+  sessionToken: string;
+}
+
+interface OpsSummaryBody {
+  failureCounts: { errorCode: string | null; eventCount: number }[];
+  failuresByJobTypeDay: { jobType: string; eventCount: number }[];
+  unhealthyJobs: { jobId: string; state: string; errorCode: string | null }[];
+}
+
+const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });
+
+async function createGuest(request: APIRequestContext): Promise<GuestSession> {
+  const response = await request.post('/api/auth/guest', {
+    data: { displayName: `OpsSummary E2E ${randomUUID()}` },
+  });
+  expect(response.status()).toBe(201);
+  return (await response.json()) as GuestSession;
+}
+
+test.describe('Ops summary route (slice O3)', () => {
+  test('returns the classified failures the views produce, and refuses another workspace', async ({
+    request,
+  }) => {
+    const guest = await createGuest(request);
+    const workspaceId = guest.workspace.id;
+
+    // A permanently-failing job is the deterministic source of both a failure
+    // count and an unhealthy job, so the summary has something real to classify.
+    const enqueued = await request.post('/api/jobs', {
+      headers: bearer(guest.sessionToken),
+      data: {
+        workspaceId,
+        jobType: 'thumbnail',
+        idempotencyKey: `ops-summary-${randomUUID()}`,
+        payload: {},
+      },
+    });
+    expect(enqueued.status()).toBe(201);
+    const jobId = ((await enqueued.json()) as { job: { id: string } }).job.id;
+
+    const run = await request.post(`/api/jobs/run?workspaceId=${workspaceId}`, {
+      headers: bearer(guest.sessionToken),
+    });
+    expect(run.status()).toBe(200);
+
+    const response = await request.get(`/api/ops/summary?workspaceId=${workspaceId}`, {
+      headers: bearer(guest.sessionToken),
+    });
+    expect(response.status()).toBe(200);
+    const summary = (await response.json()) as OpsSummaryBody;
+
+    const invalidPayload = summary.failureCounts.find((c) => c.errorCode === 'INVALID_PAYLOAD');
+    expect(invalidPayload?.eventCount).toBe(1);
+    expect(summary.failuresByJobTypeDay.some((d) => d.jobType === 'thumbnail')).toBe(true);
+    expect(summary.unhealthyJobs.map((j) => j.jobId)).toContain(jobId);
+
+    // A key bound to another workspace is refused before the read, and an
+    // unauthenticated caller cannot reach the summary at all.
+    const other = await createGuest(request);
+    const crossWorkspace = await request.get(
+      `/api/ops/summary?workspaceId=${workspaceId}`,
+      { headers: bearer(other.sessionToken) }
+    );
+    expect(crossWorkspace.status()).toBe(403);
+
+    const anonymous = await request.get(`/api/ops/summary?workspaceId=${workspaceId}`);
+    expect(anonymous.status()).toBe(401);
+  });
+});
+
+/**
+ * Slice O5: the same classification, rendered for a human on the operations page.
+ *
+ * This is the exposure slice for the panel -- no new aggregation -- so the property
+ * to pin is that a real, freshly recorded failure is classified and shown in the
+ * browser, and that the reader can act on the job needing attention.
+ */
+test.describe('Ops failure panel (slice O5)', () => {
+  test('renders the classified failures the summary route returns', async ({ page, request }) => {
+    await page.goto('/');
+    await page.click('text=Continue as Guest');
+    await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
+
+    // Drive the failure through the API with the browser's own session, then reload
+    // so the operations view loads the freshly recorded classification.
+    const token = await page.evaluate(() => localStorage.getItem('octo_token'));
+    expect(token).toBeTruthy();
+    const auth = { Authorization: `Bearer ${token}` };
+
+    const workspaces = await request.get('/api/workspaces', { headers: auth });
+    expect(workspaces.status()).toBe(200);
+    const workspaceId = ((await workspaces.json()) as { id: string }[])[0]!.id;
+
+    const enqueued = await request.post('/api/jobs', {
+      headers: auth,
+      data: {
+        workspaceId,
+        jobType: 'thumbnail',
+        idempotencyKey: `ops-panel-${randomUUID()}`,
+        payload: {},
+      },
+    });
+    expect(enqueued.status()).toBe(201);
+    const run = await request.post(`/api/jobs/run?workspaceId=${workspaceId}`, { headers: auth });
+    expect(run.status()).toBe(200);
+
+    await page.reload();
+    await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
+    await page.getByRole('button', { name: 'Operations', exact: true }).click();
+
+    await expect(page.getByRole('heading', { name: 'What is failing' })).toBeVisible();
+    // The permanent INVALID_PAYLOAD failure is classified by code...
+    await expect(page.getByText('INVALID_PAYLOAD', { exact: true }).first()).toBeVisible();
+    // ...rolled up by job type and day...
+    await expect(page.getByRole('heading', { name: 'By job type and day' })).toBeVisible();
+    // ...and the job itself is listed as needing attention, with the repair action.
+    await expect(page.getByRole('heading', { name: 'Jobs needing attention' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Retry' }).first()).toBeVisible();
   });
 });

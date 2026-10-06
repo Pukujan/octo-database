@@ -27,6 +27,21 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
+      falkordb:
+        # The graph engine for issue #12's configured-path eval. The engine inherits
+        # none of the octo.* RLS fence, so the eval proves the mediated read derives
+        # each graph name from the authenticated workspace UUID and never from a
+        # request value. Without it CI would only exercise the fail-closed path.
+        image: falkordb/falkordb-server:6.0.1
+        env:
+          REDIS_ARGS: "--requirepass ci-graph-password"
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli -a ci-graph-password ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Check out Octo
         uses: actions/checkout@v4
@@ -106,6 +121,23 @@ jobs:
           ALTER ROLE octo_service PASSWORD 'octo_service';
           EOF
 
+      - name: Verify deploy migration runner is idempotent
+        # The deploy-time runner (deploy/gravebuster/migrate.sh) must never re-run a
+        # migration already applied, or a deploy would fail on the non-idempotent
+        # ones (plain CREATE POLICY). The migrations above were applied without
+        # recording, so this adopts them as the baseline (recording, not re-running)
+        # and then proves a second pass applies nothing.
+        env:
+          MIGRATE_PSQL_CMD: "psql -v ON_ERROR_STOP=1 -h localhost -p 54329 -U postgres -d postgres"
+          PGPASSWORD: postgres
+        run: |
+          MIGRATE_BASELINE=1 bash deploy/gravebuster/migrate.sh
+          RECORDED=$(PGPASSWORD=postgres psql -tAc "SELECT count(*) FROM octo.schema_migrations" -h localhost -p 54329 -U postgres)
+          EXPECTED=$(ls supabase/migrations/*.sql | wc -l)
+          echo "recorded=${RECORDED} expected=${EXPECTED}"
+          [ "$RECORDED" -eq "$EXPECTED" ]
+          bash deploy/gravebuster/migrate.sh
+
       - name: Verify key-scope isolation fence (engine backstop)
         # Proves the slice's invariant directly against the database, bypassing the
         # application's own key-scope check: a session scoped to one workspace can
@@ -114,6 +146,16 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:54329/postgres
           OCTO_DB_URL: postgresql://octo_app:octo_app@localhost:54329/postgres
         run: npx tsx scripts/verify-key-scope-fence.ts
+
+      - name: Verify provisioned-database isolation (Slice 20)
+        # Proves against a real cluster that a minted workspace-database credential
+        # can use its own database (DDL + DML), holds no USAGE on the octo schema so
+        # every octo.* read and write is refused, and cannot connect to another
+        # workspace's database. Needs CREATE DATABASE / CREATE ROLE, so it runs as
+        # the schema owner.
+        env:
+          OCTO_ADMIN_URL: postgresql://postgres:postgres@localhost:54329/postgres
+        run: npx tsx scripts/verify-provisioned-database.ts
 
       - name: Playwright E2E and Multimodal Vision QA
         env:
@@ -132,6 +174,10 @@ jobs:
           # proves nothing about isolation.
           OCTO_DB_URL: postgresql://octo_app:octo_app@localhost:54329/postgres
           OCTO_SERVICE_URL: postgresql://octo_service:octo_service@localhost:54329/postgres
+          # The optional graph engine, so the configured-path graph eval runs here
+          # instead of skipping. Unset elsewhere leaves the surface reporting
+          # not-configured, which the same spec also asserts.
+          OCTO_GRAPH_URL: redis://:ci-graph-password@localhost:6379
         run: npx playwright test
       - name: Validate stack-manifest against the certified release train
         shell: bash

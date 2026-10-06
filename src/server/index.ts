@@ -39,8 +39,10 @@ import {
 } from '../api/capabilities';
 import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
+import { GraphClient, loadGraphConfigFromEnv } from '../graph/falkordb-client';
 import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
 import { sendStaticFile } from './static-file';
+import { provisioningConfigured, provisionDatabase, dropProvisionedDatabase } from './provisioning';
 import { guestSlug, personalSlug } from '../lib/provisioning-slug';
 import { signSessionToken, verifySessionToken } from '../lib/session-token';
 import {
@@ -71,11 +73,13 @@ import {
   MfaRecord,
   dbGetFile,
   dbGetWorkspaceById,
+  dbGetWorkspaceDatabase,
   dbGetWorkspaceMembership,
   dbHasOpenFileJob,
   dbInsertApiKey,
   dbInsertFile,
   dbInsertGuestPrincipal,
+  dbInsertWorkspaceDatabase,
   dbUpsertGooglePrincipal,
   dbInsertMembership,
   dbInsertWorkspace,
@@ -94,6 +98,7 @@ import {
   dbFailJob,
   dbListActivity,
   dbListOpsEvents,
+  dbGetOpsSummary,
   dbListJobs,
   dbListShares,
   dbListWorkspaceFiles,
@@ -153,6 +158,15 @@ try {
 } catch (e) {
   console.warn('Google Drive archival disabled:', (e as Error).message);
 }
+
+/**
+ * Graph engine (issue #12). Optional, like the embedding provider: unset
+ * `OCTO_GRAPH_URL` leaves the graph surface reporting "not configured" rather
+ * than a half-wired engine. The client derives each graph name from the
+ * authenticated workspace UUID, so no request value can name a graph.
+ */
+const graphConfig = loadGraphConfigFromEnv();
+const graphClient: GraphClient | null = graphConfig ? new GraphClient(graphConfig) : null;
 
 /**
  * Archive lifecycle wiring for the worker and the on-demand restore path. Null
@@ -1449,6 +1463,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
       const storageKeys = await dbListWorkspaceStorageKeys(workspaceId);
 
+      // Read the catalog row before the delete: the cascade removes it, and the
+      // database and role it names are not reachable by any cascade.
+      const provisioned = await dbGetWorkspaceDatabase(workspaceId);
+
       // The transaction re-checks the transient state, closing the window between
       // the pre-check above and the delete.
       if (!(await dbDeleteWorkspaceAtomic(workspaceId))) {
@@ -1458,13 +1476,120 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
 
+      // The cascade removed the catalog row but not the database or role on the
+      // cluster, which no cascade can reach. Drop them outside the transaction
+      // (DROP DATABASE cannot run inside one). Best effort: the workspace is
+      // already gone, so a failure is reported rather than failing the delete.
+      let orphanedDatabase: { dbName: string; roleName: string } | null = null;
+      if (provisioned) {
+        try {
+          if (!provisioningConfigured()) {
+            throw new Error('PROVISIONING_NOT_CONFIGURED: OCTO_ADMIN_URL is not set');
+          }
+          await dropProvisionedDatabase(provisioned.dbName, provisioned.roleName);
+        } catch (err) {
+          console.error(
+            `[workspaces] failed to drop provisioned database ${provisioned.dbName}:`,
+            err instanceof Error ? err.message : String(err)
+          );
+          orphanedDatabase = { dbName: provisioned.dbName, roleName: provisioned.roleName };
+        }
+      }
+
       sendJson(res, 200, {
         success: true,
         workspaceId,
         slug: workspace.slug,
-        // The DB cascade removes rows but not R2/Drive bytes. Report them so the
-        // operator sees the consequence instead of a silent leak.
+        // The DB cascade removes rows but not R2/Drive bytes or the cluster-side
+        // database. Report what survived so the operator sees the consequence
+        // instead of a silent leak.
         orphanedObjects: storageKeys,
+        orphanedDatabase,
+      });
+      return;
+    }
+
+
+    // 3d. Provision a real Postgres database for a workspace:
+    // POST /api/workspaces/:id/database
+    // Creates a role and a database owned by it, records the catalog row, and
+    // returns the client's connection string exactly once. Additive, so there is
+    // no confirmation gate; it is refused for workspace-scoped keys for the same
+    // reason workspace creation is (a scoped key cannot mint more of anything).
+    if (
+      pathname.startsWith('/api/workspaces/') &&
+      pathname.endsWith('/database') &&
+      req.method === 'POST'
+    ) {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
+        return;
+      }
+      if (auth.apiKey && auth.apiKey.workspaceId) {
+        sendJson(res, 403, {
+          error: 'FORBIDDEN: A workspace-scoped key cannot provision databases',
+        });
+        return;
+      }
+
+      const workspaceId = pathname.slice('/api/workspaces/'.length, -'/database'.length);
+      if (!UUID_PATTERN.test(workspaceId)) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: workspaceId must be a valid UUID' });
+        return;
+      }
+
+      const workspace = await dbGetWorkspaceById(workspaceId);
+      if (!workspace) {
+        sendJson(res, 404, { error: 'WORKSPACE_NOT_FOUND' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem && !auth.principal.isPlatformOwner) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      if (await dbGetWorkspaceDatabase(workspaceId)) {
+        sendJson(res, 409, {
+          error: 'DATABASE_EXISTS: this workspace already has a provisioned database',
+        });
+        return;
+      }
+
+      if (!provisioningConfigured()) {
+        // Thrown so the outer handler captures it as an ops event like any other
+        // 500, rather than inventing a second failure path.
+        throw new Error('PROVISIONING_NOT_CONFIGURED: OCTO_ADMIN_URL is not set');
+      }
+
+      const provisioned = await provisionDatabase(workspace.slug);
+      const database = await dbInsertWorkspaceDatabase(
+        randomUUID(),
+        workspaceId,
+        provisioned.dbName,
+        provisioned.roleName,
+        auth.principal.id
+      );
+
+      await dbRecordActivity(
+        workspaceId,
+        'workspace.database_provisioned',
+        `Database '${database.dbName}' provisioned for workspace '${workspace.name}'`,
+        null,
+        auth.principal.id
+      );
+
+      // The connection string is returned here and nowhere else: it is not stored,
+      // not logged, and not repeated in the activity event above.
+      sendJson(res, 201, {
+        database,
+        connectionString: provisioned.connectionString,
       });
       return;
     }
@@ -2515,6 +2640,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           'files.delete': Boolean(objectStore),
           'files.archive': Boolean(objectStore && archiveDeps),
           'files.restore': Boolean(objectStore && archiveDeps),
+          'graph.query': Boolean(graphClient),
         };
         const supported = [] as typeof capabilities;
         for (const capability of capabilities) {
@@ -2709,6 +2835,40 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
       const errorCode = url.searchParams.get('errorCode');
       sendJson(res, 200, { events: await dbListOpsEvents(workspaceId, errorCode) });
+      return;
+    }
+
+    // Ops summary: GET /api/ops/summary?workspaceId=...
+    // The O2 classification views over HTTP (issue #140, slice O3).
+    if (pathname === '/api/ops/summary' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      sendJson(res, 200, await dbGetOpsSummary(workspaceId));
       return;
     }
 
@@ -2964,6 +3124,71 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         // Provenance: each match carries the version and the exact embedding/chunker
         // configuration that produced it.
       });
+      return;
+    }
+
+    // Graph: POST /api/graph/query -- a mediated read against one workspace's graph.
+    if (pathname === '/api/graph/query' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
+
+      const parsed = (await readJsonObject(req)) as Record<string, any>;
+      const { workspaceId, query: cypher, params } = parsed;
+
+      if (!workspaceId || !cypher) {
+        sendJson(res, 400, { error: 'workspaceId and query are required' });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      // Authorize before probing provider configuration: an unauthorized caller
+      // must not learn whether the graph engine is configured.
+      if (!graphClient) {
+        sendJson(res, 503, {
+          error: 'GRAPH_NOT_CONFIGURED: set OCTO_GRAPH_URL to query a workspace graph',
+        });
+        return;
+      }
+
+      // Only scalar parameters reach the engine; the client's read-only path
+      // (GRAPH.RO_QUERY) and the derived graph name are the isolation boundary.
+      const safeParams: Record<string, string | number | boolean | null> = {};
+      if (params && typeof params === 'object') {
+        for (const [name, value] of Object.entries(params as Record<string, unknown>)) {
+          if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
+            safeParams[name] = value as string | number | boolean | null;
+          }
+        }
+      }
+
+      try {
+        const result = await graphClient.roQuery(
+          workspaceId,
+          cypher,
+          Object.keys(safeParams).length ? safeParams : undefined
+        );
+        sendJson(res, 200, { query: cypher, rows: result.rows, metadata: result.metadata });
+      } catch {
+        sendJson(res, 502, { error: 'GRAPH_QUERY_FAILED: the graph engine rejected the query' });
+      }
       return;
     }
 

@@ -1,0 +1,141 @@
+{
+  "engine": "Parquet and the object-storage lakehouse (R2/S3): file layout, compaction, table formats, query engines, catalogs, and per-workspace isolation",
+  "headline": "Octo should do nothing lakehouse-shaped yet — it generates no Parquet and its data fits in Postgres; when history appears, the minimum is a DuckDB job that COPYs Postgres to partitioned Parquet on R2 under the existing per-workspace prefix, with Postgres itself acting as the catalog, and Iceberg/DuckLake/distributed engines deferred until a named trigger fires.",
+  "scaling_ladder": [
+    {
+      "stage": "Rung 0 — Single Postgres is the analytics engine (today: MB, single-digit workspaces)",
+      "trigger": "You are here. No Parquet is produced anywhere in the repo; structured state and any history live in the one Postgres 16 DB.",
+      "action": "Do nothing lakehouse-related. Keep analytical/history rows in Postgres. When an append-only table grows, use declarative partitioning + pg_partman and indexes rather than inventing a lake. DuckDB's postgres extension can already run analytical SQL directly against live Postgres with no export at all (ATTACH ... (TYPE postgres); read+write, filter pushdown, COPY both ways).",
+      "tradeoff": "Zero new infrastructure and zero new failure modes. Cost: Postgres scans slow and storage gets pricier as history grows — but honestly not until tens of GB, which Octo is far from. Any Parquet work now is speculative and violates the anti-overengineering rule."
+    },
+    {
+      "stage": "Rung 1 — Raw partitioned Parquet + DuckDB reads it (GB scale)",
+      "trigger": "A workspace actually accumulates append-only operational/observational history you'd rather not keep in Postgres, or a dataset passes a few GB / tens of millions of rows and Postgres scans start to hurt.",
+      "action": "One job (reuse the existing jobs table + worker) runs DuckDB in-process: ATTACH the live Postgres, then COPY (SELECT ...) TO 's3://octo/workspaces/{wsId}/lake/<dataset>/dt=YYYY-MM-DD/part-<uuid>.parquet' (zstd). DuckDB does read-Postgres and write-Parquet in the same process — no custom export code. Query with read_parquet('s3://octo/workspaces/{wsId}/lake/<dataset>/**/*.parquet') via httpfs against R2. No catalog, no manifest table, no table format. Keep files 128-512 MB; partition by low-cardinality time (day/month), not by workspace_id (it is already in the path).",
+      "tradeoff": "Near-zero new infra and no new service. Latent costs: schema drift across files written months apart, orphaned bytes if the PUT succeeds and the job dies, and file sprawl. At Octo's scale this rung is a job and a convention, not a platform."
+    },
+    {
+      "stage": "Rung 2 — Manifest + partition discipline (tens–hundreds of GB, many files)",
+      "trigger": "Hundreds of files per partition, per-query LIST cost showing up (R2 ListObjects is a Class A op at $4.50/million), or schema drift actually breaking a read.",
+      "action": "Add a small Postgres manifest (dataset, partition, file key, row count, content hash, schema version) in a SEPARATE schema from the RLS-fenced app schema. Enforce 'no per-query LIST — always read the manifest'. Hive-style partitions, read with union_by_name=true, write-then-commit ordering, content-addressed filenames, and a periodic orphan sweep (reuse the orphanedObjects pattern already in workspace delete).",
+      "tradeoff": "A few hundred lines of bookkeeping and a discipline to maintain; no external system added. Still no ACID across writes, no row-level deletes, no time travel. This is the rung most likely to be skipped by staying in Postgres longer."
+    },
+    {
+      "stage": "Rung 3 — Compaction job (small files actually hurt)",
+      "trigger": "Median file size falls well under ~128 MB, or a query fans out over hundreds of tiny files (many range-GETs and footer reads per query).",
+      "action": "Scheduled job rewrites a partition's small files into 128-512 MB files under NEW content-addressed names, updates the manifest, then deletes the old files. Never overwrite a key in place: R2 allows only 1 write/sec per object key and returns 429 beyond that.",
+      "tradeoff": "Another job to own and monitor, plus rewrite I/O. At MB-GB scale this is pointless — the advisor's blunt version: do not schedule a compactor for data that fits in RAM."
+    },
+    {
+      "stage": "Rung 4 — Table format: DuckLake with a Postgres catalog (ACID / multiplayer / time travel needed)",
+      "trigger": "Concurrent independent writers to the same lake dataset, need for row-level deletes/updates in the lake, time travel/schema evolution, or multiple DuckDB processes must read-write the same data.",
+      "action": "Adopt DuckLake (v1.0, Apr 2026): metadata in a SQL catalog DB (Postgres supported), data as Parquet on object storage, snapshots/time-travel/partitioning/schema evolution, no custom catalog server. Put the DuckLake catalog in a SEPARATE Postgres schema/database from the RLS-fenced app schema so analytics metadata writes never contend with octo_app/octo_service. DuckDB's ducklake extension reads/writes it.",
+      "tradeoff": "Young format (~6 months old, MotherDuck-backed, no release history in the README) — only acceptable because the lake data is derived and rebuildable; never make it the sole copy of anything. R2 support is via DuckDB's S3/httpfs layer and is NOT explicitly documented by DuckLake (only a MinIO demo is) — verify s3_endpoint/force_path_style against R2 before committing."
+    },
+    {
+      "stage": "Rung 5 — Iceberg + managed catalog (multi-engine interop needed)",
+      "trigger": "Engines other than DuckDB (Trino, ClickHouse, BI tools, Snowflake) must read the same tables, or you want managed compaction/table maintenance.",
+      "action": "Apache Iceberg tables on R2, with Basin Catalog (formerly R2 Data Catalog; GA Oct 2026) as the managed Iceberg REST catalog built into the bucket, auto-compacting small files. Query via DuckDB (native Iceberg support), Basin SQL, Trino, or ClickHouse. Iceberg over Delta (Databricks-centric) or Hudi (streaming/CDC-centric) for Octo because it is vendor-neutral and has the broadest engine support.",
+      "tradeoff": "Iceberg metadata overhead (many manifest files = more R2 Class A/B ops), catalog-op billing ($9/million ops; compaction $0.005/GB + $2/million objects), and a soft vendor tie to Cloudflare for the catalog. More moving parts than DuckLake; only worth it for interop you don't currently have."
+    },
+    {
+      "stage": "Rung 6 — Distributed query/OLAP (single node demonstrably fails)",
+      "trigger": "Rules of thumb, not measured: hot Parquet > ~500 GB; interactive scans > ~50-100 GB; more than ~10 concurrent query users; or a scan whose wall-clock (~100-500 MB/s effective per node from object storage, so ~1 TB = 30-90 min) is fatal for a dashboard.",
+      "action": "Self-host Trino (federated SQL over Iceberg/Postgres/Parquet) or ClickHouse (fast high-concurrency OLAP, reads Iceberg/S3); Spark only for heavy batch ETL. Or stay managed with Basin SQL. Athena is not a fit: AWS-only, cannot read R2 natively, and $5/TB scanned.",
+      "tradeoff": "A stateful multi-node service to run, secure, and upgrade — a large jump in ops for a single-owner platform. Explicitly premature for Octo."
+    }
+  ],
+  "multitenancy": "Prefix-per-workspace is already the correct and existing layout: object keys are `workspaces/{workspaceId}/{fileId}/{name}`, so the lake should extend it as `workspaces/{workspaceId}/lake/...`. Keep ONE bucket and ONE master R2 credential held only by Octo; this mirrors the Postgres model where clients never get raw DB credentials and a RESTRICTIVE RLS fence confines each request. Verified constraint: R2 API tokens can be scoped only to the account or to specific BUCKETS — there is no prefix-level scoping (Cloudflare's token docs expose only Account and Bucket resources). Consequence: you cannot mint a credential that can see one workspace's prefix and nothing else. Therefore (a) isolation must live in the Octo API + path scoping, not in storage credentials, and (b) if a workspace ever genuinely needs a direct storage credential (a tenant running its own DuckDB/BI/console against the bucket), the only true credential-level isolation is bucket-per-workspace — cheap in principle (R2 allows up to 1,000,000 buckets/account, and there is no per-bucket fee beyond storage/ops) but operationally more to manage. For scoped direct access without exposing the master credential, prefer Octo-minted presigned URLs (already implemented in r2-client.ts) which grant time-limited access to specific objects. Query engines have no RLS, so the mediator must constrain the glob/path to `workspaces/{workspaceId}/...` — a query engine handed the master credential can read every workspace. Any DuckLake/Iceberg catalog must likewise be workspace-scoped (separate schema or catalog namespace), never shared across tenants with one credential. Net: prefix-per-workspace + Octo mediation is sufficient and symmetric with the Postgres fence; bucket-per-workspace is the escalation path only if a tenant needs a raw credential.",
+  "octo_recommendation": "Build nothing lakehouse-shaped now — Octo produces no Parquet, and Postgres is comfortably the analytics engine at MB/single-digit-workspace scale. Make this explicit rather than aspirational. When the first analytics-history capability is actually accepted: (1) have the existing jobs worker run DuckDB in-process to ATTACH live Postgres and COPY to zstd Parquet under the already-correct prefix `workspaces/{workspaceId}/lake/<dataset>/dt=YYYY-MM-DD/part-<uuid>.parquet`, files 128-512 MB; (2) read it back with DuckDB httpfs (read_parquet glob) — in-process for API endpoints and/or DuckDB UI for deep work — and use DuckDB's postgres extension to join live state to history with no ETL; (3) use Postgres itself as the catalog/manifest (a small manifest table in a separate schema), enforcing 'no per-query LIST'; (4) do not adopt a table format, a catalog service, compaction, or a distributed engine until a NAMED pain appears (file count, schema drift, concurrent writers, row-level deletes, or multi-engine access). When that trigger fires, prefer DuckLake (Postgres catalog + Parquet, no catalog server, but young and derived-data-only) over Iceberg; choose Iceberg + managed Basin Catalog only if broad multi-engine interop is required, and treat managed Basin SQL ($2.50/TB scanned, 10 GB/month free) as the escape hatch, not an adoption target. Keep isolation in the Octo API + per-workspace prefix + presigned URLs; add bucket-per-workspace only if a tenant truly needs a raw storage credential. The honest answer for today's scale is: do nothing yet.",
+  "options": [
+    {
+      "name": "DuckDB (httpfs + postgres extensions)",
+      "kind": "OSS",
+      "when": "Default query engine from the first Parquet export onward; also the exporter itself (ATTACH Postgres -> COPY TO Parquet) and a no-ETL way to query live Postgres today.",
+      "cost": "Free; single-node/single-process, single-writer. Multiple processes can read only in READ_ONLY; true multi-process writes need DuckLake or the Quack client-server protocol (beta as of v1.5.2, maturity targeted v2.0 fall 2026)."
+    },
+    {
+      "name": "MotherDuck",
+      "kind": "managed",
+      "when": "If you want managed DuckDB / hosted multiplayer DuckLake without running it yourself; not needed at Octo's scale.",
+      "cost": "Usage-based (not verified here)."
+    },
+    {
+      "name": "DuckLake (ducklake DuckDB extension)",
+      "kind": "OSS",
+      "when": "Rung 4 trigger: concurrent writers, lake row deletes/updates, time travel/schema evolution, without a custom catalog server.",
+      "cost": "Free; needs a SQL catalog DB (Postgres/MySQL/SQLite/DuckDB). v1.0 stable but ~6 months old; R2 support via DuckDB's S3 layer is not explicitly documented."
+    },
+    {
+      "name": "Cloudflare Basin Catalog + Basin SQL (formerly R2 Data Catalog / R2 SQL)",
+      "kind": "managed",
+      "when": "Rung 5 trigger: Iceberg tables, multi-engine interop, and managed auto-compaction, without running Trino/Nessie.",
+      "cost": "Basin SQL $2.50/TB ($0.0025/GB) compressed data scanned, 10 GB/month free, 10 MB minimum per query, failed queries not charged. Catalog ops $9/million (1M free); compaction $0.005/GB processed + $2/million objects (10 GB and 1M objects free); R2 storage/ops billed separately. GA Oct 2026."
+    },
+    {
+      "name": "Apache Iceberg",
+      "kind": "OSS",
+      "when": "Rung 5 when broad, vendor-neutral multi-engine support matters (Spark, Trino, Snowflake, DuckDB, ClickHouse).",
+      "cost": "Free software; real operational cost in metadata/manifest file churn and catalog maintenance."
+    },
+    {
+      "name": "Iceberg catalogs: REST / Glue / Nessie / Unity",
+      "kind": "managed",
+      "when": "Only when Iceberg is in play. REST is the vendor-neutral standard (what Basin exposes); Glue is AWS-centric; Nessie (git-like branching) and Unity (Databricks governance) are overkill for a single owner.",
+      "cost": "Basin REST catalog is bundled with Basin; Glue/Nessie/Unity add their own service or platform cost."
+    },
+    {
+      "name": "Trino",
+      "kind": "self-hosted",
+      "when": "Rung 6: federated SQL across Iceberg/Postgres/Parquet at multi-node scale; managed alternatives Starburst Galaxy / AWS Athena (AWS-only).",
+      "cost": "Free software but a multi-node cluster to run; managed tiers cost more."
+    },
+    {
+      "name": "ClickHouse",
+      "kind": "self-hosted",
+      "when": "Rung 6: very fast high-concurrency OLAP; can read Iceberg/S3 directly (read path production-ready, writes maturing).",
+      "cost": "Free software / ClickHouse Cloud managed; another stateful engine to operate."
+    },
+    {
+      "name": "Apache Spark",
+      "kind": "self-hosted",
+      "when": "Heavy batch ETL only; overkill for Octo. Managed via Databricks/EMR/Glue.",
+      "cost": "JVM cluster or managed per-DBU pricing."
+    },
+    {
+      "name": "Amazon Athena",
+      "kind": "managed",
+      "when": "AWS-native lake queries; NOT a fit for Octo because it cannot read R2 natively and is AWS-bound.",
+      "cost": "$5.00/TB scanned, 10 MB minimum per query."
+    },
+    {
+      "name": "Delta Lake / Apache Hudi",
+      "kind": "OSS",
+      "when": "Delta for Databricks-centric estates; Hudi for streaming/CDC-heavy ingestion. Neither is recommended for Octo's DuckDB/Postgres-centric stack.",
+      "cost": "Free software; equivalent maintenance overhead to Iceberg."
+    }
+  ],
+  "sources": [
+    "https://developers.cloudflare.com/r2/api/tokens/ (R2 token scoping: account or bucket only, no prefix-level scope)",
+    "https://developers.cloudflare.com/r2/pricing/ (Standard $0.015/GB-mo, IA $0.01/GB-mo; Class A $4.50/M, Class B $0.36/M; ListObjects is Class A; free tier 10 GB + 1M Class A + 10M Class B; egress free; IA 30-day min)",
+    "https://developers.cloudflare.com/r2/platform/limits/ (1M buckets/account; 5 TiB max object; 5 GiB single-part upload; 1,024-byte key; 50 bucket-management ops/sec; 1 concurrent write/sec per object key -> 429)",
+    "https://developers.cloudflare.com/basin-catalog/ (Basin Catalog = R2 Data Catalog renamed, GA; managed Iceberg REST catalog built into the R2 bucket)",
+    "https://developers.cloudflare.com/basin/platform/pricing/ (Basin SQL $2.50/TB, 10 GB free, 10 MB min/query; catalog ops $9/M; compaction $0.005/GB + $2/M objects; R2 billed separately)",
+    "https://developers.cloudflare.com/basin-sql/ (Basin SQL serverless distributed engine over Basin Catalog Iceberg tables; GA)",
+    "https://blog.cloudflare.com/cloudflare-data-platform/ (Pipelines + Catalog + SQL architecture; catalog performs periodic auto-compaction; engines PyIceberg/DuckDB/Spark; catalog beta pricing)",
+    "https://blog.cloudflare.com/r2-data-catalog-public-beta/ (original R2 Data Catalog open-beta launch, Iceberg REST interface)",
+    "https://duckdb.org/docs/current/guides/network_cloud_storage/s3_import (httpfs; DuckDB reads Parquet from S3/GCS/R2 via S3 API)",
+    "https://duckdb.org/docs/current/core_extensions/postgres/overview.html (ATTACH live Postgres; read+write; COPY both directions; filter pushdown experimental; schema cache staleness)",
+    "https://duckdb.org/docs/current/connect/concurrency.html (single-process, single-writer; READ_ONLY multi-process reads; DuckLake with Postgres catalog for concurrent read-writes; Quack beta v1.5.2, v2.0 targeted fall 2026)",
+    "https://ducklake.select/docs/stable/ (DuckLake metadata in a SQL catalog DB, data in Parquet-like files on object storage, snapshots/time travel/schema evolution/partitioning, no custom catalog server)",
+    "https://github.com/duckdb/ducklake (DuckLake built on SQL + Parquet; catalog DuckDB/PostgreSQL/SQLite; no release history; active development on main)",
+    "https://github.com/relytcloud/pg_ducklake (pg_ducklake: DuckLake tables inside PostgreSQL; evidence of the Postgres-catalog direction)",
+    "https://aws.amazon.com/athena/pricing/ ($5.00/TB scanned, rounded to nearest MB with 10 MB minimum per query)",
+    "https://trino.io/docs/current/connector/iceberg.html (Trino Iceberg connector; catalog types HMS/Glue/JDBC/REST/Nessie)",
+    "https://clickhouse.com/docs/reference/functions/table-functions/iceberg (ClickHouse icebergS3 reads Iceberg v1/v2 from S3; read path production-ready, writes maturing)",
+    "https://parquet.apache.org/docs/file-format/ (Parquet layout: row groups, column chunks, centralized metadata read up front — the mechanism behind small-file overhead)",
+    "https://risingwave.com/blog/iceberg-small-file-problem/ and https://deadletternotes.com/posts/small-files-problem/ (secondary: streaming writes create 1-10 MB files; compaction targets 128-512 MB)",
+    "https://www.onehouse.ai/blog/apache-hudi-vs-delta-lake-vs-apache-iceberg-lakehouse-feature-comparison and https://www.rilldata.com/blog/duckdb-won-by-refusing-to-scale-out (secondary: table-format feature comparison; DuckDB single-node design rationale)"
+  ],
+  "uncertainty": "Several claims are deliberately hedged. (1) No data yet: every trigger is a projection, not an observation; Octo has zero Parquet files and MB-scale data, so all thresholds are rules of thumb, not measured. (2) DuckLake's R2 support is inferred from DuckDB's S3/httpfs layer — the DuckLake docs only show S3/MinIO, so s3_endpoint + force_path_style + R2 compatibility must be verified before committing; DuckLake v1.0 is ~6 months old with no release history and should only hold derived, rebuildable data. (3) R2 read-after-write consistency is commonly stated by Cloudflare but the limits page fetched here does not document it — treat as 'reportedly strongly consistent; verify'. (4) The 1,000 GET/s and 100 PUT/s figures floating around are from R2's 2021/2022 open beta and are NOT current published limits; current docs publish no per-bucket object request rate, and at Octo's scale it is irrelevant. (5) Basin Catalog/SQL went GA and were renamed only in Oct 2026; pricing and the extent of automatic compaction/table-maintenance are fresh and may change, and the docs do not state catalog/table count limits or per-namespace isolation semantics. (6) DuckDB single-node break points (~500 GB hot data, ~50-100 GB interactive scans, ~10 concurrent users) are heuristics, not benchmarks; DuckDB spills to disk so RAM is not a hard wall, and the true structural limit is single-writer/single-process. (7) Athena/Spark/Trino/ClickHouse cost figures are list prices and were not independently benchmarked for Octo's workload."
+}

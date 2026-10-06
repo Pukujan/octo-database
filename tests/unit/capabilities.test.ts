@@ -54,10 +54,24 @@ describe('Capability discovery', () => {
   it('advertises workspace create and the archive/restore transitions', () => {
     const byAction = new Map(OCTO_CAPABILITIES.map((c) => [c.action, c]));
     expect(byAction.get('workspaces.create')?.requiredScope).toBe('write');
+    expect(byAction.get('workspaces.provision_database')?.requiredScope).toBe('write');
     expect(byAction.get('files.archive')?.requiredScope).toBe('delete');
     expect(byAction.get('files.restore')?.requiredScope).toBe('write');
     expect(byAction.get('activity.list')?.requiredScope).toBe('read');
+    expect(byAction.get('ops.list')?.requiredScope).toBe('read');
+    expect(byAction.get('ops.summary')?.requiredScope).toBe('read');
+    expect(byAction.get('graph.query')?.requiredScope).toBe('read');
     expect(byAction.get('keys.revoke')?.requiredScope).toBe('delete');
+  });
+
+  it('records the provisioned-database exception without disclosing a credential', () => {
+    // The one documented exception to "tokens never expose a database credential":
+    // the note must name it, and must still carry no secret-shaped value. The
+    // `octo_live_...` bearer placeholder is the documented token shape, not a secret.
+    expect(AUTH_GUIDANCE.note).toMatch(/provisioned workspace/i);
+    const serialized = JSON.stringify(AUTH_GUIDANCE);
+    expect(serialized).not.toMatch(/postgres(ql)?:\/\//i);
+    expect(serialized).not.toMatch(/password|secret/i);
   });
 
   it('defines key classes as profiles over real scopes, none destructive', () => {

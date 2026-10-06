@@ -89,6 +89,19 @@ export function createOctoMcpServer(api: OctoApi): McpServer {
   );
 
   server.tool(
+    'provision_database',
+    'Provision a real PostgreSQL database owned by a workspace and return its connection string. The string is shown exactly once; connect to it with an ordinary Postgres client to create and use your own tables. Requires an account-wide token, and a workspace that does not already have a database.',
+    { workspaceId: z.string().describe('The workspace to provision a database for') },
+    async ({ workspaceId }) => {
+      try {
+        return asText(await api.provisionDatabase({ workspaceId }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
     'list_files',
     'List the files in a workspace.',
     { workspaceId: z.string().describe('The workspace to list files from') },
@@ -162,6 +175,71 @@ export function createOctoMcpServer(api: OctoApi): McpServer {
     async ({ workspaceId, query, limit }) => {
       try {
         return asText(await api.query({ workspaceId, query, limit }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'query_graph',
+    'Run a read-only Cypher query against a workspace\'s graph. The graph is a rebuildable projection of the workspace\'s canonical data, and the query reaches only this workspace\'s graph — the graph name is derived server-side, so no argument can name another. Read-only; requires the read scope.',
+    {
+      workspaceId: z.string().describe('The workspace whose graph to query'),
+      query: z.string().describe('A read-only Cypher query'),
+      params: z
+        .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
+        .optional()
+        .describe('Scalar parameters bound into the query'),
+    },
+    async ({ workspaceId, query, params }) => {
+      try {
+        return asText(await api.graphQuery({ workspaceId, query, params }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'list_ops_events',
+    'List structured operational failure events for a workspace, newest first. Optionally filter to one error code. Read-only.',
+    {
+      workspaceId: z.string().describe('The workspace to read failures from'),
+      errorCode: z.string().optional().describe('Only events with this error code'),
+    },
+    async ({ workspaceId, errorCode }) => {
+      try {
+        return asText(await api.listOpsEvents({ workspaceId, errorCode }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'get_ops_summary',
+    'Classified failures for a workspace: counts by error code, failures by job type and day, and the jobs needing attention (failed, or running with an expired lease). Read-only; the diagnosis surface for a failed run.',
+    { workspaceId: z.string().describe('The workspace to summarize') },
+    async ({ workspaceId }) => {
+      try {
+        return asText(await api.getOpsSummary({ workspaceId }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'retry_job',
+    'Requeue a failed job so the worker runs it again. Requires the write scope and an owner or admin role in the workspace; a read-only key cannot call it. Use get_ops_summary to find the job id.',
+    {
+      workspaceId: z.string().describe('The workspace the job belongs to'),
+      jobId: z.string().describe('The failed job id (from get_ops_summary or list_ops_events)'),
+    },
+    async ({ workspaceId, jobId }) => {
+      try {
+        return asText(await api.retryJob({ workspaceId, jobId }));
       } catch (error) {
         return asError(error);
       }
