@@ -30,10 +30,32 @@ export IMAGE_TAG
 echo "1. Building container images..."
 docker compose "${COMPOSE_FILES[@]}" build octo-api octo-web
 
-echo "2. Starting containers..."
+echo "2. Starting database..."
+docker compose "${COMPOSE_FILES[@]}" up -d octo-db
+
+echo "3. Waiting for database to accept connections..."
+DB_READY=false
+for _ in $(seq 1 30); do
+  if docker compose "${COMPOSE_FILES[@]}" exec -T octo-db pg_isready -U postgres >/dev/null 2>&1; then
+    DB_READY=true
+    break
+  fi
+  sleep 2
+done
+if [ "$DB_READY" != "true" ]; then
+  echo "ERROR: Database did not become ready."
+  exit 1
+fi
+
+# Apply migrations before the API starts, so new code never runs against an old
+# schema. A migration failure aborts the deploy here, before any container swap.
+echo "4. Applying database migrations..."
+"$SCRIPT_DIR/migrate.sh"
+
+echo "5. Starting containers..."
 docker compose "${COMPOSE_FILES[@]}" up -d
 
-echo "3. Waiting for services to become healthy..."
+echo "6. Waiting for services to become healthy..."
 MAX_WAIT=90
 WAITED=0
 HEALTHY=false
@@ -67,7 +89,7 @@ if [ "$HEALTHY" != "true" ]; then
   exit 1
 fi
 
-echo "4. Running smoke tests..."
+echo "7. Running smoke tests..."
 # Smoke test A: Root UI returns 200
 HTTP_INDEX=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${WEB_HOST_PORT}/")
 if [ "$HTTP_INDEX" != "200" ]; then
@@ -84,7 +106,7 @@ if [ "$HTTP_WORKSPACES" != "401" ]; then
   exit 1
 fi
 
-echo "5. Recording successful deployment..."
+echo "8. Recording successful deployment..."
 cat <<EOF > "$STATE_FILE"
 SHA="${TARGET_SHA}"
 CURRENT_IMAGE="${IMAGE_TAG}"
