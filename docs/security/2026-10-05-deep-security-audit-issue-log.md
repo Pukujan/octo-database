@@ -54,7 +54,7 @@ sendJson(res, 200, await dbListShares(workspaceId));
 
 ---
 
-## ISS-3 — MEDIUM-HIGH — Thumbnail fallback upgrades a share-scoped request to an uncapped principal-scoped token
+## ISS-3 — MEDIUM-HIGH — Thumbnail fallback upgrades a share-scoped request to an uncapped principal-scoped token — FIXED
 
 **Category:** authorization / credential escalation
 **Locations:** `src/server/index.ts:1687-1702` (the 302), `:411-460` (`authorizeMediaRequest`), `src/media/media-token.ts:57-85`
@@ -75,7 +75,7 @@ Two defects: (a) an anonymous share-token holder is handed a principal-scoped to
 
 ---
 
-## ISS-4 — HIGH — `POST /api/jobs` trusts the caller's `payload`; the thumbnail handler reads an attacker-chosen object key
+## ISS-4 — HIGH — `POST /api/jobs` trusts the caller's `payload`; the thumbnail handler reads an attacker-chosen object key — FIXED
 
 **Category:** broken tenant authorization / trusted caller with untrusted input
 **Locations:** `src/jobs/worker.ts:54-73` (`handleThumbnailJob`), `src/media/thumbnail-service.ts:32-65` (`ensureThumbnail`), `src/server/index.ts:2509-2565` (enqueue), `:1656-1713` (thumbnail read-back)
@@ -94,7 +94,7 @@ Reachability needs no victim action: the server's minute tick calls `drainQueueO
 
 ---
 
-## ISS-5 — MEDIUM — MFA recovery codes can be consumed more than once
+## ISS-5 — MEDIUM — MFA recovery codes can be consumed more than once — FIXED
 
 **Category:** authentication / MFA bypass (non-atomic state update)
 **Locations:** `src/server/index.ts:667-687` (`verifyMfaCode`), `src/server/db.ts:1484-1489` (`dbSetMfaRecoveryCodes`)
@@ -116,7 +116,7 @@ This is a read-modify-write with no row lock or compare-and-set. Two concurrent 
 
 ---
 
-## ISS-6 — MEDIUM — Platform owner is a hardcoded personal email in a public repository
+## ISS-6 — MEDIUM — Platform owner is a hardcoded personal email in a public repository — FIXED
 
 **Category:** privilege escalation / hardcoded privileged identity
 **Location:** `src/server/db.ts:246-249`
@@ -136,7 +136,7 @@ Platform-owner authority (`is_platform_owner = true` → all workspaces, role `o
 
 ---
 
-## ISS-7 — LOW — Dead `verifyApiKey` contains an unscoped key lookup
+## ISS-7 — LOW — Dead `verifyApiKey` contains an unscoped key lookup — FIXED
 
 **Category:** latent authorization bypass / dead code
 **Location:** `src/api/keys.ts:176-252`

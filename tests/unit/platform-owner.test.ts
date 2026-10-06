@@ -13,41 +13,47 @@ describe('Platform Owner Database Authorization Logic', () => {
     vi.restoreAllMocks();
   });
 
-  it('correctly passes isOwner=true for pujan3645@gmail.com in dbUpsertGooglePrincipal', async () => {
-    let capturedParams: unknown[] = [];
-    vi.spyOn(db.servicePool, 'connect').mockResolvedValue({
-      query: vi.fn().mockImplementation(async (_sql: string, params: unknown[]) => {
-        capturedParams = params;
-        return {
-          rows: [
-            {
-              id: 'principal-1',
-              authUserId: 'google-sub-1',
-              email: 'pujan3645@gmail.com',
-              displayName: 'Pujan',
-              avatarUrl: null,
-              isGuest: false,
-              isPlatformOwner: true,
-            },
-          ],
-        };
-      }),
-      release: vi.fn(),
-    } as any);
+  it('passes isOwner=true for the configured PLATFORM_OWNER_EMAIL', async () => {
+    process.env['PLATFORM_OWNER_EMAIL'] = 'owner@example.test';
+    try {
+      let capturedParams: unknown[] = [];
+      vi.spyOn(db.servicePool, 'connect').mockResolvedValue({
+        query: vi.fn().mockImplementation(async (_sql: string, params: unknown[]) => {
+          capturedParams = params;
+          return {
+            rows: [
+              {
+                id: 'principal-1',
+                authUserId: 'google-sub-1',
+                email: 'owner@example.test',
+                displayName: 'Owner',
+                avatarUrl: null,
+                isGuest: false,
+                isPlatformOwner: true,
+              },
+            ],
+          };
+        }),
+        release: vi.fn(),
+      } as any);
 
-    const result = await db.dbUpsertGooglePrincipal(
-      'google-sub-1',
-      'Pujan3645@gmail.com',
-      'Pujan',
-      null
-    );
+      const result = await db.dbUpsertGooglePrincipal(
+        'google-sub-1',
+        'Owner@Example.Test',
+        'Owner',
+        null
+      );
 
-    expect(result.isPlatformOwner).toBe(true);
-    // Param index 4 (5th param: $5) is isOwner boolean
-    expect(capturedParams[4]).toBe(true);
+      expect(result.isPlatformOwner).toBe(true);
+      // Param index 4 (5th param: $5) is isOwner boolean
+      expect(capturedParams[4]).toBe(true);
+    } finally {
+      delete process.env['PLATFORM_OWNER_EMAIL'];
+    }
   });
 
-  it('passes isOwner=false for non-owner email in dbUpsertGooglePrincipal', async () => {
+  it('passes isOwner=false when no owner email is configured', async () => {
+    delete process.env['PLATFORM_OWNER_EMAIL'];
     let capturedParams: unknown[] = [];
     vi.spyOn(db.servicePool, 'connect').mockResolvedValue({
       query: vi.fn().mockImplementation(async (_sql: string, params: unknown[]) => {

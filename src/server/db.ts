@@ -243,10 +243,8 @@ export async function dbUpsertGooglePrincipal(
   isGuest: boolean;
   isPlatformOwner: boolean;
 }> {
-  const isOwner =
-    email.toLowerCase() === 'pujan3645@gmail.com' ||
-    (Boolean(process.env['PLATFORM_OWNER_EMAIL']) &&
-      email.toLowerCase() === process.env['PLATFORM_OWNER_EMAIL']!.toLowerCase());
+  const ownerEmail = process.env['PLATFORM_OWNER_EMAIL'];
+  const isOwner = Boolean(ownerEmail) && email.toLowerCase() === ownerEmail!.toLowerCase();
   const sql = `
     INSERT INTO octo.principals (id, auth_user_id, email, display_name, avatar_url, is_guest, is_platform_owner)
     VALUES (gen_random_uuid(), $1, $2, $3, $4, false, $5)
@@ -758,9 +756,10 @@ export async function dbResolveShareByTokenHash(tokenHash: string): Promise<{
 export async function dbResolveShareById(shareId: string): Promise<{
   workspaceId: string;
   createdBy: string;
+  validUntil: string | null;
 } | null> {
   const sql = `
-    SELECT workspace_id AS "workspaceId", created_by AS "createdBy"
+    SELECT workspace_id AS "workspaceId", created_by AS "createdBy", valid_until AS "validUntil"
     FROM octo.shares
     WHERE id = $1
       AND revoked_at IS NULL
@@ -768,7 +767,7 @@ export async function dbResolveShareById(shareId: string): Promise<{
       AND (valid_until IS NULL OR valid_until > now())
     LIMIT 1;
   `;
-  const rows = await queryService<{ workspaceId: string; createdBy: string }>(sql, [shareId]);
+  const rows = await queryService<{ workspaceId: string; createdBy: string; validUntil: string | null }>(sql, [shareId]);
   return rows[0] ?? null;
 }
 
