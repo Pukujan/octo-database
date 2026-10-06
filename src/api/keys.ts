@@ -36,13 +36,6 @@ export interface CreatedApiKeyResult {
   rawSecret: string;
 }
 
-export interface VerifiedApiKey {
-  apiKey: ApiKey;
-  principal: Principal;
-  isAccountWide: boolean;
-  workspaceId: string | null;
-}
-
 /** The minting caller's own authority, reduced to what the decision depends on. */
 export interface KeyMintCaller {
   isApiKey: boolean;
@@ -164,94 +157,6 @@ export async function createApiKey(
 }
 
 /**
- * Verifies a bearer API key against octo.api_keys:
- * 1. Checks key format and prefix.
- * 2. Hashes secret with SHA-256.
- * 3. Resolves key record from database.
- * 4. Verifies expiration.
- * 5. Updates last_used_at.
- * 6. Resolves parent principal.
- * Fails closed if invalid, revoked, or expired.
- */
-export async function verifyApiKey(
-  supabase: SupabaseClient,
-  rawSecret: string
-): Promise<VerifiedApiKey | null> {
-  if (!rawSecret || (!rawSecret.startsWith('octo_live_acc_') && !rawSecret.startsWith('octo_live_ws_'))) {
-    return null;
-  }
-
-  const keyHash = hashApiKeySecret(rawSecret);
-
-  // 1. Call SECURITY DEFINER RPC to verify key and update last_used_at atomically
-  let keyRow: RawApiKeyRow | null = null;
-  const { data: rpcData, error: rpcError } = await supabase
-    .schema('octo')
-    .rpc('verify_api_key', { target_hash: keyHash });
-
-  if (!rpcError && rpcData) {
-    keyRow = Array.isArray(rpcData) ? rpcData[0] : rpcData;
-  } else {
-    // Fallback for mocks / environments where RPC is direct
-    const { data: directData } = await supabase
-      .schema('octo')
-      .from('api_keys')
-      .select('*')
-      .eq('key_hash', keyHash)
-      .maybeSingle();
-    keyRow = directData;
-  }
-
-  if (!keyRow) {
-    return null;
-  }
-
-  // Check expiration if evaluated client-side
-  if (keyRow.expires_at) {
-    const expiryTime = new Date(keyRow.expires_at).getTime();
-    if (Date.now() >= expiryTime) {
-      return null;
-    }
-  }
-
-  // 2. Resolve parent principal. The server queries PostgreSQL directly as a
-  // trusted backend; no anon-reachable principal lookup is exposed.
-  let principalRow: RawPrincipalRow | null = null;
-  const { data: directPrincipal } = await supabase
-    .schema('octo')
-    .from('principals')
-    .select('*')
-    .eq('id', keyRow.principal_id)
-    .maybeSingle();
-  principalRow = directPrincipal;
-
-  if (!principalRow) {
-    return null;
-  }
-
-  const principal: Principal = {
-    id: principalRow.id,
-    authUserId: principalRow.auth_user_id,
-    email: principalRow.email,
-    displayName: principalRow.display_name,
-    avatarUrl: principalRow.avatar_url,
-    isPlatformOwner: principalRow.is_platform_owner,
-    isGuest: Boolean(principalRow.is_guest),
-    createdAt: principalRow.created_at,
-    updatedAt: principalRow.updated_at,
-  };
-
-  const apiKey = mapApiKeyRow(keyRow);
-
-  return {
-    apiKey,
-    principal,
-    isAccountWide: apiKey.isAccountWide,
-    workspaceId: apiKey.workspaceId,
-  };
-}
-
-/**
  * Lists all API keys belonging to the current authenticated user.
  */
 export async function listApiKeys(supabase: SupabaseClient): Promise<ApiKey[]> {
@@ -298,18 +203,6 @@ interface RawApiKeyRow {
   expires_at: string | null;
   created_at: string;
   last_used_at: string | null;
-}
-
-interface RawPrincipalRow {
-  id: string;
-  auth_user_id: string;
-  email: string;
-  display_name: string | null;
-  avatar_url: string | null;
-  is_platform_owner: boolean;
-  is_guest?: boolean;
-  created_at: string;
-  updated_at: string;
 }
 
 function mapApiKeyRow(row: unknown): ApiKey {

@@ -14,7 +14,6 @@ import {
   hashApiKeySecret,
   listApiKeys,
   revokeApiKey,
-  verifyApiKey,
 } from '../../src/api/keys';
 import { createMockSupabaseClient, MockDatabase } from '../mocks/mock-supabase';
 
@@ -92,12 +91,6 @@ describe('API Keys: account-wide vs workspace-scoped', () => {
     // The secret is stored only as a hash.
     expect(db.api_keys[0]!.key_hash).toBe(hashApiKeySecret(rawSecret));
     expect(JSON.stringify(db.api_keys)).not.toContain(rawSecret);
-
-    const verified = await verifyApiKey(client, rawSecret);
-    expect(verified).not.toBeNull();
-    expect(verified?.isAccountWide).toBe(true);
-    expect(verified?.workspaceId).toBeNull();
-    expect(verified?.principal.id).toBe('p-dev');
   });
 
   it('mints a workspace-scoped key pinned to one workspace', async () => {
@@ -116,21 +109,6 @@ describe('API Keys: account-wide vs workspace-scoped', () => {
     expect(apiKey.workspaceId).toBe('ws-personal');
     expect(rawSecret.startsWith('octo_live_ws_')).toBe(true);
     expect(apiKey.scopes).toEqual(['read', 'write', 'files']);
-
-    const verified = await verifyApiKey(client, rawSecret);
-    expect(verified?.isAccountWide).toBe(false);
-    expect(verified?.workspaceId).toBe('ws-personal');
-  });
-
-  it('fails closed for empty, malformed, and unknown secrets', async () => {
-    const db = new MockDatabase();
-    const { user } = seedDeveloper(db);
-    const client = createMockSupabaseClient(db, user);
-
-    expect(await verifyApiKey(client, '')).toBeNull();
-    expect(await verifyApiKey(client, 'not-a-key')).toBeNull();
-    expect(await verifyApiKey(client, 'octo_live_ws_bogus_invalid_token')).toBeNull();
-    expect(await verifyApiKey(client, 'octo_live_acc_bogus_invalid_token')).toBeNull();
   });
 
   it('lists and revokes keys', async () => {
