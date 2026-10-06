@@ -47,6 +47,7 @@ describe('Octo MCP adapter', () => {
       'list_files',
       'list_workspaces',
       'mint_key',
+      'provision_database',
       'query_workspace',
       'upload_file',
       'whoami',

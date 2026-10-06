@@ -38,6 +38,14 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
       'Create a workspace (workspace = database) and auto-provision its key. Not available to workspace-scoped keys.',
   },
   {
+    action: 'workspaces.provision_database',
+    method: 'POST',
+    path: '/api/workspaces/<id>/database',
+    requiredScope: 'write',
+    description:
+      'Provision a real PostgreSQL database owned by a workspace and return its connection string exactly once. Not available to workspace-scoped keys.',
+  },
+  {
     action: 'files.list',
     method: 'GET',
     path: '/api/files?workspaceId=<id>',
@@ -141,7 +149,9 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
  *
  * Every class is still bounded by workspace membership, role, the workspace
  * binding of a scoped key, provider availability, and the human confirmation /
- * MFA gates. None of them exposes SQL or a direct database surface.
+ * MFA gates. No class grants a SQL surface directly; a write-scoped account-wide
+ * key can provision a workspace database (as it can create a workspace), and the
+ * credential that call returns is the database's own, not a control-plane one.
  */
 export interface KeyClassProfile {
   label: string;
@@ -209,12 +219,19 @@ export function hasScope(scopes: string[], required: OctoScope): boolean {
 /**
  * Human/agent-facing description of how to authenticate. Contains no secrets and
  * no infrastructure credentials -- only the shape of the call.
+ *
+ * The note records the one deliberate exception to "tokens never expose a database
+ * credential": a provisioned workspace database returns its own connection string
+ * once to the caller that provisioned it. That credential is scoped to that one
+ * database and carries no access to Octo control-plane data.
  */
 export const AUTH_GUIDANCE = {
   scheme: 'Bearer',
   header: 'Authorization: Bearer <octo_live_...>',
   note:
     'Agent tokens grant only their listed scopes within their bound workspace (or all ' +
-    'authorized workspaces for account-wide keys). They never expose provider, database, ' +
-    'or infrastructure credentials.',
+    'authorized workspaces for account-wide keys). They never expose provider or ' +
+    'infrastructure credentials. The one deliberate exception is a provisioned workspace ' +
+    'database: its own connection string is returned once to the caller that provisioned ' +
+    'it, and it carries no access to Octo control-plane data.',
 } as const;

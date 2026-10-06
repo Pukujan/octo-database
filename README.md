@@ -13,7 +13,7 @@ Personal files, family media, work projects, research systems, and AI agents oft
 - **PostgreSQL / Supabase**: Canonical metadata, workspace membership, and fail-closed Row-Level Security (RLS).
 - **Cloudflare R2**: Fast, low-cost active object storage for hot files.
 - **Google Drive**: Scalable personal cold storage (utilizing your Google One / AI Pro 5TB pooled quota) for archived media.
-- **One Platform API & Scoped Agent Keys**: Users and autonomous coding agents interact with logical file IDs and workspace machine tokens. They never see raw database strings or master cloud credentials.
+- **One Platform API & Scoped Agent Keys**: Users and autonomous coding agents interact with logical file IDs and workspace machine tokens. Master database and cloud credentials stay on the server. The one deliberate exception is a workspace's own provisioned database: its connection string is returned once to the caller that created it, and it reaches no Octo control-plane data.
 
 ---
 
@@ -33,6 +33,7 @@ Google Login & RLS ──► Full-Stack Server & UI ──► Active R2 Storage 
 | **QA Vision Pipeline** | Playwright E2E testing with Alibaba Qwen 3.8 Flash multimodal vision model verification | **Merged** (`PR #23`) |
 | **Provider Runtime (#16)** | Provider configuration for R2 & Google Drive OAuth without secret leakage in Git | **Merged** (`PR #19`) |
 | **Slice 5 (#7)** | Google Drive 5TB cold storage archival transition and on-demand restore | **Verified Live** |
+| **Slice 20 (#153)** | A real, independently connectable PostgreSQL database per workspace, owned by its own scoped role | **Merged** (`PR #155`) |
 | **Slice 3 (#5)** | Workspace image/video gallery with thumbnails and album browsing | *Next up* |
 
 ---

@@ -89,6 +89,19 @@ export function createOctoMcpServer(api: OctoApi): McpServer {
   );
 
   server.tool(
+    'provision_database',
+    'Provision a real PostgreSQL database owned by a workspace and return its connection string. The string is shown exactly once; connect to it with an ordinary Postgres client to create and use your own tables. Requires an account-wide token, and a workspace that does not already have a database.',
+    { workspaceId: z.string().describe('The workspace to provision a database for') },
+    async ({ workspaceId }) => {
+      try {
+        return asText(await api.provisionDatabase({ workspaceId }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
     'list_files',
     'List the files in a workspace.',
     { workspaceId: z.string().describe('The workspace to list files from') },
