@@ -18,6 +18,7 @@
 
 import { expect, Page, test } from '@playwright/test';
 import { auditPage } from './vision-audit';
+import { typeConfirmCode } from './confirm-secret';
 import { exemptFromDailyLimit } from './workspace-quota';
 
 /** Selects a workspace by name from the dashboard's workspace switcher. */
@@ -35,20 +36,9 @@ test.describe('Workspace data plane', () => {
     // 1. Create a workspace from the UI; a key is auto-provisioned and shown once.
     await page.click('button:has-text("New Workspace")');
     await expect(page.getByRole('dialog').getByText('New Workspace')).toBeVisible();
-    // Creation is stamped: first run has no secret. Arm it first -- setting the
-    // secret re-renders the modal and clears anything already typed.
-    const createSetup = page.getByRole('dialog').getByLabel(/New confirmation secret/);
-    if (await createSetup.isVisible().catch(() => false)) {
-      await createSetup.fill('e2e-confirm-secret');
-      await page.getByRole('dialog').getByRole('button', { name: 'Set confirmation secret' }).click();
-      await expect(createSetup).toHaveCount(0);
-    }
     const wsName = `Lifecycle ${Date.now()}`;
     await page.getByRole('dialog').locator('input[name="name"]').fill(wsName);
-    await page
-      .getByRole('dialog')
-      .getByLabel('Confirmation secret', { exact: true })
-      .fill('e2e-confirm-secret');
+    await typeConfirmCode(page, page.getByRole('dialog'));
     await page.getByRole('dialog').getByRole('button', { name: 'Create Workspace' }).click();
 
     // 2. The one-time workspace key appears as a dismissible notice (the dialog
@@ -139,12 +129,6 @@ test.describe('Workspace data plane', () => {
     await page.click('button:has-text("Delete Workspace")');
     await expect(page.getByRole('dialog').getByRole('heading', { name: `Delete ${wsName}?` })).toBeVisible();
 
-    // First run: no secret is set, so the dialog prompts to create one.
-    const setupField = page.getByRole('dialog').getByLabel(/New confirmation secret/);
-    if (await setupField.isVisible().catch(() => false)) {
-      await setupField.fill('e2e-confirm-secret');
-      await page.getByRole('dialog').getByRole('button', { name: 'Set confirmation secret' }).click();
-    }
     await expect(page.getByRole('dialog').getByLabel(/to confirm/)).toBeVisible();
 
     const slug = await page.evaluate(async (workspaceId: string) => {
@@ -155,7 +139,7 @@ test.describe('Workspace data plane', () => {
       return (list as { id: string; slug: string }[]).find((w) => w.id === workspaceId)!.slug;
     }, wsId);
     await page.getByRole('dialog').getByLabel(/to confirm/).fill(slug);
-    await page.getByRole('dialog').getByLabel('Confirmation secret').fill('e2e-confirm-secret');
+    await typeConfirmCode(page, page.getByRole('dialog'));
     await page.getByRole('dialog').getByRole('button', { name: 'Delete workspace' }).click();
 
     await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: 15000 });

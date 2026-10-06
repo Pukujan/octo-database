@@ -7,7 +7,7 @@
  * drives these routes directly must arm the gate first and pass `confirmSecret`.
  */
 
-import { APIRequestContext, expect } from '@playwright/test';
+import { APIRequestContext, expect, Locator, Page } from '@playwright/test';
 
 export const CONFIRM_SECRET = 'e2e-confirm-secret';
 
@@ -21,4 +21,12 @@ export async function setConfirmSecret(
     data: { secret: CONFIRM_SECRET },
   });
   expect(response.status()).toBe(200);
+}
+
+/** Types the one-time code the form is showing. */
+export async function typeConfirmCode(page: Page, scope?: Locator): Promise<void> {
+  const root = scope ?? page.locator('body');
+  const shown = root.locator('.confirm-code strong');
+  await shown.waitFor({ state: 'visible' });
+  await root.getByLabel('Type the code', { exact: true }).fill(((await shown.innerText()) ?? '').trim());
 }
