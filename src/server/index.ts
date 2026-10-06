@@ -65,6 +65,7 @@ import {
   dbSetMfaPending,
   dbConfirmMfa,
   dbSetMfaRecoveryCodes,
+  dbConsumeMfaRecoveryCode,
   dbClearMfa,
   MfaRecord,
   dbGetFile,
@@ -674,15 +675,9 @@ async function verifyMfaCode(principalId: string, mfa: MfaRecord, supplied: unkn
   }
   if (verifyTotpCode(secret, supplied)) return true;
 
-  const hash = hashRecoveryCode(supplied);
-  if (mfa.recoveryCodeHashes.includes(hash)) {
-    await dbSetMfaRecoveryCodes(
-      principalId,
-      mfa.recoveryCodeHashes.filter((candidate) => candidate !== hash)
-    );
-    return true;
-  }
-  return false;
+  // Recovery codes are one-time. Consume atomically so two concurrent step-ups
+  // presenting the same code cannot both succeed.
+  return dbConsumeMfaRecoveryCode(principalId, hashRecoveryCode(supplied));
 }
 
 /** Attributes an agent action to its principal for audit. Best-effort. */
