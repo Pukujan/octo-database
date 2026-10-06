@@ -144,4 +144,21 @@ export class OctoApi {
       ...(input.limit === undefined ? {} : { limit: input.limit }),
     });
   }
+
+  listOpsEvents(input: { workspaceId: string; errorCode?: string }): Promise<unknown> {
+    const params = new URLSearchParams({ workspaceId: input.workspaceId });
+    if (input.errorCode !== undefined) params.set('errorCode', input.errorCode);
+    return this.request('GET', `/api/ops/events?${params.toString()}`);
+  }
+
+  getOpsSummary(input: { workspaceId: string }): Promise<unknown> {
+    return this.request('GET', `/api/ops/summary?workspaceId=${encodeURIComponent(input.workspaceId)}`);
+  }
+
+  retryJob(input: { workspaceId: string; jobId: string }): Promise<unknown> {
+    return this.request(
+      'POST',
+      `/api/jobs/${encodeURIComponent(input.jobId)}/retry?workspaceId=${encodeURIComponent(input.workspaceId)}`
+    );
+  }
 }

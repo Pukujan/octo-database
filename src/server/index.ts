@@ -97,6 +97,7 @@ import {
   dbFailJob,
   dbListActivity,
   dbListOpsEvents,
+  dbGetOpsSummary,
   dbListJobs,
   dbListShares,
   dbListWorkspaceFiles,
@@ -2823,6 +2824,40 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
       const errorCode = url.searchParams.get('errorCode');
       sendJson(res, 200, { events: await dbListOpsEvents(workspaceId, errorCode) });
+      return;
+    }
+
+    // Ops summary: GET /api/ops/summary?workspaceId=...
+    // The O2 classification views over HTTP (issue #140, slice O3).
+    if (pathname === '/api/ops/summary' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      sendJson(res, 200, await dbGetOpsSummary(workspaceId));
       return;
     }
 
