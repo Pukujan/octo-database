@@ -48,6 +48,7 @@ import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { GraphClient, loadGraphConfigFromEnv } from '../graph/falkordb-client';
 import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
+import { acceptConfirmChallenge, hasConfirmChallenge, issueConfirmChallenge } from '../auth/confirm-challenge';
 import { sendStaticFile } from './static-file';
 import {
   provisioningConfigured,
@@ -708,10 +709,11 @@ function slugify(name: string): string {
 
 /**
  * The human confirmation gate for destructive commands. It is satisfied only when
- * both hold: the caller is a human session (no API key), and the supplied secret
- * hashes to the principal's stored confirmation secret. An API-key caller can
- * never satisfy it, whatever its scopes -- that is the structural answer to "can
- * a blind agent delete a workspace".
+ * both hold: the caller is a human session (no API key), and the supplied value
+ * is the one-time code just shown to that person (or, for existing API clients,
+ * the stored confirmation secret). An API-key caller can never satisfy it,
+ * whatever its scopes -- that is the structural answer to "can a blind agent
+ * delete a workspace".
  *
  * When `options.requireMfa` is set and the principal has confirmed MFA, a valid
  * TOTP code (or a one-time recovery code) is additionally required. A used
@@ -734,6 +736,15 @@ async function confirmGate(
     return false;
   }
 
+  if (acceptConfirmChallenge(auth.principal.id, suppliedSecret)) {
+    return confirmMfa(res, auth, options);
+  }
+
+  if (hasConfirmChallenge(auth.principal.id)) {
+    sendJson(res, 403, { error: 'CONFIRM_CODE_INVALID: Type the code shown on the form.' });
+    return false;
+  }
+
   const stored = await dbGetConfirmSecretHash(auth.principal.id);
   if (!stored) {
     sendJson(res, 412, {
@@ -747,6 +758,14 @@ async function confirmGate(
     return false;
   }
 
+  return confirmMfa(res, auth, options);
+}
+
+async function confirmMfa(
+  res: ServerResponse,
+  auth: AuthContext,
+  options: { requireMfa?: boolean; mfaCode?: unknown }
+): Promise<boolean> {
   if (options.requireMfa) {
     const mfa = await dbGetMfa(auth.principal.id);
     if (mfa?.confirmedAt) {
@@ -759,7 +778,6 @@ async function confirmGate(
       }
     }
   }
-
   return true;
 }
 
@@ -1172,6 +1190,24 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
       await dbSetConfirmSecret(auth.principal.id, hashApiKeySecret(secret));
       sendJson(res, 200, { success: true, rotated: Boolean(existing) });
+      return;
+    }
+
+    // A one-time code shown on the form. The human types it back. Nothing is
+    // remembered between actions. An API key cannot ask for one.
+    if (pathname === '/api/me/confirm-challenge' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (auth.apiKey) {
+        sendJson(res, 403, {
+          error: 'FORBIDDEN: A confirmation code is issued to a human session, never an API key.',
+        });
+        return;
+      }
+      sendJson(res, 200, issueConfirmChallenge(auth.principal.id));
       return;
     }
 
