@@ -12,7 +12,9 @@
  *      a vector column without having been able to enable the extension itself;
  *   3. the same credential cannot read or write any control-plane data: it holds
  *      no USAGE on the `octo` schema, so every `octo.*` read and write is refused;
- *   4. it cannot connect to another workspace's provisioned database.
+ *   4. it cannot connect to another workspace's provisioned database;
+ *   5. dropping the database (what a workspace delete does) removes both the
+ *      database and its role from the cluster.
  *
  * It talks to the provisioning module (src/server/provisioning.ts) rather than the
  * HTTP route, because the route's authorization is the same auth chain every other
@@ -36,7 +38,7 @@ if (!adminUrl) {
 // The module reads this at import time, so set it before the dynamic import below.
 process.env['OCTO_ADMIN_URL'] = adminUrl;
 
-const { provisionDatabase } = await import('../src/server/provisioning');
+const { provisionDatabase, dropProvisionedDatabase } = await import('../src/server/provisioning');
 
 const failures: string[] = [];
 function check(name: string, ok: boolean, detail = ''): void {
@@ -214,11 +216,26 @@ async function main(): Promise<void> {
       !toOther.ok,
       toOther.ok ? 'connection unexpectedly succeeded' : ''
     );
+
+    // Deleting a workspace drops the database and role the cascade cannot reach.
+    // Proven here because it is the one teardown path no cascade covers.
+    console.log('teardown drops the database and its role');
+    await dropProvisionedDatabase(a.dbName, a.roleName);
+    const gone = await owner.query<{ db: boolean; role: boolean }>(
+      `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1) AS db,
+              EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $2) AS role`,
+      [a.dbName, a.roleName]
+    );
+    check('the dropped database is gone', gone.rows[0]?.db === false);
+    check('the dropped role is gone', gone.rows[0]?.role === false);
+    created.splice(
+      created.findIndex((c) => c.dbName === a.dbName),
+      1
+    );
   } finally {
     console.log('cleanup');
     for (const { dbName, roleName } of created) {
-      await owner.query(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`).catch(() => undefined);
-      await owner.query(`DROP ROLE IF EXISTS "${roleName}"`).catch(() => undefined);
+      await dropProvisionedDatabase(dbName, roleName).catch(() => undefined);
     }
     await owner.end().catch(() => undefined);
   }

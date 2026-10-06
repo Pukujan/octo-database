@@ -41,7 +41,7 @@ import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
 import { sendStaticFile } from './static-file';
-import { provisioningConfigured, provisionDatabase } from './provisioning';
+import { provisioningConfigured, provisionDatabase, dropProvisionedDatabase } from './provisioning';
 import { guestSlug, personalSlug } from '../lib/provisioning-slug';
 import { signSessionToken, verifySessionToken } from '../lib/session-token';
 import {
@@ -1452,6 +1452,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
       const storageKeys = await dbListWorkspaceStorageKeys(workspaceId);
 
+      // Read the catalog row before the delete: the cascade removes it, and the
+      // database and role it names are not reachable by any cascade.
+      const provisioned = await dbGetWorkspaceDatabase(workspaceId);
+
       // The transaction re-checks the transient state, closing the window between
       // the pre-check above and the delete.
       if (!(await dbDeleteWorkspaceAtomic(workspaceId))) {
@@ -1461,13 +1465,35 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
 
+      // The cascade removed the catalog row but not the database or role on the
+      // cluster, which no cascade can reach. Drop them outside the transaction
+      // (DROP DATABASE cannot run inside one). Best effort: the workspace is
+      // already gone, so a failure is reported rather than failing the delete.
+      let orphanedDatabase: { dbName: string; roleName: string } | null = null;
+      if (provisioned) {
+        try {
+          if (!provisioningConfigured()) {
+            throw new Error('PROVISIONING_NOT_CONFIGURED: OCTO_ADMIN_URL is not set');
+          }
+          await dropProvisionedDatabase(provisioned.dbName, provisioned.roleName);
+        } catch (err) {
+          console.error(
+            `[workspaces] failed to drop provisioned database ${provisioned.dbName}:`,
+            err instanceof Error ? err.message : String(err)
+          );
+          orphanedDatabase = { dbName: provisioned.dbName, roleName: provisioned.roleName };
+        }
+      }
+
       sendJson(res, 200, {
         success: true,
         workspaceId,
         slug: workspace.slug,
-        // The DB cascade removes rows but not R2/Drive bytes. Report them so the
-        // operator sees the consequence instead of a silent leak.
+        // The DB cascade removes rows but not R2/Drive bytes or the cluster-side
+        // database. Report what survived so the operator sees the consequence
+        // instead of a silent leak.
         orphanedObjects: storageKeys,
+        orphanedDatabase,
       });
       return;
     }

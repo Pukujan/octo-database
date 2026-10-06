@@ -108,3 +108,30 @@ describe('provisioning configuration', () => {
     expect(url.port).toBe('54329');
   });
 });
+
+describe('dropProvisionedDatabase', () => {
+  const original = process.env['OCTO_ADMIN_URL'];
+
+  afterEach(() => {
+    if (original === undefined) delete process.env['OCTO_ADMIN_URL'];
+    else process.env['OCTO_ADMIN_URL'] = original;
+  });
+
+  it('refuses an identifier that is not the shape this module generates', async () => {
+    process.env['OCTO_ADMIN_URL'] = 'postgresql://postgres:pw@octo-db:5432/postgres';
+    const { dropProvisionedDatabase } = await freshModule();
+    // The guard runs before a connection is opened, so an injected identifier
+    // never reaches a DROP statement.
+    await expect(
+      dropProvisionedDatabase('octo_ws_x"; DROP DATABASE postgres; --', 'octo_ws_x_rw')
+    ).rejects.toThrow(/Unsafe generated database identifier/);
+  });
+
+  it('fails closed when no privileged credential is configured', async () => {
+    delete process.env['OCTO_ADMIN_URL'];
+    const { dropProvisionedDatabase } = await freshModule();
+    await expect(
+      dropProvisionedDatabase('octo_ws_a_ab12cd34', 'octo_ws_a_ab12cd34_rw')
+    ).rejects.toThrow(/PROVISIONING_NOT_CONFIGURED/);
+  });
+});

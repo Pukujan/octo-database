@@ -11,8 +11,10 @@
  *   - `CREATE DATABASE` cannot run inside a transaction, so each statement is
  *     autocommit and there is no rollback across them. The catalog row is written
  *     by the caller only after every statement here succeeds, so a failure leaves
- *     no catalog row; an orphaned role or database without a row is an
- *     owner-visible anomaly resolved by hand (no janitor in this slice).
+ *     no catalog row; a database or role orphaned by a failure part-way through
+ *     (no catalog row names it) is an owner-visible anomaly resolved by hand.
+ *     The delete path is the opposite case: the catalog row exists, so
+ *     `dropProvisionedDatabase` can find and remove the resources it names.
  *   - `CREATE DATABASE` / `CREATE ROLE` accept no bind parameters. The only values
  *     interpolated are server-derived identifiers (validated against a strict
  *     pattern and quoted) and a generated password. Nothing from a request body
@@ -190,6 +192,33 @@ export async function provisionDatabase(slug: string): Promise<ProvisionedDataba
     }
 
     throw new Error(`NAME_COLLISION: could not derive a unique database name for slug '${slug}'`);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Drops a provisioned database and its owning role.
+ *
+ * The workspace delete cascades the catalog row away, but no cascade reaches the
+ * database or the role on the cluster -- without this they outlive their
+ * workspace untraceable through Octo. Called by the delete route *after* the
+ * workspace row is gone, outside that transaction, because `DROP DATABASE` cannot
+ * run inside one.
+ *
+ * `WITH (FORCE)` disconnects any client still holding the database open; the
+ * workspace is already deleted, so a lingering session is not a reason to keep
+ * the resources. Best effort by design: the workspace is gone either way, so a
+ * failure here is reported to the caller rather than failing the delete.
+ */
+export async function dropProvisionedDatabase(dbName: string, roleName: string): Promise<void> {
+  assertSafeName(dbName);
+  assertSafeName(roleName);
+  const pool = getAdminPool();
+  const client = await pool.connect();
+  try {
+    await client.query(`DROP DATABASE IF EXISTS ${quoteIdent(dbName)} WITH (FORCE)`);
+    await client.query(`DROP ROLE IF EXISTS ${quoteIdent(roleName)}`);
   } finally {
     client.release();
   }
