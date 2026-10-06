@@ -138,6 +138,14 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
       'Classified failures for an authorized workspace: counts by error code, by job type and day, and the jobs needing attention.',
   },
   {
+    action: 'graph.query',
+    method: 'POST',
+    path: '/api/graph/query',
+    requiredScope: 'read',
+    description:
+      'Run a read-only Cypher query against an authorized workspace\'s graph. The graph name is derived from the workspace, never passed by the caller, so a query can never name another workspace\'s graph.',
+  },
+  {
     action: 'keys.revoke',
     method: 'DELETE',
     path: '/api/keys/<keyId>',

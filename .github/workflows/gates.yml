@@ -27,6 +27,21 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
+      falkordb:
+        # The graph engine for issue #12's configured-path eval. The engine inherits
+        # none of the octo.* RLS fence, so the eval proves the mediated read derives
+        # each graph name from the authenticated workspace UUID and never from a
+        # request value. Without it CI would only exercise the fail-closed path.
+        image: falkordb/falkordb-server:6.0.1
+        env:
+          REDIS_ARGS: "--requirepass ci-graph-password"
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli -a ci-graph-password ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Check out Octo
         uses: actions/checkout@v4
@@ -159,6 +174,10 @@ jobs:
           # proves nothing about isolation.
           OCTO_DB_URL: postgresql://octo_app:octo_app@localhost:54329/postgres
           OCTO_SERVICE_URL: postgresql://octo_service:octo_service@localhost:54329/postgres
+          # The optional graph engine, so the configured-path graph eval runs here
+          # instead of skipping. Unset elsewhere leaves the surface reporting
+          # not-configured, which the same spec also asserts.
+          OCTO_GRAPH_URL: redis://:ci-graph-password@localhost:6379
         run: npx playwright test
       - name: Validate stack-manifest against the certified release train
         shell: bash
