@@ -16,6 +16,13 @@ import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { loadR2ConfigFromEnv, R2StorageProvider } from '../storage/r2-client';
 import { LocalObjectStore, ObjectStore, R2ObjectStore } from '../storage/object-store';
+import {
+  clearPublishedObject,
+  publishSnapshot,
+  publishedFileUrl,
+  PublishStepError,
+  resolvePublicTarget,
+} from '../storage/publish-service';
 import { GoogleDriveProvider, loadGoogleDriveConfigFromEnv } from '../storage/google-drive-provider';
 import {
   ArchiveDeps,
@@ -88,7 +95,11 @@ import {
   dbGetWorkspaceDatabase,
   dbGetWorkspaceDatabaseCredential,
   dbSetWorkspaceDatabaseCredential,
+  dbClearFilePublished,
+  dbFinishFileDelete,
+  dbGetPublishedObject,
   dbGetWorkspaceMembership,
+  dbMarkFilePublished,
   dbHasOpenFileJob,
   dbInsertApiKey,
   dbInsertFile,
@@ -163,6 +174,42 @@ const objectStore: ObjectStore | null = r2Provider
   : useLocalStorage
     ? new LocalObjectStore(LOCAL_STORAGE_ROOT)
     : null;
+
+const privateBucketName =
+  r2Provider?.bucket ?? process.env['OCTO_R2_BUCKET'] ?? process.env['R2_BUCKET'] ?? 'octo';
+const publicTarget = resolvePublicTarget(process.env, {
+  useLocalStorage: Boolean(useLocalStorage && !r2Provider),
+  privateBucket: privateBucketName,
+  port: PORT,
+});
+const publicLocalStore: ObjectStore | null =
+  publicTarget?.mode === 'local' ? new LocalObjectStore(path.join('/tmp', 'octo-public')) : null;
+
+function presentFile<T extends { id: string; publishedAt?: string | Date | null; publicKey?: string | null }>(
+  file: T
+): Omit<T, 'publicKey'> & { publishedUrl: string | null } {
+  const published = file.publishedAt != null && publicTarget;
+  const { publicKey: _publicKey, ...rest } = file;
+  return {
+    ...rest,
+    publishedUrl: published ? publishedFileUrl(publicTarget.baseUrl, file.id) : null,
+  };
+}
+
+async function deletePublicObject(publicKey: string): Promise<void> {
+  if (publicTarget?.mode === 'local' && publicLocalStore) {
+    await publicLocalStore.delete(publicKey);
+    return;
+  }
+  if (publicTarget?.mode === 'r2' && r2Provider && publicTarget.publicBucket) {
+    await r2Provider.deleteObjectInBucket(publicTarget.publicBucket, publicKey);
+    return;
+  }
+  throw new PublishStepError(
+    'PUBLIC_DELETE_FAILED',
+    'PUBLIC_DELETE_FAILED: the public object could not be removed'
+  );
+}
 
 // Cold/archival tier (Slice 5). Optional: archival is simply unavailable when
 // Drive credentials are absent, rather than half-configured.
@@ -846,6 +893,34 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         r2: r2Status,
         googleAuthEnabled: Boolean(clientId),
       });
+      return;
+    }
+
+    // Local stand-in for the Cloudflare public bucket. Production R2 does not
+    // mount this route; the custom domain serves those bytes.
+    if (publicTarget?.mode === 'local' && publicLocalStore && req.method === 'GET' && pathname.startsWith('/public/files')) {
+      const rest = pathname.slice('/public/files'.length);
+      if (rest === '' || rest === '/') {
+        sendJson(res, 404, { error: 'NOT_FOUND' });
+        return;
+      }
+      const fileId = rest.startsWith('/') ? rest.slice(1) : rest;
+      if (!fileId || fileId.includes('/') || !UUID_PATTERN.test(fileId)) {
+        sendJson(res, 404, { error: 'NOT_FOUND' });
+        return;
+      }
+      const published = await dbGetPublishedObject(fileId);
+      const bytes = published ? await publicLocalStore.get(published.publicKey) : null;
+      if (!published || !bytes) {
+        sendJson(res, 404, { error: 'NOT_FOUND' });
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': published.mimeType,
+        'Content-Length': String(bytes.byteLength),
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(bytes);
       return;
     }
 
@@ -1656,7 +1731,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       }
 
       const files = await dbListWorkspaceFiles(workspaceId);
-      sendJson(res, 200, files);
+      sendJson(res, 200, files.map((file) => presentFile(file)));
       return;
     }
 
@@ -1808,7 +1883,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         r2Provider && file.archiveState !== 'archived_drive'
           ? await r2Provider.generatePresignedDownloadUrl(file.storageKey, 3600)
           : `/api/files/content?fileId=${fileId}&workspaceId=${workspaceId}`;
-      sendJson(res, 200, { file, downloadUrl });
+      sendJson(res, 200, { file: presentFile(file), downloadUrl });
       return;
     }
     // 6b. File Content: GET /api/files/content?workspaceId=...&fileId=...
@@ -1913,6 +1988,179 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       return;
     }
 
+    // 7. Publish / unpublish: POST /api/files/:id/publish | /unpublish
+    // Registered before delete and archive so the suffix is not parsed as an id.
+    if (
+      pathname.startsWith('/api/files/') &&
+      (pathname.endsWith('/publish') || pathname.endsWith('/unpublish')) &&
+      req.method === 'POST'
+    ) {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
+        return;
+      }
+
+      const publishing = pathname.endsWith('/publish');
+      const suffix = publishing ? '/publish' : '/unpublish';
+      const fileId = pathname.slice('/api/files/'.length, -suffix.length);
+      const workspaceId = url.searchParams.get('workspaceId');
+      if (!fileId || !workspaceId) {
+        sendJson(res, 400, { error: 'fileId and workspaceId required' });
+        return;
+      }
+      if (!requireUuid(res, fileId, 'fileId')) return;
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem || !roleAllows(auth, mem.role, 'operator')) {
+        sendJson(res, 403, {
+          error: publishing
+            ? 'FORBIDDEN: Operator role or higher required to publish'
+            : 'FORBIDDEN: Operator role or higher required to unpublish',
+        });
+        return;
+      }
+      if (!objectStore) {
+        sendJson(res, 503, { error: 'STORAGE_UNAVAILABLE: no storage backend configured.' });
+        return;
+      }
+
+      const file = await dbGetFile(workspaceId, fileId);
+      if (!file) {
+        sendJson(res, 404, { error: 'FILE_NOT_FOUND' });
+        return;
+      }
+
+      if (!publishing) {
+        if (file.publishedAt == null && file.publicKey == null) {
+          sendJson(res, 200, { fileId, published: false });
+          return;
+        }
+        if (!publicTarget) {
+          sendJson(res, 503, { error: 'PUBLIC_STORAGE_UNAVAILABLE: public file bucket is not configured' });
+          return;
+        }
+        try {
+          await clearPublishedObject({
+            publishedAt: file.publishedAt,
+            publicKey: file.publicKey ?? fileId,
+            deletePublic: deletePublicObject,
+          });
+        } catch (err) {
+          const message =
+            err instanceof PublishStepError
+              ? err.message
+              : 'PUBLIC_DELETE_FAILED: the public object could not be removed';
+          sendJson(res, 502, { error: message });
+          return;
+        }
+        await dbClearFilePublished(fileId, workspaceId);
+        await attributeAgentAction(
+          auth,
+          workspaceId,
+          'file.unpublished',
+          `File ${fileId} removed from the public bucket`
+        );
+        sendJson(res, 200, { fileId, published: false });
+        return;
+      }
+
+      if (!publicTarget) {
+        sendJson(res, 503, { error: 'PUBLIC_STORAGE_UNAVAILABLE: public file bucket is not configured' });
+        return;
+      }
+      if (file.archiveState === 'active_r2') {
+        const size = await objectStore.head(file.storageKey);
+        if (size === null) {
+          sendJson(res, 404, { error: 'OBJECT_MISSING: Stored bytes not found for this record.' });
+          return;
+        }
+      }
+
+      const wasPublished = file.publishedAt != null;
+      let copied: { url: string; publicKey: string };
+      try {
+        const activeBytes =
+          publicTarget.mode === 'local' ? await objectStore.get(file.storageKey) : null;
+        const result = await publishSnapshot({
+          fileId,
+          mimeType: file.mimeType,
+          archiveState: file.archiveState,
+          baseUrl: publicTarget.baseUrl,
+          activeBytes,
+          writePublic: async (key, bytes, contentType) => {
+            if (!publicLocalStore) {
+              throw new PublishStepError(
+                'PUBLIC_COPY_FAILED',
+                'PUBLIC_COPY_FAILED: the public object could not be written'
+              );
+            }
+            await publicLocalStore.put(key, bytes, contentType);
+          },
+          copyDirect:
+            publicTarget.mode === 'r2' && r2Provider && publicTarget.publicBucket
+              ? async () => {
+                  await r2Provider.copyToBucket(
+                    publicTarget.publicBucket!,
+                    file.storageKey,
+                    fileId,
+                    file.mimeType
+                  );
+                }
+              : undefined,
+        });
+        if (!result.ok) {
+          const error =
+            result.code === 'FILE_NOT_ACTIVE'
+              ? 'FILE_NOT_ACTIVE: restore the file before publishing; publish does not restore'
+              : 'OBJECT_MISSING: Stored bytes not found for this record.';
+          sendJson(res, result.code === 'FILE_NOT_ACTIVE' ? 409 : 404, { error });
+          return;
+        }
+        copied = result;
+      } catch (err) {
+        const message =
+          err instanceof PublishStepError
+            ? err.message
+            : 'PUBLIC_COPY_FAILED: the public object could not be written';
+        sendJson(res, 502, { error: message });
+        return;
+      }
+
+      const publishedAt = await dbMarkFilePublished(fileId, workspaceId, copied.publicKey);
+      if (!publishedAt) {
+        if (!wasPublished) {
+          try {
+            await deletePublicObject(copied.publicKey);
+          } catch (cleanupError) {
+            console.error(`Public publish cleanup failed for ${fileId}:`, cleanupError);
+          }
+        }
+        sendJson(res, 409, {
+          error: 'FILE_NOT_ACTIVE: restore the file before publishing; publish does not restore',
+        });
+        return;
+      }
+
+      await attributeAgentAction(auth, workspaceId, 'file.published', `File ${fileId} published`);
+      sendJson(res, 200, {
+        fileId,
+        url: copied.url,
+        publishedAt,
+        republished: wasPublished,
+      });
+      return;
+    }
+
     // 7. File Delete: DELETE /api/files/:id
     if (pathname.startsWith('/api/files/') && req.method === 'DELETE') {
       const auth = await authenticateRequest(req);
@@ -1958,7 +2206,40 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
 
-      await objectStore.delete(result.storageKey);
+      let storageKey = result.storageKey;
+      if (result.status === 'awaiting_public_delete') {
+        if (!publicTarget) {
+          sendJson(res, 503, { error: 'PUBLIC_STORAGE_UNAVAILABLE: public file bucket is not configured' });
+          return;
+        }
+        try {
+          await clearPublishedObject({
+            publishedAt: new Date().toISOString(),
+            publicKey: result.publicKey,
+            deletePublic: deletePublicObject,
+          });
+        } catch (err) {
+          const message =
+            err instanceof PublishStepError
+              ? err.message
+              : 'PUBLIC_DELETE_FAILED: the public object could not be removed';
+          sendJson(res, 502, { error: message });
+          return;
+        }
+        const finished = await dbFinishFileDelete(workspaceId, fileId);
+        if (finished.status === 'busy') {
+          await dbClearFilePublished(fileId, workspaceId);
+          sendJson(res, 409, { error: 'FILE_BUSY: archive or restore is in progress' });
+          return;
+        }
+        if (finished.status === 'missing') {
+          sendJson(res, 404, { error: 'FILE_NOT_FOUND' });
+          return;
+        }
+        storageKey = finished.storageKey;
+      }
+
+      await objectStore.delete(storageKey);
 
       await attributeAgentAction(auth, workspaceId, 'file.deleted', `File ${fileId} deleted by agent principal`);
       sendJson(res, 200, { success: true, fileId });
@@ -2666,6 +2947,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         const providerByAction: Record<string, boolean> = {
           'files.download': Boolean(objectStore),
           'files.upload': Boolean(objectStore),
+          'files.publish': Boolean(objectStore && publicTarget),
+          'files.unpublish': Boolean(objectStore && publicTarget),
           'files.delete': Boolean(objectStore),
           'files.archive': Boolean(objectStore && archiveDeps),
           'files.restore': Boolean(objectStore && archiveDeps),

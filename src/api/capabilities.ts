@@ -75,6 +75,21 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
     description: 'Upload bytes into an authorized workspace.',
   },
   {
+    action: 'files.publish',
+    method: 'POST',
+    path: '/api/files/<fileId>/publish?workspaceId=<id>',
+    requiredScope: 'write',
+    description:
+      'Copy one active file into the public bucket and return its stable HTTPS URL. Nothing else in the workspace is published.',
+  },
+  {
+    action: 'files.unpublish',
+    method: 'POST',
+    path: '/api/files/<fileId>/unpublish?workspaceId=<id>',
+    requiredScope: 'write',
+    description: 'Remove that file\'s public URL. The private file stays in the workspace.',
+  },
+  {
     action: 'files.delete',
     method: 'DELETE',
     path: '/api/files/<fileId>?workspaceId=<id>',
@@ -199,7 +214,7 @@ export const KEY_CLASSES = {
   'program-write': {
     label: 'Program (write)',
     description:
-      'Agent-read access plus upload, restore, job enqueue/run, document ingestion, and share creation. No delete, archive, or revocation.',
+      'Agent-read access plus upload, publish, unpublish, restore, job enqueue/run, document ingestion, and share creation. No delete, archive, or revocation.',
     scopes: ['read', 'write', 'files'],
   },
 } as const satisfies Record<string, KeyClassProfile>;
@@ -229,7 +244,11 @@ export function capabilitiesForScopes(scopes: string[]): CapabilityDescriptor[] 
 /** Workspace role required for the operations exposed by the current inventory. */
 export function minimumRoleForCapability(action: string): 'member' | 'operator' | 'admin' {
   if (action === 'files.delete') return 'admin';
-  if (['files.upload', 'files.archive', 'files.restore', 'jobs.enqueue', 'jobs.run'].includes(action)) {
+  if (
+    ['files.upload', 'files.publish', 'files.unpublish', 'files.archive', 'files.restore', 'jobs.enqueue', 'jobs.run'].includes(
+      action
+    )
+  ) {
     return 'operator';
   }
   return 'member';
