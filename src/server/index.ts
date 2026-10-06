@@ -404,6 +404,12 @@ interface MediaAuthorization {
   principalId: string;
   workspaceId: string;
   fileId: string;
+  /**
+   * Set when a share token authorized the request. A fallback redirect must then
+   * stay share-scoped: widening a share authorization into a principal-scoped
+   * credential would hand a logged-out link holder a broader, longer-lived token.
+   */
+  share?: { shareId: string; validUntil: string | null };
 }
 
 /**
@@ -459,6 +465,7 @@ async function authorizeMediaRequest(
     principalId: share.createdBy,
     workspaceId: claims.workspaceId,
     fileId: claims.fileId,
+    share: { shareId: claims.shareId, validUntil: share.validUntil },
   };
 }
 
@@ -1725,14 +1732,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
       if (!thumb) {
         // Not an image (or original missing/corrupt): send the caller to the full
-        // object instead of inventing a derivative.
+        // object instead of inventing a derivative. The fallback keeps the same
+        // scope that authorized this request, and a share-scoped fallback is
+        // capped at the share's own expiry.
+        const fallback = auth.share
+          ? { kind: 'share' as const, fileId, workspaceId, shareId: auth.share.shareId }
+          : { kind: 'principal' as const, fileId, workspaceId, principalId };
         res.writeHead(302, {
-          Location: signMediaUrl('/api/files/content', {
-            kind: 'principal',
-            fileId,
-            workspaceId,
-            principalId,
-          }),
+          Location: signMediaUrl('/api/files/content', fallback, 3600, auth.share?.validUntil ?? null),
         });
         res.end();
         return;
