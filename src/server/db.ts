@@ -1488,6 +1488,23 @@ export async function dbSetMfaRecoveryCodes(principalId: string, recoveryCodeHas
   );
 }
 
+/**
+ * Atomically consumes one recovery code, returning whether it was present. The
+ * single UPDATE removes the hash only when it is still in the list, so two
+ * concurrent step-ups cannot both redeem the same code: the second re-reads the
+ * row after the first's lock and finds the hash already gone.
+ */
+export async function dbConsumeMfaRecoveryCode(principalId: string, codeHash: string): Promise<boolean> {
+  const rows = await queryService<{ id: string }>(
+    `UPDATE octo.principals
+     SET mfa_recovery_code_hashes = array_remove(mfa_recovery_code_hashes, $1), updated_at = now()
+     WHERE id = $2 AND $1 = ANY(mfa_recovery_code_hashes)
+     RETURNING id`,
+    [codeHash, principalId]
+  );
+  return rows.length > 0;
+}
+
 /** Removes the MFA record entirely (disable). */
 export async function dbClearMfa(principalId: string): Promise<void> {
   await queryService(
