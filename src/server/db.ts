@@ -1464,6 +1464,50 @@ export async function dbCreateWorkspaceAtomic(params: {
   });
 }
 
+// 6b. Provisioned databases (productization Slice 13). The catalog row is tenant
+// data and runs on the fenced app pool like every other user-data read/write; the
+// privileged DDL itself lives in src/server/provisioning.ts.
+
+export interface DbWorkspaceDatabaseRow {
+  id: string;
+  workspaceId: string;
+  dbName: string;
+  roleName: string;
+  status: string;
+  createdAt: string;
+}
+
+const WORKSPACE_DATABASE_COLUMNS = `
+  id, workspace_id AS "workspaceId", db_name AS "dbName", role_name AS "roleName",
+  status, created_at AS "createdAt"
+`;
+
+/** The workspace's provisioned database, or null when it has none. */
+export async function dbGetWorkspaceDatabase(workspaceId: string): Promise<DbWorkspaceDatabaseRow | null> {
+  const rows = await query<DbWorkspaceDatabaseRow>(
+    `SELECT ${WORKSPACE_DATABASE_COLUMNS} FROM octo.workspace_databases WHERE workspace_id = $1`,
+    [workspaceId]
+  );
+  return rows[0] ?? null;
+}
+
+/** Records a provisioned database. Written last, so a failed provision leaves no row. */
+export async function dbInsertWorkspaceDatabase(
+  id: string,
+  workspaceId: string,
+  dbName: string,
+  roleName: string,
+  createdBy: string
+): Promise<DbWorkspaceDatabaseRow> {
+  const rows = await query<DbWorkspaceDatabaseRow>(
+    `INSERT INTO octo.workspace_databases (id, workspace_id, db_name, role_name, created_by)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING ${WORKSPACE_DATABASE_COLUMNS}`,
+    [id, workspaceId, dbName, roleName, createdBy]
+  );
+  return rows[0]!;
+}
+
 /** Files in a transient archive state block a workspace delete. */
 export async function dbCountTransientFiles(workspaceId: string): Promise<number> {
   const rows = await query<{ count: string }>(
