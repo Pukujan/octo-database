@@ -86,6 +86,13 @@ export class OctoApi {
     return this.request('GET', '/api/workspaces');
   }
 
+  provisionDatabase(input: { workspaceId: string }): Promise<unknown> {
+    return this.request(
+      'POST',
+      `/api/workspaces/${encodeURIComponent(input.workspaceId)}/database`
+    );
+  }
+
   listFiles(workspaceId: string): Promise<unknown> {
     return this.request('GET', `/api/files?workspaceId=${encodeURIComponent(workspaceId)}`);
   }

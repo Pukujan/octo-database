@@ -41,6 +41,7 @@ import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { hashApiKeySecret, authorizeKeyMint } from '../api/keys';
 import { sendStaticFile } from './static-file';
+import { provisioningConfigured, provisionDatabase, dropProvisionedDatabase } from './provisioning';
 import { guestSlug, personalSlug } from '../lib/provisioning-slug';
 import { signSessionToken, verifySessionToken } from '../lib/session-token';
 import {
@@ -71,11 +72,13 @@ import {
   MfaRecord,
   dbGetFile,
   dbGetWorkspaceById,
+  dbGetWorkspaceDatabase,
   dbGetWorkspaceMembership,
   dbHasOpenFileJob,
   dbInsertApiKey,
   dbInsertFile,
   dbInsertGuestPrincipal,
+  dbInsertWorkspaceDatabase,
   dbUpsertGooglePrincipal,
   dbInsertMembership,
   dbInsertWorkspace,
@@ -1449,6 +1452,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
       const storageKeys = await dbListWorkspaceStorageKeys(workspaceId);
 
+      // Read the catalog row before the delete: the cascade removes it, and the
+      // database and role it names are not reachable by any cascade.
+      const provisioned = await dbGetWorkspaceDatabase(workspaceId);
+
       // The transaction re-checks the transient state, closing the window between
       // the pre-check above and the delete.
       if (!(await dbDeleteWorkspaceAtomic(workspaceId))) {
@@ -1458,13 +1465,120 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
 
+      // The cascade removed the catalog row but not the database or role on the
+      // cluster, which no cascade can reach. Drop them outside the transaction
+      // (DROP DATABASE cannot run inside one). Best effort: the workspace is
+      // already gone, so a failure is reported rather than failing the delete.
+      let orphanedDatabase: { dbName: string; roleName: string } | null = null;
+      if (provisioned) {
+        try {
+          if (!provisioningConfigured()) {
+            throw new Error('PROVISIONING_NOT_CONFIGURED: OCTO_ADMIN_URL is not set');
+          }
+          await dropProvisionedDatabase(provisioned.dbName, provisioned.roleName);
+        } catch (err) {
+          console.error(
+            `[workspaces] failed to drop provisioned database ${provisioned.dbName}:`,
+            err instanceof Error ? err.message : String(err)
+          );
+          orphanedDatabase = { dbName: provisioned.dbName, roleName: provisioned.roleName };
+        }
+      }
+
       sendJson(res, 200, {
         success: true,
         workspaceId,
         slug: workspace.slug,
-        // The DB cascade removes rows but not R2/Drive bytes. Report them so the
-        // operator sees the consequence instead of a silent leak.
+        // The DB cascade removes rows but not R2/Drive bytes or the cluster-side
+        // database. Report what survived so the operator sees the consequence
+        // instead of a silent leak.
         orphanedObjects: storageKeys,
+        orphanedDatabase,
+      });
+      return;
+    }
+
+
+    // 3d. Provision a real Postgres database for a workspace:
+    // POST /api/workspaces/:id/database
+    // Creates a role and a database owned by it, records the catalog row, and
+    // returns the client's connection string exactly once. Additive, so there is
+    // no confirmation gate; it is refused for workspace-scoped keys for the same
+    // reason workspace creation is (a scoped key cannot mint more of anything).
+    if (
+      pathname.startsWith('/api/workspaces/') &&
+      pathname.endsWith('/database') &&
+      req.method === 'POST'
+    ) {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
+        return;
+      }
+      if (auth.apiKey && auth.apiKey.workspaceId) {
+        sendJson(res, 403, {
+          error: 'FORBIDDEN: A workspace-scoped key cannot provision databases',
+        });
+        return;
+      }
+
+      const workspaceId = pathname.slice('/api/workspaces/'.length, -'/database'.length);
+      if (!UUID_PATTERN.test(workspaceId)) {
+        sendJson(res, 400, { error: 'BAD_REQUEST: workspaceId must be a valid UUID' });
+        return;
+      }
+
+      const workspace = await dbGetWorkspaceById(workspaceId);
+      if (!workspace) {
+        sendJson(res, 404, { error: 'WORKSPACE_NOT_FOUND' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem && !auth.principal.isPlatformOwner) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      if (await dbGetWorkspaceDatabase(workspaceId)) {
+        sendJson(res, 409, {
+          error: 'DATABASE_EXISTS: this workspace already has a provisioned database',
+        });
+        return;
+      }
+
+      if (!provisioningConfigured()) {
+        // Thrown so the outer handler captures it as an ops event like any other
+        // 500, rather than inventing a second failure path.
+        throw new Error('PROVISIONING_NOT_CONFIGURED: OCTO_ADMIN_URL is not set');
+      }
+
+      const provisioned = await provisionDatabase(workspace.slug);
+      const database = await dbInsertWorkspaceDatabase(
+        randomUUID(),
+        workspaceId,
+        provisioned.dbName,
+        provisioned.roleName,
+        auth.principal.id
+      );
+
+      await dbRecordActivity(
+        workspaceId,
+        'workspace.database_provisioned',
+        `Database '${database.dbName}' provisioned for workspace '${workspace.name}'`,
+        null,
+        auth.principal.id
+      );
+
+      // The connection string is returned here and nowhere else: it is not stored,
+      // not logged, and not repeated in the activity event above.
+      sendJson(res, 201, {
+        database,
+        connectionString: provisioned.connectionString,
       });
       return;
     }

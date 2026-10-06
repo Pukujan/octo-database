@@ -1,0 +1,114 @@
+{
+  "engine": "DuckDB — embedded, in-process analytical engine (not a server)",
+  "headline": "DuckDB is the right analytical engine for Octo only in its embedded, disposable-compute shape — run it in a dedicated worker with an explicit memory cap over workspace-scoped Parquet in R2, never as a server, and do nothing heavier until genuinely concurrent multi-tenant analytics hurts.",
+  "scaling_ladder": [
+    {
+      "stage": "Today — one VM, single-digit workspaces, MB of data, no analytics engine built yet",
+      "trigger": "An accepted workspace question needs long-range history (this is the declared Slice 7, currently unbuilt)",
+      "action": "Do nothing new. Export operational history to Parquet in R2; answer the question with a one-off DuckDB CLI/script. Add no service.",
+      "tradeoff": "$0 and zero ops. Manual and not yet a product capability — which is fine because nothing is asking for it yet."
+    },
+    {
+      "stage": "Embedded worker — DuckDB as a dedicated analytics process, fed by the existing jobs queue",
+      "trigger": "Analytics becomes a repeatable product job (Slice 7 ships), or you decide the API process must not carry query memory",
+      "action": "Add a separate Node worker process (NOT the API process). Pin a DuckDB version (1.4.x is the LTS line; the 1.5 line EOLs 2026-11-01). Set memory_limit 2-4 GB, threads 2-4, temp_directory on local SSD (never network storage). Read r2://bucket/workspaces/<ws-id>/... via httpfs + a TYPE r2 secret. Serialize jobs (one query at a time). Octo builds the SQL server-side.",
+      "tradeoff": "One more process to run and monitor and bounded concurrency, but a runaway query spills or fails instead of taking down the API. This is the cheapest step that actually removes the pain."
+    },
+    {
+      "stage": "Concurrent multi-process reads / scale-out",
+      "trigger": "One worker cannot keep up with read-only analytics; queries queue unacceptably",
+      "action": "Run N stateless worker processes all reading the same R2 Parquet read-only. No Quack needed — multiple processes can read concurrently (READ_ONLY) natively. Add a small queue and a concurrency cap.",
+      "tradeoff": "More processes and memory on the VM. Still no writer coordination needed because Parquet is immutable — writes are new files plus a compaction job."
+    },
+    {
+      "stage": "Multiplayer DuckDB — concurrent writers / shared mutable tables",
+      "trigger": "You genuinely need multiple writers or low-latency updates on a DuckDB dataset, not just appends via new Parquet files",
+      "action": "Adopt DuckLake v1.0 with the existing Postgres as the SQL catalog (production-ready, ACID, Parquet on R2). Do NOT self-host Quack yet — it is beta until v2.0 (slated 2026-10-21); revisit after v2.0 has a few months in the field.",
+      "tradeoff": "Adds a catalog schema plus consistency/maintenance, more moving parts than stateless Parquet. Prefer it over pg_duckdb, which installs DuckDB inside the canonical OLTP Postgres you must not destabilize."
+    },
+    {
+      "stage": "Managed DuckDB / real warehouse — many concurrent tenants",
+      "trigger": "Genuinely concurrent multi-tenant analytics, always-on dashboards, or datasets large enough that single-node scan time hurts",
+      "action": "MotherDuck Lite (free, 10 GB) is the first managed rung; then MotherDuck Business or ClickHouse (self-host or Cloud) when concurrency/cost demands. Snowflake/BigQuery only if Octo ever leaves self-hosting — overkill here.",
+      "tradeoff": "Recurring cost and/or a new engine to operate. Snowflake/BigQuery per-query/per-scan pricing is hostile to tiny, bursty, many-tenant workloads."
+    }
+  ],
+  "multitenancy": "Model it as shared compute + per-workspace storage + a logical predicate — the same shape as Octo's existing Postgres RLS fence. The R2 prefix IS the fence: bind each job's worker to exactly one workspace prefix (r2://bucket/workspaces/<ws-id>/...), with server-generated workspace IDs in the path so a tenant-controlled name can never influence path construction. A redundant workspace_id column/predicate is defense-in-depth, not the fence. Because Octo builds all SQL server-side and never accepts tenant SQL, a workspace can only reach data the worker is pointed at, so project A's agent cannot reach project B. One process per tenant is over-engineering now — and it becomes nearly free later anyway, because multiple processes can concurrently read Parquet/object storage natively (READ_ONLY multi-process is supported), so per-tenant read workers over a shared R2 prefix is a legitimate scale-out path without ever adopting Quack. Honest disclosure to keep in the doc: the R2 credential the worker uses is account-wide (one token can read all prefixes), so the fence is application-level — identical to Octo's current Postgres/R2 trust model. Do not imply stronger isolation than that.",
+  "octo_recommendation": "Yes — DuckDB is the right analytical engine for a multi-tenant control plane at Octo's scale, but only in one shape: embedded, disposable compute in a dedicated analytics worker, over immutable Parquet that is workspace-scoped in R2, with Octo generating the SQL. This is exactly what PROJECT.md and the Slice 7 packet already declare (\"Parquet in R2 owns exported history; DuckDB is disposable compute\"), so the recommendation is to build the declared slice and add nothing else. Concretely: (1) keep DuckDB out of the API process — the default memory_limit is 80% of RAM, so an unbounded query can OOM the API; a dedicated worker bounds the blast radius; (2) pin a DuckDB version (1.4.x LTS) and set memory_limit (2-4 GB), threads (2-4), and temp_directory on local disk; (3) point the worker per job at exactly one workspace's R2 prefix via httpfs + a TYPE r2 secret; (4) serialize jobs; (5) do NOT run a DuckDB server, do NOT adopt MotherDuck/ClickHouse, do NOT install pg_duckdb yet. Most scaling failure modes here are recoverable by deleting a temp file and re-running a job, which is why \"do nothing yet\" is defensible for every rung above the embedded worker. When it actually hurts, the first graduation step is DuckLake over the existing Postgres catalog — not a new warehouse. Re-evaluate Quack only after v2.0 (2026-10-21) has a few months in the field, and note the Node Neo client (@duckdb/node-api) is itself marked alpha by DuckDB, so pin versions and treat upgrades as deliberate.",
+  "options": [
+    {
+      "name": "DuckDB embedded in a dedicated worker",
+      "kind": "OSS / self-hosted",
+      "when": "Now — this is Slice 7 and the correct default",
+      "cost": "$0 license; runs on the existing VM; the real cost is bounded memory + monitoring"
+    },
+    {
+      "name": "DuckDB embedded in the API process",
+      "kind": "OSS / self-hosted",
+      "when": "Only for one-off scripts; not recommended for serving",
+      "cost": "$0 but default memory_limit = 80% of RAM risks OOMing the API"
+    },
+    {
+      "name": "DuckLake v1.0 + existing Postgres catalog",
+      "kind": "OSS / self-hosted",
+      "when": "Concurrent writers or shared mutable tables become a real need",
+      "cost": "$0 license; adds a catalog schema to Postgres; more maintenance/consistency work"
+    },
+    {
+      "name": "Quack client-server (DuckDB as a server)",
+      "kind": "OSS / beta",
+      "when": "After v2.0 maturity (post 2026-10-21) if you decide you want a DuckDB server",
+      "cost": "$0 license; new server process, auth token, TLS reverse proxy, and beta churn"
+    },
+    {
+      "name": "pg_duckdb extension",
+      "kind": "OSS extension",
+      "when": "Only if you want DuckDB inside Postgres with no new service; treat with caution",
+      "cost": "$0 license; installs an analytical engine into the canonical OLTP Postgres"
+    },
+    {
+      "name": "MotherDuck",
+      "kind": "managed",
+      "when": "You want managed DuckDB with no ops",
+      "cost": "Lite free (3 internal users, 10 GB, 10 Pulse hrs/mo); Business $250/org/mo + $0.04/GB/mo storage + $0.60/CU-hr Pulse"
+    },
+    {
+      "name": "ClickHouse self-hosted",
+      "kind": "OSS / self-hosted",
+      "when": "Real concurrent multi-tenant serving and you accept operating a second engine",
+      "cost": "$0 license; a whole new server to run, replicate, and back up"
+    },
+    {
+      "name": "ClickHouse Cloud",
+      "kind": "managed",
+      "when": "Same as above but you want no ops",
+      "cost": "~$0.33-0.50 per compute-unit-hour (1 CU = 8 GiB/2 vCPU), $22-27.50/TB/mo storage, $300/30-day credit, no monthly minimum"
+    },
+    {
+      "name": "Snowflake / BigQuery",
+      "kind": "managed cloud",
+      "when": "Never for Octo's scale — cloud-only and per-query/per-scan priced",
+      "cost": "Snowflake ~$2-4/credit; BigQuery $6.25/TB scanned on-demand"
+    }
+  ],
+  "uncertainty": "Several moving parts as of 2026-10-05. DuckDB is mid-release: 1.4.x is LTS, the 1.5 line EOLs 2026-11-01, and v2.0 is slated 2026-10-21 (tentative per the release calendar), so any version pin should be deliberate. Quack is beta (v1.5.2/1.5.3) with maturity targeted at v2.0, and DuckLake v1.0 (April 2026) is the production-ready concurrency answer today — but both are recent enough that the recommendation to wait is a judgment call, not a measured benchmark. The Node Neo client (@duckdb/node-api) is marked alpha by DuckDB itself. I did not benchmark Octo's actual workload, so the exact concurrency/dataset-size breaking point is not measured — the rungs are triggers to watch, not numbers I can defend. DuckDB's R2 guide documents reading (TYPE r2 secret, r2:// URL); writing Parquet to R2 relies on the S3-compatibility API and I did not verify it against Octo's specific bucket. MotherDuck and ClickHouse figures are published list prices, region-dependent, and exclude egress; Snowflake/BigQuery figures are secondary summaries, not primary pricing pages. Finally, the isolation model's strength depends on Octo never exposing raw tenant SQL to the shared DuckDB process — if that ever changes, one process per workspace becomes necessary.",
+  "sources": [
+    "https://duckdb.org/docs/current/connect/concurrency.html",
+    "https://duckdb.org/2026/05/12/quack-remote-protocol.html",
+    "https://duckdb.org/docs/current/quack/overview.html",
+    "https://duckdb.org/2026/09/02/try-duckdb-20-alpha.html",
+    "https://duckdb.org/release_calendar.html",
+    "https://duckdb.org/faq.html",
+    "https://duckdb.org/why_duckdb.html",
+    "https://duckdb.org/docs/current/configuration/overview.html",
+    "https://duckdb.org/docs/current/guides/performance/environment.html",
+    "https://duckdb.org/docs/current/guides/network_cloud_storage/cloudflare_r2_import.html",
+    "https://duckdb.org/docs/current/clients/node_neo/overview.html",
+    "https://ducklake.select/",
+    "https://github.com/duckdb/pg_duckdb",
+    "https://motherduck.com/product/pricing/",
+    "https://clickhouse.com/pricing",
+    "https://clickhouse.com/docs/products/cloud/guides/best-practices/multitenancy",
+    "https://duckdb.org/2026/05/20/announcing-duckdb-153"
+  ]
+}

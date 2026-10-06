@@ -85,6 +85,35 @@ Before running on gravebuster, ensure:
    ./deploy.sh
    ```
 
+---
+
+## 3a. Database Migrations
+
+`deploy.sh` applies migrations **before** it starts the API, so a deploy can never
+run new code against an old schema. (Skipping this is what once left production
+missing three slices and 500-ing on login.) Each applied migration is recorded in
+`octo.schema_migrations`; a migration already recorded is never re-run, and each
+migration runs in one transaction with its tracking row, so a failure leaves
+neither a half-applied migration nor a false "applied" record.
+
+- **Fresh database:** the Postgres init scripts apply every migration and record
+  them, so the first `deploy.sh` run finds nothing to do.
+- **Existing database that predates tracking** (it has the schema but an empty
+  `octo.schema_migrations`): a normal run would try to re-apply old migrations and
+  fail on the non-idempotent ones. Adopt it once, after confirming its schema is
+  already current:
+  ```bash
+  MIGRATE_BASELINE=1 ./migrate.sh   # records every present migration as applied, runs none
+  ```
+- **Running it directly** (e.g. to apply a new migration without a full deploy):
+  ```bash
+  ./migrate.sh
+  ```
+- **Against a non-compose database** (host psql, CI): set `MIGRATE_PSQL_CMD`, e.g.
+  ```bash
+  MIGRATE_PSQL_CMD="psql -v ON_ERROR_STOP=1 -h localhost -p 54329 -U postgres -d postgres" ./migrate.sh
+  ```
+
 4. **Install systemd autodeploy timer**:
    ```bash
    mkdir -p ~/.config/systemd/user
@@ -105,7 +134,8 @@ Before running on gravebuster, ensure:
 3. Within 5 minutes, the systemd timer on gravebuster invokes `autodeploy.sh`:
    - Detects the new commit on `origin/production`.
    - Runs `deploy.sh`.
-   - Builds SHA-tagged images and starts containers.
+   - Builds SHA-tagged images, starts `octo-db`, and applies migrations (`migrate.sh`).
+   - Starts the API and web containers.
    - Verifies health within 90 seconds.
    - Runs smoke test.
    - If smoke test fails, automatically rolls back to the previous image.
