@@ -55,6 +55,7 @@ describe('Capability discovery', () => {
     const byAction = new Map(OCTO_CAPABILITIES.map((c) => [c.action, c]));
     expect(byAction.get('workspaces.create')?.requiredScope).toBe('write');
     expect(byAction.get('workspaces.provision_database')?.requiredScope).toBe('write');
+    expect(byAction.get('workspaces.query')?.requiredScope).toBe('read');
     expect(byAction.get('files.archive')?.requiredScope).toBe('delete');
     expect(byAction.get('files.restore')?.requiredScope).toBe('write');
     expect(byAction.get('activity.list')?.requiredScope).toBe('read');

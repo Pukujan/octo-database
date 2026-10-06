@@ -13,11 +13,12 @@ Personal files, family media, work projects, research systems, and AI agents oft
 - **PostgreSQL / Supabase**: Canonical metadata, workspace membership, and fail-closed Row-Level Security (RLS).
 - **Cloudflare R2**: Fast, low-cost active object storage for hot files.
 - **Google Drive**: Scalable personal cold storage (utilizing your Google One / AI Pro 5TB pooled quota) for archived media.
-- **One Platform API & Scoped Agent Keys**: Users and autonomous coding agents interact with logical file IDs and workspace machine tokens. Master database and cloud credentials stay on the server. The one deliberate exception is a workspace's own provisioned database: its connection string is returned once to the caller that created it, and it reaches no Octo control-plane data.
+- **One Platform API & Scoped Agent Keys**: Users and autonomous coding agents interact with logical file IDs and workspace machine tokens. Master database and cloud credentials stay on the server. A workspace's provisioned database can be reached two ways: its own connection string, returned once to the caller that created it, or the SQL surface (`POST /api/workspaces/<id>/query`), where an API key alone runs SQL with no connection string — either way it reaches no Octo control-plane data.
 
 > **Building a project that Octo serves?** Octo is that project's data layer. Do not
-> stand up a database of your own — provision the workspace database through Octo and
-> connect with an ordinary Postgres client. See **[docs/consuming-octo.md](docs/consuming-octo.md)**.
+> stand up a database of your own — provision the workspace database through Octo, then
+> run SQL with your Octo API key or connect with an ordinary Postgres client. See
+> **[docs/consuming-octo.md](docs/consuming-octo.md)**.
 
 ---
 
@@ -38,6 +39,7 @@ Google Login & RLS ──► Full-Stack Server & UI ──► Active R2 Storage 
 | **Provider Runtime (#16)** | Provider configuration for R2 & Google Drive OAuth without secret leakage in Git | **Merged** (`PR #19`) |
 | **Slice 5 (#7)** | Google Drive 5TB cold storage archival transition and on-demand restore | **Verified Live** |
 | **Slice 20 (#153)** | A real, independently connectable PostgreSQL database per workspace, owned by its own scoped role | **Merged** (`PR #155`) |
+| **Slice 21** | Run SQL against a workspace's own provisioned database with just an Octo API key — no connection string, host, or port | **Merged** |
 | **Slice 3 (#5)** | Workspace image/video gallery with thumbnails and album browsing | *Next up* |
 
 ---

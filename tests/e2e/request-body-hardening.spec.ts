@@ -24,6 +24,12 @@ const BODY_ROUTES = [
   { path: '/api/files/upload', method: 'post' as const },
   { path: '/api/workspaces/shares', method: 'post' as const },
   { path: '/api/jobs', method: 'post' as const },
+  // The SQL surface reads a JSON body before it knows whether the workspace has a
+  // database, so a malformed or sql-less body must be a clean 400 regardless.
+  {
+    path: '/api/workspaces/00000000-0000-0000-0000-000000000000/query',
+    method: 'post' as const,
+  },
 ];
 
 test.describe('Request body hardening', () => {
