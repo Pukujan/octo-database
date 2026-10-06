@@ -48,7 +48,7 @@ Named property/holdout checks, or “none”:
 Failure/recovery boundary:
 Acceptance checklist:
 Required return: changed behavior/files, actual checks/outcomes, remaining failures, commit/PR URL and exact head
-Delivery: target main and arm auto-merge; production remains owner-merged
+Delivery: arm auto-merge on every pull request, including a promotion into production
 Escalate only for a contradictory packet, unavailable required provider, or missing product decision
 ```
 

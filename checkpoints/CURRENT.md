@@ -27,7 +27,7 @@
 
 - Anti-overengineering rules active in AGENTS.md: zero unsolicited security layers or speculative abstractions.
 - All gates passing locally and on GitHub Actions CI: Python unittests, Vitest tests, `tsc --noEmit`, Ruff, Mypy, and 18 JSON contracts.
-- Auto-merge: repository auto-merge is enabled, `main` requires only the aggregate `gates` check, no review approval is required, and "require branches to be up to date" is OFF so a PR merges as soon as `gates` is green without anyone rebasing it. `.github/workflows/auto-merge.yml` arms squash auto-merge on every same-repo pull request, so an agent push needs no manual merge step.
+- Auto-merge: repository auto-merge is enabled. `main` and `production` each require only the aggregate `gates` check, no review approval is required, and "require branches to be up to date" is OFF so a PR merges as soon as `gates` is green without anyone rebasing it. `.github/workflows/auto-merge.yml` arms squash auto-merge on every same-repo pull request into `main` or `production`. Do not leave auto-merge off and do not ask the owner to merge.
 
 ## Next action
 

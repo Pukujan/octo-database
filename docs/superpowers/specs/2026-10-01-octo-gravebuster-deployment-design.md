@@ -207,11 +207,11 @@ to the server's variable names.
 - **`main`** — unchanged. Every agent PR targets it, `auto-merge.yml` arms squash
   auto-merge on same-repo PRs, and `main` requires only the aggregate `gates`
   check. No review requirement, no manual rebase.
-- **`production`** — new, long-lived, created from `main`. It is the deploy source
-  of truth. It advances **only** by a PR from `main` merged by the owner.
+- **`production`** — long-lived deploy branch. It advances by a pull request
+  from `main`. That pull request is armed for squash auto-merge and merges when
+  `gates` is green. The owner is not asked to merge it.
 
-`auto-merge.yml` triggers on `pull_request: branches: [main]`, so it does not arm
-on PRs into `production`. That is the desired behavior and requires no change.
+`auto-merge.yml` triggers on pull requests into `main` and `production`.
 
 ### 4.2 CI changes
 
@@ -227,7 +227,7 @@ on:
 ```
 
 This means a PR from `main` into `production` is validated by the same `gates`
-check before the owner merges it, and the resulting push to `production` is
+check, then auto-merge completes it. The resulting push to `production` is
 validated again. No new workflow, no new required check, no deploy credential in
 GitHub Actions.
 
@@ -236,7 +236,7 @@ GitHub Actions.
 ```
 agent PR ──▶ main (auto-merge on green gates)
                 │
-                │  owner opens PR main ──▶ production, reviews, merges
+                │  PR main ──▶ production, auto-merge on green gates
                 ▼
            production
                 │  systemd timer polls origin/production every 5 min
@@ -257,15 +257,12 @@ connected database; `GET /` returns 200 (the SPA shell); a static asset returns
 200; `GET /api/workspaces` without a token returns 401. These prove the web tier,
 the proxy hop, the API, and the database are all live.
 
-### 4.4 AGENTS.md carve-out
+### 4.4 Auto-merge includes production
 
-`AGENTS.md` currently states: "Auto-merge is mandatory... Every agent MUST arm
-auto-merge on every pull request it opens." That rule would deadlock against an
-owner-gated `production` branch. The file needs one scoped amendment:
-
-> Auto-merge applies to pull requests targeting `main`. Pull requests targeting
-> `production` are owner-merged by standing instruction and must not be armed for
-> auto-merge.
+Auto-merge is mandatory on every pull request, including a promotion into
+`production`. Arm `gh pr merge <n> --auto --squash` and do not ask the owner to
+merge. `production` has the same protection as `main`: only the `gates` check,
+no review, and branches are not required to be up to date.
 
 ## 5. Test environment (WSL + Podman)
 
