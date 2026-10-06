@@ -76,6 +76,7 @@ Before running on gravebuster, ensure:
    - `DATABASE_URL=postgresql://postgres:<strong_random_password>@octo-db:5432/postgres`
    - `GOOGLE_OAUTH_CLIENT_ID` & `GOOGLE_OAUTH_CLIENT_SECRET`
    - `OCTO_MEDIA_SECRET=<random_32_byte_secret>`
+   - `OCTO_SESSION_SECRET=<random_32_byte_secret>`
    - Cloudflare R2 & Google Drive credentials
 
 3. **Initial build and start**:

@@ -18,6 +18,7 @@
 
 import { expect, Page, test } from '@playwright/test';
 import { auditPage } from './vision-audit';
+import { exemptFromDailyLimit } from './workspace-quota';
 
 /** Selects a workspace by name from the dashboard's workspace switcher. */
 async function selectWorkspace(page: Page, name: string): Promise<void> {
@@ -34,8 +35,20 @@ test.describe('Workspace data plane', () => {
     // 1. Create a workspace from the UI; a key is auto-provisioned and shown once.
     await page.click('button:has-text("New Workspace")');
     await expect(page.getByRole('dialog').getByText('New Workspace')).toBeVisible();
+    // Creation is stamped: first run has no secret. Arm it first -- setting the
+    // secret re-renders the modal and clears anything already typed.
+    const createSetup = page.getByRole('dialog').getByLabel(/New confirmation secret/);
+    if (await createSetup.isVisible().catch(() => false)) {
+      await createSetup.fill('e2e-confirm-secret');
+      await page.getByRole('dialog').getByRole('button', { name: 'Set confirmation secret' }).click();
+      await expect(createSetup).toHaveCount(0);
+    }
     const wsName = `Lifecycle ${Date.now()}`;
-    await page.getByRole('dialog').locator('input').first().fill(wsName);
+    await page.getByRole('dialog').locator('input[name="name"]').fill(wsName);
+    await page
+      .getByRole('dialog')
+      .getByLabel('Confirmation secret', { exact: true })
+      .fill('e2e-confirm-secret');
     await page.getByRole('dialog').getByRole('button', { name: 'Create Workspace' }).click();
 
     // 2. The one-time secret dialog appears carrying a workspace key.
@@ -145,18 +158,28 @@ test.describe('Workspace data plane', () => {
     await page.goto('/');
     await page.click('text=Continue as Guest');
     await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
+    await exemptFromDailyLimit(page);
 
     const result = await page.evaluate(async () => {
       const token = localStorage.getItem('octo_token');
       const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      await fetch('/api/me/confirm-secret', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ secret: 'e2e-confirm-secret' }),
+      });
       const name = `Idempotent ${Date.now()}`;
       const first = await (
-        await fetch('/api/workspaces', { method: 'POST', headers, body: JSON.stringify({ name }) })
+        await fetch('/api/workspaces', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ name, confirmSecret: 'e2e-confirm-secret' }),
+        })
       ).json();
       const second = await fetch('/api/workspaces', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, confirmSecret: 'e2e-confirm-secret' }),
       });
       const list = (await (
         await fetch('/api/workspaces', { headers })
@@ -177,24 +200,32 @@ test.describe('Workspace data plane', () => {
     await page.goto('/');
     await page.click('text=Continue as Guest');
     await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
+    await exemptFromDailyLimit(page);
 
     const result = await page.evaluate(async () => {
       const token = localStorage.getItem('octo_token');
       const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+
+      // Creation and minting are stamped: arm the gate from the human session.
+      await fetch('/api/me/confirm-secret', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ secret: 'e2e-confirm-secret' }),
+      });
 
       // Two workspaces: the key is minted for the first only.
       const a = await (
         await fetch('/api/workspaces', {
           method: 'POST',
           headers,
-          body: JSON.stringify({ name: `Pinned A ${Date.now()}` }),
+          body: JSON.stringify({ name: `Pinned A ${Date.now()}`, confirmSecret: 'e2e-confirm-secret' }),
         })
       ).json();
       const b = await (
         await fetch('/api/workspaces', {
           method: 'POST',
           headers,
-          body: JSON.stringify({ name: `Pinned B ${Date.now()}` }),
+          body: JSON.stringify({ name: `Pinned B ${Date.now()}`, confirmSecret: 'e2e-confirm-secret' }),
         })
       ).json();
 
@@ -206,6 +237,7 @@ test.describe('Workspace data plane', () => {
             name: 'pinned key',
             workspaceId: a.workspace.id,
             scopes: ['read', 'write', 'files', 'delete'],
+            confirmSecret: 'e2e-confirm-secret',
           }),
         })
       ).json();
@@ -236,12 +268,27 @@ test.describe('Workspace data plane', () => {
         headers: keyHeaders,
       });
 
+      // The same key cannot create a workspace or mint another key: both carry
+      // the human stamp, which an API key can never satisfy.
+      const createRes = await fetch('/api/workspaces', {
+        method: 'POST',
+        headers: keyHeaders,
+        body: JSON.stringify({ name: `Key Create ${Date.now()}`, confirmSecret: 'anything' }),
+      });
+      const mintRes = await fetch('/api/keys', {
+        method: 'POST',
+        headers: keyHeaders,
+        body: JSON.stringify({ name: 'key mint', confirmSecret: 'anything' }),
+      });
+
       return {
         ownStatus,
         otherStatus,
         deleteStatus: deleteRes.status,
         deleteBody: await deleteRes.json(),
         deleteNoBodyStatus: deleteNoBodyRes.status,
+        createStatus: createRes.status,
+        mintStatus: mintRes.status,
       };
     });
 
@@ -250,5 +297,8 @@ test.describe('Workspace data plane', () => {
     expect(result.deleteStatus).toBe(403);
     expect(JSON.stringify(result.deleteBody)).toMatch(/human session|API keys can never/i);
     expect(result.deleteNoBodyStatus).toBe(403);
+    // Create and mint are stamped the same way: an API key can never satisfy them.
+    expect(result.createStatus).toBe(403);
+    expect(result.mintStatus).toBe(403);
   });
 });

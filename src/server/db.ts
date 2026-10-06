@@ -243,10 +243,8 @@ export async function dbUpsertGooglePrincipal(
   isGuest: boolean;
   isPlatformOwner: boolean;
 }> {
-  const isOwner =
-    email.toLowerCase() === 'pujan3645@gmail.com' ||
-    (Boolean(process.env['PLATFORM_OWNER_EMAIL']) &&
-      email.toLowerCase() === process.env['PLATFORM_OWNER_EMAIL']!.toLowerCase());
+  const ownerEmail = process.env['PLATFORM_OWNER_EMAIL'];
+  const isOwner = Boolean(ownerEmail) && email.toLowerCase() === ownerEmail!.toLowerCase();
   const sql = `
     INSERT INTO octo.principals (id, auth_user_id, email, display_name, avatar_url, is_guest, is_platform_owner)
     VALUES (gen_random_uuid(), $1, $2, $3, $4, false, $5)
@@ -278,9 +276,12 @@ export async function dbInsertWorkspace(
   description: string,
   createdBy: string
 ): Promise<{ id: string; slug: string; name: string; description: string }> {
+  // This path only ever provisions the sandbox a principal is handed at sign-in,
+  // so it is marked auto_provisioned: it must not count against the Slice 16
+  // daily creation limit, which bounds deliberate POST /api/workspaces creates.
   const sql = `
-    INSERT INTO octo.workspaces (id, slug, name, description, created_by)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO octo.workspaces (id, slug, name, description, created_by, auto_provisioned)
+    VALUES ($1, $2, $3, $4, $5, true)
     ON CONFLICT (slug) DO UPDATE SET updated_at = now()
     RETURNING id, slug, name, description;
   `;
@@ -674,7 +675,6 @@ export interface DbShareRow {
   validFrom: string;
   validUntil: string | null;
   revokedAt: string | null;
-  createdBy: string;
   createdAt: string;
   lastAccessedAt: string | null;
   accessCount: number;
@@ -698,7 +698,7 @@ export async function dbInsertShare(
     RETURNING
       id, workspace_id AS "workspaceId", resource_type AS "resourceType", resource_id AS "resourceId",
       token_prefix AS "tokenPrefix", permission, valid_from AS "validFrom", valid_until AS "validUntil",
-      revoked_at AS "revokedAt", created_by AS "createdBy", created_at AS "createdAt",
+      revoked_at AS "revokedAt", created_at AS "createdAt",
       last_accessed_at AS "lastAccessedAt", access_count AS "accessCount";
   `;
   const rows = await query<DbShareRow>(sql, [
@@ -755,9 +755,10 @@ export async function dbResolveShareByTokenHash(tokenHash: string): Promise<{
 export async function dbResolveShareById(shareId: string): Promise<{
   workspaceId: string;
   createdBy: string;
+  validUntil: string | null;
 } | null> {
   const sql = `
-    SELECT workspace_id AS "workspaceId", created_by AS "createdBy"
+    SELECT workspace_id AS "workspaceId", created_by AS "createdBy", valid_until AS "validUntil"
     FROM octo.shares
     WHERE id = $1
       AND revoked_at IS NULL
@@ -765,7 +766,7 @@ export async function dbResolveShareById(shareId: string): Promise<{
       AND (valid_until IS NULL OR valid_until > now())
     LIMIT 1;
   `;
-  const rows = await queryService<{ workspaceId: string; createdBy: string }>(sql, [shareId]);
+  const rows = await queryService<{ workspaceId: string; createdBy: string; validUntil: string | null }>(sql, [shareId]);
   return rows[0] ?? null;
 }
 
@@ -774,7 +775,7 @@ export async function dbListShares(workspaceId: string): Promise<DbShareRow[]> {
     SELECT
       id, workspace_id AS "workspaceId", resource_type AS "resourceType", resource_id AS "resourceId",
       token_prefix AS "tokenPrefix", permission, valid_from AS "validFrom", valid_until AS "validUntil",
-      revoked_at AS "revokedAt", created_by AS "createdBy", created_at AS "createdAt",
+      revoked_at AS "revokedAt", created_at AS "createdAt",
       last_accessed_at AS "lastAccessedAt", access_count AS "accessCount"
     FROM octo.shares
     WHERE workspace_id = $1
@@ -1126,6 +1127,80 @@ export async function dbListActivity(
   );
 }
 
+export interface OpsEventInput {
+  workspaceId: string | null;
+  source: 'api' | 'worker';
+  eventType: string;
+  errorCode: string | null;
+  severity: 'warning' | 'error' | 'critical';
+  detail: Record<string, unknown>;
+  jobId?: string | null;
+  route?: string | null;
+  jobType?: string | null;
+}
+
+/**
+ * Records a structured operational failure. Writes through the service pool: a
+ * failure can happen before a caller identity exists (auth errors, pre-workspace
+ * 500s), and the writer must not itself be subject to the fence it is reporting on.
+ * Callers treat this as best-effort — capture must never break the request path.
+ */
+export async function dbRecordOpsEvent(input: OpsEventInput): Promise<void> {
+  await queryService(
+    `INSERT INTO octo.ops_events
+       (workspace_id, source, event_type, error_code, severity, detail, job_id, route, job_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      input.workspaceId,
+      input.source,
+      input.eventType,
+      input.errorCode,
+      input.severity,
+      JSON.stringify(input.detail),
+      input.jobId ?? null,
+      input.route ?? null,
+      input.jobType ?? null,
+    ]
+  );
+}
+
+/** Recent operational events for a workspace, newest first, optionally by error code. */
+export async function dbListOpsEvents(
+  workspaceId: string,
+  errorCode: string | null,
+  limit = 100
+): Promise<
+  {
+    id: string;
+    source: string;
+    eventType: string;
+    errorCode: string | null;
+    severity: string;
+    detail: Record<string, unknown>;
+    jobId: string | null;
+    route: string | null;
+    jobType: string | null;
+    createdAt: string;
+  }[]
+> {
+  const params: unknown[] = [workspaceId];
+  let filter = 'workspace_id = $1';
+  if (errorCode) {
+    params.push(errorCode);
+    filter += ` AND error_code = $${params.length}`;
+  }
+  params.push(limit);
+  return query(
+    `SELECT id, source, event_type AS "eventType", error_code AS "errorCode", severity,
+            detail, job_id AS "jobId", route, job_type AS "jobType", created_at AS "createdAt"
+     FROM octo.ops_events
+     WHERE ${filter}
+     ORDER BY created_at DESC
+     LIMIT $${params.length}`,
+    params
+  );
+}
+
 // 6. Retrieval Operations (Slice 8)
 export async function dbEnsureEmbeddingConfig(
   workspaceId: string,
@@ -1303,10 +1378,20 @@ export async function dbGetWorkspaceById(workspaceId: string): Promise<{
   return rows[0] ?? null;
 }
 
+/** Thrown by dbCreateWorkspaceAtomic when the Slice 16 rolling-day quota is spent. */
+export const WORKSPACE_DAILY_LIMIT = 'WORKSPACE_DAILY_LIMIT';
+
 /**
  * Creates a workspace, the creator's owner membership, and the workspace-scoped
  * API key in one transaction. A failure in any of the three rolls back all of
  * them, so a workspace can never exist without its key.
+ *
+ * When `enforceDailyLimit` is set, the Slice 16 quota is enforced *inside* the
+ * same transaction, under a per-principal advisory lock. The count and the
+ * insert must be atomic: checking the quota on one connection and inserting on
+ * another lets two concurrent creates both observe an empty window and both
+ * succeed. The lock serializes creates by one principal so the second sees the
+ * first's row. The platform owner passes `enforceDailyLimit: false`.
  */
 export async function dbCreateWorkspaceAtomic(params: {
   workspaceId: string;
@@ -1320,8 +1405,27 @@ export async function dbCreateWorkspaceAtomic(params: {
   keyPrefix: string;
   keyName: string;
   keyScopes: string[];
+  enforceDailyLimit: boolean;
 }): Promise<{ id: string; slug: string; name: string; description: string | null; retentionDays: number | null }> {
   return withTransaction(async (client) => {
+    if (params.enforceDailyLimit) {
+      // Serialize concurrent creates by this principal for the life of the
+      // transaction. The lock releases on COMMIT/ROLLBACK.
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [params.createdBy]);
+      const existing = await client.query(
+        `SELECT count(*)::text AS count FROM octo.workspaces
+         WHERE created_by = $1 AND auto_provisioned = false
+           AND created_at >= now() - interval '24 hours'`,
+        [params.createdBy]
+      );
+      const createdLastDay = parseInt((existing.rows[0] as { count: string }).count, 10);
+      if (createdLastDay >= 1) {
+        const err = new Error(WORKSPACE_DAILY_LIMIT);
+        (err as { code?: string }).code = WORKSPACE_DAILY_LIMIT;
+        throw err;
+      }
+    }
+
     const ws = await client.query(
       `INSERT INTO octo.workspaces (id, slug, name, description, created_by, retention_days)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -1414,6 +1518,87 @@ export async function dbGetConfirmSecretHash(principalId: string): Promise<strin
     [principalId]
   );
   return rows[0]?.hash ?? null;
+}
+
+export interface MfaRecord {
+  secretEncrypted: string;
+  confirmedAt: string | null;
+  recoveryCodeHashes: string[];
+}
+
+/**
+ * The principal's MFA record, or null when none is enrolled. Reads the trusted
+ * path like the confirmation secret: this is per-principal identity material,
+ * never tenant data exposed to the client.
+ */
+export async function dbGetMfa(principalId: string): Promise<MfaRecord | null> {
+  const rows = await queryService<{ secret: string | null; confirmedAt: string | null; hashes: string[] | null }>(
+    `SELECT mfa_secret_encrypted AS secret, mfa_confirmed_at AS "confirmedAt", mfa_recovery_code_hashes AS hashes
+     FROM octo.principals WHERE id = $1`,
+    [principalId]
+  );
+  const row = rows[0];
+  if (!row?.secret) return null;
+  return {
+    secretEncrypted: row.secret,
+    confirmedAt: row.confirmedAt,
+    recoveryCodeHashes: row.hashes ?? [],
+  };
+}
+
+/** Stores an unconfirmed enrollment secret, clearing any prior confirmation. */
+export async function dbSetMfaPending(principalId: string, secretEncrypted: string): Promise<void> {
+  await queryService(
+    `UPDATE octo.principals
+     SET mfa_secret_encrypted = $1, mfa_confirmed_at = NULL, mfa_recovery_code_hashes = '{}', updated_at = now()
+     WHERE id = $2`,
+    [secretEncrypted, principalId]
+  );
+}
+
+/** Confirms enrollment and installs the initial recovery-code hashes. */
+export async function dbConfirmMfa(principalId: string, recoveryCodeHashes: string[]): Promise<void> {
+  await queryService(
+    `UPDATE octo.principals
+     SET mfa_confirmed_at = now(), mfa_recovery_code_hashes = $1, updated_at = now()
+     WHERE id = $2`,
+    [recoveryCodeHashes, principalId]
+  );
+}
+
+/** Replaces the recovery-code hashes (after a code is consumed or rotated). */
+export async function dbSetMfaRecoveryCodes(principalId: string, recoveryCodeHashes: string[]): Promise<void> {
+  await queryService(
+    'UPDATE octo.principals SET mfa_recovery_code_hashes = $1, updated_at = now() WHERE id = $2',
+    [recoveryCodeHashes, principalId]
+  );
+}
+
+/**
+ * Atomically consumes one recovery code, returning whether it was present. The
+ * single UPDATE removes the hash only when it is still in the list, so two
+ * concurrent step-ups cannot both redeem the same code: the second re-reads the
+ * row after the first's lock and finds the hash already gone.
+ */
+export async function dbConsumeMfaRecoveryCode(principalId: string, codeHash: string): Promise<boolean> {
+  const rows = await queryService<{ id: string }>(
+    `UPDATE octo.principals
+     SET mfa_recovery_code_hashes = array_remove(mfa_recovery_code_hashes, $1), updated_at = now()
+     WHERE id = $2 AND $1 = ANY(mfa_recovery_code_hashes)
+     RETURNING id`,
+    [codeHash, principalId]
+  );
+  return rows.length > 0;
+}
+
+/** Removes the MFA record entirely (disable). */
+export async function dbClearMfa(principalId: string): Promise<void> {
+  await queryService(
+    `UPDATE octo.principals
+     SET mfa_secret_encrypted = NULL, mfa_confirmed_at = NULL, mfa_recovery_code_hashes = '{}', updated_at = now()
+     WHERE id = $1`,
+    [principalId]
+  );
 }
 
 /** The id of a principal's account-wide key, or null. Enforces the one-key rule. */

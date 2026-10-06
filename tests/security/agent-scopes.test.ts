@@ -27,18 +27,17 @@ describe('Scope enforcement', () => {
 
   it('does not limit a human session', () => {
     expect(authorize(null, 'delete')).toBe(true);
-    expect(authorize(null, 'admin')).toBe(true);
   });
 
   it('refuses every destructive call for a read-only agent token', () => {
     const readOnly = ['read', 'files'];
-    for (const scope of ['write', 'delete', 'admin'] as OctoScope[]) {
+    for (const scope of ['write', 'delete'] as OctoScope[]) {
       expect(authorize(readOnly, scope)).toBe(false);
     }
   });
 
   it('an empty scope list grants nothing', () => {
-    for (const scope of ['read', 'write', 'delete', 'files', 'admin'] as OctoScope[]) {
+    for (const scope of ['read', 'write', 'delete', 'files'] as OctoScope[]) {
       expect(authorize([], scope)).toBe(false);
     }
   });
@@ -62,7 +61,7 @@ describe('Indirect prompt injection cannot escalate authority', () => {
 
     // The forbidden actions are refused server-side.
     expect(authorize(tokenScopes, 'delete')).toBe(false);
-    expect(authorize(tokenScopes, 'admin')).toBe(false);
+    expect(authorize(tokenScopes, 'write')).toBe(false);
 
     // And the document is only data: nothing in it grants a scope.
     expect(retrievedDocument).toContain('IGNORE PREVIOUS INSTRUCTIONS');

@@ -9,6 +9,7 @@
 
 import { expect, test, APIRequestContext } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
+import { CONFIRM_SECRET, setConfirmSecret } from './confirm-secret';
 
 interface GuestSession {
   principal: { id: string; isGuest: boolean };
@@ -44,10 +45,11 @@ test.describe('Agent token minting authority', () => {
     request,
   }) => {
     const owner = await createGuest(request);
+    await setConfirmSecret(request, owner.sessionToken);
 
     const otherResponse = await request.post('/api/workspaces', {
       headers: bearer(owner.sessionToken),
-      data: { name: `Key Mint Other ${randomUUID()}` },
+      data: { name: `Key Mint Other ${randomUUID()}`, confirmSecret: CONFIRM_SECRET },
     });
     expect(otherResponse.status()).toBe(201);
     const otherWorkspace = (await otherResponse.json()).workspace as { id: string };
@@ -57,6 +59,7 @@ test.describe('Agent token minting authority', () => {
       name: `read-only ${randomUUID()}`,
       workspaceId: owner.workspace.id,
       scopes: ['read', 'files'],
+      confirmSecret: CONFIRM_SECRET,
     });
     expect(readOnly.status).toBe(201);
     const readOnlyAttempt = await mintKey(request, readOnly.rawSecret!, {
@@ -70,6 +73,7 @@ test.describe('Agent token minting authority', () => {
       name: `writer ${randomUUID()}`,
       workspaceId: owner.workspace.id,
       scopes: ['read', 'write', 'files'],
+      confirmSecret: CONFIRM_SECRET,
     });
     expect(writer.status).toBe(201);
 
@@ -93,13 +97,14 @@ test.describe('Agent token minting authority', () => {
     });
     expect(scopeWidening.status).toBe(403);
 
-    // Narrowing within its own workspace is allowed.
+    // An API-key caller can never mint, whatever its scopes: the human stamp is
+    // required, so even narrowing within its own workspace is refused.
     const narrowed = await mintKey(request, writer.rawSecret!, {
       name: `narrowed ${randomUUID()}`,
       workspaceId: owner.workspace.id,
       scopes: ['read', 'files'],
     });
-    expect(narrowed.status).toBe(201);
+    expect(narrowed.status).toBe(403);
 
     // No account-wide key was ever created for this principal.
     const keysResponse = await request.get('/api/keys', { headers: bearer(owner.sessionToken) });

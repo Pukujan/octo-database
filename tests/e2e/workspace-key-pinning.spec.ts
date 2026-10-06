@@ -12,6 +12,7 @@
  */
 
 import { expect, test } from '@playwright/test';
+import { exemptFromDailyLimit } from './workspace-quota';
 
 test.describe('Workspace-scoped key pinning', () => {
   test('a key bound to one workspace is refused on another across shares, jobs, and RAG', async ({
@@ -21,18 +22,29 @@ test.describe('Workspace-scoped key pinning', () => {
     await page.click('text=Continue as Guest');
     await expect(page.locator('text=Workspace Control Dashboard')).toBeVisible();
 
+    // Pinning is orthogonal to the daily creation limit, which would refuse the
+    // second workspace; exempt this fixture so both are created in one run.
+    await exemptFromDailyLimit(page);
+
     const result = await page.evaluate(async () => {
       const token = localStorage.getItem('octo_token');
       const sessionHeaders = {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       };
+      // Creating a workspace and minting a key both require the human stamp.
+      await fetch('/api/me/confirm-secret', {
+        method: 'POST',
+        headers: sessionHeaders,
+        body: JSON.stringify({ secret: 'e2e-confirm-secret' }),
+      });
+
       const createWorkspace = async (name: string) =>
         (await (
           await fetch('/api/workspaces', {
             method: 'POST',
             headers: sessionHeaders,
-            body: JSON.stringify({ name }),
+            body: JSON.stringify({ name, confirmSecret: 'e2e-confirm-secret' }),
           })
         ).json()) as { workspace: { id: string } };
 
@@ -47,7 +59,8 @@ test.describe('Workspace-scoped key pinning', () => {
           body: JSON.stringify({
             name: 'pinning key',
             workspaceId: a.workspace.id,
-            scopes: ['read', 'write', 'files'],
+            scopes: ['read', 'write', 'files', 'delete'],
+            confirmSecret: 'e2e-confirm-secret',
           }),
         })
       ).json()) as { rawSecret: string };
