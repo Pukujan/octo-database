@@ -1,0 +1,169 @@
+{
+  "engine": "PostgreSQL + pgvector scaling in a multi-tenant (one workspace per project) deployment",
+  "headline": "At Octo's current single-digit-workspace, megabyte scale the correct move is to change nothing structural: the single node is two-to-three orders of magnitude from its limits, and the first real work is verifying the deployed pgvector version and filtered-search recall and keeping RLS queries index-driven — not adding pooling, replicas, partitioning, or a separate vector store.",
+  "scaling_ladder": [
+    {
+      "stage": "0 — Single node, single DB, shared schema + RLS (today: <10 workspaces, MBs of data, app pool 10 + service pool 6 = 16 connections)",
+      "trigger": "You are here. No capacity trigger has fired; max_connections defaults to 100 and Octo uses 16.",
+      "action": "Verify the deployed extension: SELECT extversion FROM pg_extension WHERE extname='vector' — iterative scans (the fix for filtered HNSW returning too few rows) require >= 0.8.0, and the pgvector/pgvector:pg16 image tracks latest so it is probably fine, but check. Confirm the tenant indexes that keep the RLS helpers and list queries index-driven: a unique index on workspace_memberships(principal_id, workspace_id) and (workspace_id, created_at DESC) on activity/jobs/ops_events. Enable pg_stat_statements. Confirm pg_dump/restic backups AND actually perform a test restore. Raise maintenance_work_mem before any HNSW (re)build. This is the honest answer: do nothing structural yet.",
+      "tradeoff": "Near-zero cost and ops. The only real work is verification and a restore drill."
+    },
+    {
+      "stage": "1 — Vertical scale-up of the same VM",
+      "trigger": "Working set approaching RAM, sustained CPU pressure, or autovacuum falling behind; still well under ~50-100 GB and a few hundred connections.",
+      "action": "Resize the VM. Set shared_buffers ~25% of RAM, effective_cache_size ~50-75% of RAM, and tune work_mem per workload. Stay on one Postgres.",
+      "tradeoff": "Short downtime to resize; still a single point of failure (already true today). Cheapest capacity per dollar; a small cloud VM bump is tens of $/month."
+    },
+    {
+      "stage": "2 — Streaming read replica / warm standby",
+      "trigger": "Read-heavy analytics/BI or many concurrent read clients competing with writes, or you want failover (HA).",
+      "action": "Add a physical streaming replica on a second host; route analytics/BI reads there, keep writes on the primary.",
+      "tradeoff": "Async replication lag; replicas do NOT add write throughput; another node to run, back up and fail over to. On a single VM this requires a second host."
+    },
+    {
+      "stage": "3 — Connection pooling (PgBouncer, transaction mode)",
+      "trigger": "Active backends approaching max_connections (default 100) or server memory pressure from per-connection overhead. NOT Octo's current 16 connections — pooling is premature today.",
+      "action": "Put PgBouncer in transaction mode in front of Postgres and cap the server-side pool. If you ever adopt named prepared statements, require PgBouncer >= 1.21 with max_prepared_statements. Octo's current node-postgres calls are unnamed parameterized queries and its set_config(..., is_local=true) runs inside an explicit BEGIN/COMMIT, which is transaction-mode safe — verify before switching. pgpool-II is a heavier alternative that also does replication/failover; unnecessary unless you want those extra features.",
+      "tradeoff": "An extra service to operate; transaction mode breaks session-scoped features (LISTEN/NOTIFY, session-level advisory locks held across statements, SET without LOCAL)."
+    },
+    {
+      "stage": "4 — Partition the large tenant tables",
+      "trigger": "A single table > ~50-100 GB; autovacuum cannot keep up; or one workspace's vector recall degrades because a global HNSW index must post-filter workspace_id.",
+      "action": "Declarative LIST partition by workspace_id (pgvector's own multitenancy guidance favors list partitioning or separate tables for filter columns with many distinct values) or HASH partition for even spread; partition time-series (activity, jobs, ops_events) by month. Each partition gets its own HNSW index. Caveat: iterative scans do not work across a partitioned parent in 0.8.x — verify on your version and ensure partition pruning. A cheaper intermediate rung before full partitioning is a per-workspace partial HNSW index on the shared table.",
+      "tradeoff": "Migration effort, many more relations, planner complexity, per-partition autovacuum tuning; only pays at large row counts and is overkill today."
+    },
+    {
+      "stage": "5 — Vector memory management (quantization)",
+      "trigger": "The embeddings table / HNSW index working set exceeds RAM; index build or vacuum becomes slow.",
+      "action": "Index halfvec(1536) (~3 KB/vector vs ~6 KB for full vector(1536)) or binary_quantize + rerank with full vectors; raise hnsw.ef_search (default 40) or enable iterative scan for filtered queries; REINDEX CONCURRENTLY then VACUUM (HNSW vacuum can be slow).",
+      "tradeoff": "Recall tuning; expression indexes complicate writes; only needed once the index no longer fits memory."
+    },
+    {
+      "stage": "6 — Dedicated vector store (Qdrant / Weaviate / Milvus / Pinecone)",
+      "trigger": "Compositional, not a row count: tens of millions of vectors AND p95 latency that tuning cannot meet, high QPS, or aggressive metadata-filtered search; or vector load harming relational performance.",
+      "action": "Add Qdrant (self-hosted, Rust, one small service) with Postgres staying the source of truth; Octo mediates access. Weaviate/Milvus for larger or more complex needs; Pinecone if fully managed is required.",
+      "tradeoff": "A second always-on service, plus a sync/consistency and dual-backup problem. pgvector remains correct through low millions of vectors and well beyond with partitioning + quantization, so this is far off."
+    },
+    {
+      "stage": "7 — Horizontal sharding / instance-per-tenant",
+      "trigger": "Write throughput or data volume exceeds a single node's vertical ceiling (hundreds of GB to TB, sustained write saturation), or a hard per-tenant isolation/compliance requirement.",
+      "action": "Either Citus (row- or schema-based sharding; note pgvector on distributed tables has real limitations and needs care) or database-per-tenant on separate instances (cleaner fit for Octo's workspace model).",
+      "tradeoff": "Large architectural change and distributed ops; the project's anti-overengineering rule likely defers this indefinitely."
+    }
+  ],
+  "multitenancy": "Octo today is shared-table + RLS row isolation (one database, one octo schema, workspace_id on every tenant table, a RESTRICTIVE tenant_scope_fence plus permissive membership policies). That is the right choice and should stay. The isolation ladder, cheapest to strongest: (1) Shared table + RLS row isolation — one migration path, one connection pool, one backup; risks are noisy neighbors, per-row RLS helper cost, and a global vector index. (2) Schema-per-tenant — the classic trap middle ground: migrations must run per schema, pg_catalog and relation counts bloat, search_path management is fragile, and you get little isolation benefit over RLS while still sharing one instance. Avoid. (3) Database-per-tenant — genuinely cleaner isolation, per-tenant backup/restore and PITR, independent extensions/upgrades; costs more connections, per-database migrations, and provisioning glue; sensible only for a handful of high-value workspaces that need independent restore/retention or have outgrown noisy-neighbor tolerance. (4) Instance-per-tenant — strongest isolation, highest cost and ops; only for compliance or a tenant that saturates a box. The underrated scaling cost of the current model is RLS: every permissive SELECT policy calls octo.is_workspace_member(workspace_id), a STABLE SECURITY DEFINER function doing an EXISTS against workspace_memberships per candidate row. Queries that are workspace-scoped and index-backed (which most of src/server/db.ts already is, via explicit WHERE workspace_id = $1 plus indexes) evaluate the policy on few rows and are fine; broad scans or analytics without a selective workspace predicate pay the helper per row. Keep every tenant query workspace-scoped and indexed, keep workspace_memberships(principal_id, workspace_id) uniquely indexed, and spot-check plans with EXPLAIN ANALYZE. For vectors, a global HNSW index with a workspace_id WHERE clause is filtered HNSW: the index is scanned first and the filter applied after, so recall drops as the number of workspaces (and thus filter selectivity) grows. The recall fix is iterative index scans (pgvector >= 0.8.0), not partitioning; partitioning is physical separation and index-size/vacuum management. A per-workspace partial HNSW index is the cheap intermediate step; LIST partitioning by workspace_id is the later step.",
+  "octo_recommendation": "Do nothing structural now. Concrete near-term actions, all cheap and days not weeks: (1) Check the deployed pgvector version (`SELECT extversion`) and, if below 0.8.0, plan the upgrade so filtered vector search can use iterative scans. (2) Add the tenant indexes that keep RLS and list queries index-driven: unique (principal_id, workspace_id) on workspace_memberships, and (workspace_id, created_at DESC) on activity/jobs/ops_events. (3) Enable pg_stat_statements and read slow queries before adding anything. (4) Confirm backups/PITR and actually restore once. (5) Leave the single VM, single database, shared-schema + RLS design as-is; the app pool of 10 + service pool of 6 = 16 connections is nowhere near max_connections=100, so PgBouncer, read replicas, partitioning, and a dedicated vector store are all premature. First triggers to watch, in order: (a) vector recall degrades / filtered HNSW returns too few rows as workspace count grows → enable iterative scan, then per-workspace partial HNSW indexes, then LIST partitioning; (b) DB size > ~50-100 GB or working set > RAM → vertical resize, then replica/partition; (c) active connections approaching max_connections or pool connection-timeout errors → PgBouncer in transaction mode; (d) autovacuum lag or bloat on high-churn tables (jobs, activity, ops_events, embeddings) → per-table autovacuum tuning, then partition; (e) a specific workspace needs independent restore/retention or starts harming neighbors → database-per-tenant on a separate instance. Managed platforms (RDS/Aurora, Cloud SQL/AlloyDB, Neon, Supabase, Crunchy Bridge) are an option only if operating Postgres itself becomes the pain; Octo already runs Docker Compose on one VM and there is no capacity reason to move yet.",
+  "sources": [
+    "https://github.com/pgvector/pgvector (README: HNSW m=16/ef_construction=64/ef_search=40, IVFFlat lists rows/1000 or sqrt(rows)/probes=1, vector 4*dim+8 vs halfvec 2*dim+8 bytes, iterative scans from 0.8.0, hnsw.max_scan_tuples=20000, filtered-search post-filtering and multitenancy list-partitioning guidance)",
+    "https://pgxn.org/dist/vector/0.8.0/ (iterative index scan release note)",
+    "https://deepwiki.com/pgvector/pgvector/6.2-iterative-scanning and /6.3-filtering-strategies (filtered HNSW returns too few rows with default ef_search)",
+    "https://rajivonai.com/blog/2026-04-27-pgvector-filtered-search-too-few-results/ (filtered HNSW recall failure mode)",
+    "https://rajivonai.com/blog/2026-06-16-pgvector-partitioning-multi-tenant-rag/ (tenant-scoped pgvector: partial indexes, list/hash partitioning)",
+    "https://www.crunchydata.com/blog/hnsw-indexes-with-postgres-and-pgvector (HNSW memory/build characteristics)",
+    "https://dev.to/philip_mcclarence_2ef9475/scaling-pgvector-memory-quantization-and-index-build-strategies-8m2 (10M 1536-dim HNSW ~80-120 GB)",
+    "https://aws.amazon.com/blogs/database/scale-pgvector-with-binary-quantization-on-amazon-aurora-postgresql/ (~400 bytes/vector at 768-dim, ~680 bytes/vector at 1536-dim for binary quantization)",
+    "https://www.postgresql.org/docs/current/runtime-config-resource.html (max_connections, shared_buffers, work_mem)",
+    "https://planetscale.com/blog/scaling-postgres-connections-with-pgbouncer (connection-limit hierarchy)",
+    "https://www.postgresql.org/about/news/pgbouncer-1210-released-now-with-prepared-statements-2735/ (PgBouncer 1.21 prepared statements in transaction mode)",
+    "https://docs.crunchybridge.com/concepts/connection-pooling (managed pooling behavior)",
+    "https://www.crunchydata.com/blog/designing-your-postgres-database-for-multi-tenancy and https://aws.amazon.com/blogs/database/multi-tenant-data-isolation-with-postgresql-row-level-security/ (isolation models)",
+    "https://openproceedings.org/2026/conf/edbt/paper-172.pdf (benchmarking multi-tenant Postgres architectures)",
+    "https://docs.citusdata.com/en/stable/use_cases/multi_tenant.html and https://www.citusdata.com/blog/2023/07/18/citus-12-schema-based-sharding-for-postgres/ (Citus row/schema sharding)",
+    "https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/CHaP_Limits.html and https://aws.amazon.com/about-aws/whats-new/2025/07/amazon-aurora-postgresql-database-clusters-256-tib-storage-volume/ (Aurora 256 TiB max, 32 TiB table)",
+    "https://aws.amazon.com/rds/aurora/pricing/ and https://www.vantage.sh/blog/aws-rds-vs-aurora-pricing-in-depth (db.r7g.large ~$0.24-0.28/hr)",
+    "https://c3x.dev/blog/aws-aurora-serverless-v2-cost/ ($0.12/ACU-hr, 0.5 ACU floor ~$44/mo)",
+    "https://cloud.google.com/sql/pricing and https://www.usage.ai/blogs/gcp/cloud-sql/pricing/ (Cloud SQL ~$0.0413/vCPU-hr + $0.007/GiB-hr)",
+    "https://neon.com/guides/neon-vs-supabase and https://www.jetadmin.io/blog/neon-vs-supabase/ (Neon storage $0.35/GB-mo, scale-to-zero)",
+    "https://supabase.com/pricing and https://www.jetadmin.io/blog/supabase-pricing-2026-guide-to-plans-limits-and-real-world-costs/ (Pro $25/mo + compute add-ons; $10 credit covers micro)",
+    "https://www.crunchydata.com/pricing (Crunchy Bridge from $10/mo)",
+    "https://www.velodb.io/glossary/ways-to-scale-postgresql (vertical scaling handles most workloads under ~500 GB / <200 connections)",
+    "https://www.postgresql.org/about/news/pgvector-087-released-3392/ (pgvector 0.8.7 IVFFlat CVE-2026-103484)"
+  ],
+  "uncertainty": "The exact pgvector version bundled in the deployed pgvector/pgvector:pg16 image is not verifiable from the repo (the tag tracks latest); run SELECT extversion, and if < 0.8.0 the iterative-scan recall fix is unavailable until upgraded. Costs are list prices for us-east-1 / us-central1 around mid-2026 and vary by region, commitment, and reserved-instance discounts — treat them as order-of-magnitude, not quotes. pgvector-vs-Qdrant benchmark claims (e.g. '10M vectors is the migration point') are largely third-party or vendor content, not controlled benchmarks; the real trigger is compositional (vector count AND latency AND filtering AND QPS), not a row count. The RLS per-row helper cost is reasoned from the policy definitions in the migrations, not measured on Octo's data; EXPLAIN ANALYZE on a large tenant should confirm it before optimizing. Growth rate and whether any workspace will ever need independent restore/retention are product decisions, so the triggers above are heuristics to watch rather than thresholds Octo has crossed. Partitioning's benefit at Octo's scale is unproven and deliberately deferred.",
+  "options": [
+    {
+      "name": "Single node PostgreSQL 16 + pgvector (status quo)",
+      "kind": "self-hosted",
+      "when": "Now, through tens of GB and low millions of vectors",
+      "cost": "Incremental $0 (existing VM); Docker Compose already in place."
+    },
+    {
+      "name": "Vertical VM resize",
+      "kind": "self-hosted",
+      "when": "Working set nearing RAM or sustained CPU pressure",
+      "cost": "Tens of $/month for the next size on a small cloud VM; needs a restart."
+    },
+    {
+      "name": "Streaming read replica / warm standby",
+      "kind": "self-hosted",
+      "when": "Read offload (analytics/BI) or HA failover",
+      "cost": "One extra instance comparable to the primary, plus ops."
+    },
+    {
+      "name": "PgBouncer",
+      "kind": "OSS",
+      "when": "Connections approaching max_connections; not Octo's current 16",
+      "cost": "Free software; a small container."
+    },
+    {
+      "name": "pgpool-II",
+      "kind": "OSS",
+      "when": "You also want replication/failover middleware",
+      "cost": "Free; heavier configuration."
+    },
+    {
+      "name": "Table partitioning by workspace_id / time",
+      "kind": "self-hosted (Postgres built-in)",
+      "when": "Tables > ~50-100 GB or autovacuum pain; not now",
+      "cost": "Free; migration and per-partition ops effort."
+    },
+    {
+      "name": "halfvec / binary quantization",
+      "kind": "self-hosted (pgvector)",
+      "when": "Vector index working set no longer fits RAM",
+      "cost": "Free; recall tuning and expression-index write cost."
+    },
+    {
+      "name": "Qdrant",
+      "kind": "OSS self-hosted or managed",
+      "when": "Tens of millions of vectors with latency/filtering pressure",
+      "cost": "Self-host: one small VM; Qdrant Cloud from roughly tens of $/month."
+    },
+    {
+      "name": "Citus",
+      "kind": "OSS / managed (Azure Cosmos DB for PostgreSQL)",
+      "when": "Single-node vertical ceiling reached",
+      "cost": "OSS free but real distributed ops; managed is premium."
+    },
+    {
+      "name": "Amazon RDS for PostgreSQL / Aurora",
+      "kind": "managed",
+      "when": "You want to stop operating Postgres, backups, and failover",
+      "cost": "RDS db.r7g.large ~$0.24-0.28/hr (~$175-205/mo) + gp3 ~$0.10/GB-mo; Aurora Serverless v2 $0.12/ACU-hr (0.5 ACU floor ~$44/mo idle) + $0.10/GB-mo + I/O $0.20/M."
+    },
+    {
+      "name": "Google Cloud SQL / AlloyDB",
+      "kind": "managed",
+      "when": "GCP shop wanting managed Postgres",
+      "cost": "Cloud SQL Enterprise ~$0.0413/vCPU-hr + $0.007/GiB-hr (2 vCPU/8 GB ~$110/mo); AlloyDB regional primary materially more."
+    },
+    {
+      "name": "Neon",
+      "kind": "managed",
+      "when": "Bursty/scale-to-zero workloads and branching",
+      "cost": "Compute ~$0.106-0.16/CU-hr, storage $0.35/GB-mo; near-zero when idle."
+    },
+    {
+      "name": "Supabase",
+      "kind": "managed",
+      "when": "You also want auth/storage/realtime in one platform",
+      "cost": "Pro $25/mo + compute add-ons; the $10 credit covers a micro (2-core/1 GB)."
+    },
+    {
+      "name": "Crunchy Bridge",
+      "kind": "managed",
+      "when": "Managed Postgres with strong support and pooling",
+      "cost": "From $10/mo; exact price via their calculator."
+    }
+  ]
+}

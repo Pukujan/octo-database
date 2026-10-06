@@ -1,0 +1,115 @@
+{
+  "engine": "Cross-cutting multi-tenant architecture and managed-engine economics",
+  "headline": "Stay on the shared Postgres + workspace_id + RLS model and build nothing: at single-digit workspaces it is already the correct tier, and the only work to do now is preserve the escape hatches (per-transaction workspace context, workspace_id-first indexes, no cross-workspace joins) so one workspace can later be moved to its own instance without a rewrite.",
+  "scaling_ladder": [
+    {
+      "stage": "Rung 0 — Shared table + workspace_id + RESTRICTIVE RLS, one Postgres instance (today)",
+      "trigger": "None. This is the current state and it is correct at single-digit workspaces and MB–GB of data.",
+      "action": "Do nothing architecturally. Enforce three cheap rules: workspace_id on every tenant row; no cross-workspace foreign keys or joins; workspace_id is the leading column of every composite index so the RLS predicate stays index-shaped instead of forcing seq scans.",
+      "tradeoff": "No per-tenant CPU/RAM/IO isolation — one workspace can still slow the rest. That is acceptable and invisible at this scale; the alternative costs far more than the risk it removes."
+    },
+    {
+      "stage": "Rung 1 — Harden the shared instance (per-transaction tenant context, timeouts, LIST partitioning)",
+      "trigger": "One workspace's queries, locks, or connections visibly degrade others; a tenant table passes roughly 50–100M rows; or the pgvector HNSW index stops fitting RAM (pgvector emits a notice like 'hnsw graph no longer fits into maintenance_work_mem').",
+      "action": "Set per-tier statement_timeout and idle_in_transaction_session_timeout from the application; pass workspace context with SET LOCAL inside each transaction (never a session-level SET) so it survives any future transaction-mode pooler; PARTITION BY LIST(workspace_id) the hot tables; switch vectors to halfvec or quantization to shrink the working set. Still one connection string and one instance.",
+      "tradeoff": "Configuration plus one partitioning migration, not new architecture. Partitioning adds planning and migration complexity and is still a shared host, so it buys isolation of index/scan behaviour, not of CPU/RAM."
+    },
+    {
+      "stage": "Rung 2 — Move ONE workspace to a dedicated database on a DIFFERENT instance/host",
+      "trigger": "A workspace exceeds ~50–100 GB, or its vector index dominates RAM, or it needs data residency / independent restore / a compliance boundary, or it needs more resources than the whole box.",
+      "action": "Stand up a dedicated Postgres (a second self-hosted VM, or a managed Neon/Supabase project) and migrate just that workspace using logical replication with a publication row filter — native since PG15, and Octo is on PG16 — for near-zero-downtime cutover. Octo keeps routing through its control plane; clients never see the change.",
+      "tradeoff": "A dedicated database on the SAME VM is NOT isolation — CPU, RAM, and disk I/O remain contended and Postgres has no native per-tenant quotas. The move must go to a separate instance. Cost is a per-project floor ($0–25/mo managed, provider-dependent) plus one more thing to patch and back up; justified only by one specific tenant."
+    },
+    {
+      "stage": "Rung 3 — Fleet: project/instance-per-tenant for many workspaces",
+      "trigger": "Many workspaces each need isolation, residency, or independent restore, not just one.",
+      "action": "Automate provisioning through the provider API (Neon projects, Supabase projects) or additional self-hosted boxes; Octo provisions, routes, and (optionally) hands out short-lived native-console credentials per workspace.",
+      "tradeoff": "Ops and cost scale linearly with tenants: fleet upgrades, patching, backups, connection routing. Neon's own guide recommends project-per-tenant over schema-per-tenant at this point and documents operators running hundreds of thousands of projects with a small team."
+    }
+  ],
+  "multitenancy": "The isolation spectrum runs: shared table + tenant column + RLS (current) → schema-per-tenant → database-per-tenant → instance-per-tenant. Isolation and cost both rise left-to-right; RLS is cheapest and scales furthest before it hurts. RLS breaks first on two axes: (1) noisy neighbours — Postgres has no native per-tenant CPU/memory quotas, so a heavy workspace contends with the rest (Neon's noisy-neighbor post names CPU, memory, disk I/O, connections, and locks as the five contention points, and notes even a well-behaved tenant spikes at peak); (2) a single huge tenant — a table or vector index that dominates the instance degrades everyone. Schema-per-tenant adds logical separation but NO resource isolation — tenants still share the same CPU/RAM/IO — so it is a poor middle rung; Neon explicitly advises against it for SaaS. Database-per-tenant on one host also fails to isolate resources; only a different instance/host does. Instance-per-tenant fully isolates but reintroduces a per-tenant baseline cost and a fleet to operate, which is why many teams drift back to shared infrastructure. Mature SaaS platforms almost universally run a hybrid/tiered model (AWS whitepaper's pool / silo / bridge): pool small or free tenants on shared infrastructure, and silo large, regulated, or noisy tenants onto dedicated databases/instances. Per-tenant resource limits in a shared Postgres are limited to statement_timeout, idle_in_transaction_session_timeout, and (once per-workspace DB identities exist) a pooler's per-database/per-user caps — PgBouncer's max_db_connections, max_user_connections, and per-database pool_size. Today Octo is a single application user, so the honest near-term tools are statement_timeout plus pg_stat_activity observation; pgbouncer per-tenant caps only become real when workspaces get their own DB roles. Two mechanics decide whether the current RLS fence survives a pooler: it resolves the tenant through session state (Supabase-style auth.uid()/GUC), and PgBouncer transaction mode discards session state between transactions, so context must be passed per-transaction (SET LOCAL) and prepared statements disabled if a transaction-mode pooler ever enters the path. Supabase's own docs: 'Session-level state is lost between transactions... This covers set and reset' and 'Transaction mode does not support prepared statements.'",
+  "octo_recommendation": "Commit to rung 0 — shared Postgres, workspace_id on every row, RESTRICTIVE RLS — as Octo's isolation tier, and build no schema-per-tenant or database-per-tenant machinery now. The honest answer is that there is nothing to build. Do these decide-now items so a later per-tenant move is mechanical rather than a rewrite: (1) keep workspace_id on every tenant row and forbid cross-workspace FKs/joins — this is the entire lock-in decision; (2) keep workspace_id first in composite indexes so RLS stays cheap; (3) pass the workspace context per-transaction with SET LOCAL, not session SET, and keep prepared statements off if a transaction-mode pooler is ever introduced; (4) mark the RLS helper functions STABLE so the planner can inline them; (5) accept that per-workspace restore today is 'restore whole DB, filter by workspace_id' — fine at this scale, and it is what makes later extraction low-stakes. Keep the control-plane posture — Octo mediates every engine and clients/agents get Octo API keys, never raw DB credentials — because that IS the product boundary, not extra security. The one concession worth allowing later is short-lived, workspace-scoped, read-only credentials for a native console (pgAdmin/Studio/DuckDB UI) when deep work genuinely needs it; do not build that now. Set explicit isolation triggers and otherwise do nothing: move a workspace to a dedicated instance only when it exceeds ~50–100 GB, when its vector index dominates RAM, when it needs residency/independent restore/compliance, or when it needs more than the whole box — and move it to a DIFFERENT instance via row-filtered logical replication, not to a second database on the same VM. For the other engines: embed DuckDB in the API process over Parquet on R2 now (single writer is fine; do not stand up a DuckDB server); add Neo4j only when a workspace has a real graph query; keep pgvector shared until the index exceeds RAM, then halfvec/quantization before a dedicated instance. The bill at current scale stays roughly a $20–40/mo VM plus R2 (~$0.015/GB-mo, free egress). Isolation only pays when a single tenant is worth the per-project floor, which is why it is a trigger, not a default.",
+  "options": [
+    {
+      "name": "Shared Postgres 16 + pgvector + RLS (current)",
+      "kind": "self-hosted",
+      "when": "Now, through single-digit to low-dozens of workspaces and GBs of data",
+      "cost": "≈$20–40/mo for the VM; effectively $0 marginal per workspace"
+    },
+    {
+      "name": "PgBouncer / Supavisor connection pooler",
+      "kind": "OSS",
+      "when": "When raw connection count approaches Postgres max_connections (default 100). Later: Octo is one app user today. Transaction mode discards session state, so context must be per-transaction.",
+      "cost": "$0; per-database/per-user caps exist (max_db_connections, max_user_connections) but need per-workspace DB identities to matter"
+    },
+    {
+      "name": "Postgres LIST partitioning by workspace_id",
+      "kind": "OSS",
+      "when": "One workspace's rows/vectors dominate a table and hurt others — the step before a dedicated instance",
+      "cost": "$0; one migration plus added planning/migration complexity"
+    },
+    {
+      "name": "Neon project-per-tenant",
+      "kind": "managed",
+      "when": "A single workspace needs its own instance; strongest scale-to-zero economics",
+      "cost": "$0 while idle (scale-to-zero); $0.106/CU-hour Launch, $0.222 Scale; storage $0.35/GB-mo; 100 projects Free/Launch, 1,000 Scale"
+    },
+    {
+      "name": "Supabase project-per-tenant",
+      "kind": "managed",
+      "when": "Same trigger, when Studio/Postgres tooling is wanted",
+      "cost": "$25/mo Pro org plus per-project compute $10 (Micro) to $3,730 (16XL)/mo; storage $0.125/GB-mo; Pro projects do NOT pause when idle"
+    },
+    {
+      "name": "Second self-hosted Postgres instance",
+      "kind": "self-hosted",
+      "when": "Same trigger, but keeping it on your own metal",
+      "cost": "Another VM plus your ops time; no per-project fee"
+    },
+    {
+      "name": "DuckDB embedded in the API process (over Parquet on R2)",
+      "kind": "OSS",
+      "when": "Now, for analytics; single-writer process is fine at this scale",
+      "cost": "$0; one writer process per DB file, multi-process only via beta Quack (~mature v2.0, fall 2026) or DuckLake with a Postgres catalog"
+    },
+    {
+      "name": "MotherDuck (managed DuckDB)",
+      "kind": "managed",
+      "when": "Only if concurrent multi-user analytics outgrows embedded DuckDB",
+      "cost": "Step function: Lite $0 (10 CU-hrs/mo, max 3 active users); Business $250/org/mo + usage; Pulse $0.60/CU-hour"
+    },
+    {
+      "name": "Neo4j AuraDB",
+      "kind": "managed",
+      "when": "Only when a workspace has a real graph query — do nothing now",
+      "cost": "AuraDB Professional from ≈$65/mo (1 GB minimum at $0.09/GB-hour provisioned); Business Critical from $0.20/GB-hour"
+    },
+    {
+      "name": "Cloudflare R2 object storage",
+      "kind": "managed",
+      "when": "Now, for Parquet and objects",
+      "cost": "$0.015/GB-mo Standard, free egress, $0.36/million Class B operations"
+    }
+  ],
+  "sources": [
+    "pgvector README (HNSW memory, index sizes, tenant isolation via list partitioning/separate tables): https://github.com/pgvector/pgvector",
+    "PgBouncer features (transaction mode breaks SET/RESET and session state): https://www.pgbouncer.org/features.html",
+    "PgBouncer config (max_db_connections, max_user_connections, per-db pool_size): https://www.pgbouncer.org/config.html",
+    "Supabase connection pooling (transaction mode loses session state; prepared statements unsupported): https://supabase.com/docs/guides/database/connecting-to-postgres",
+    "Supabase pricing (per-org plans, per-project compute $10–$3,730, storage $0.125/GB): https://supabase.com/pricing",
+    "Neon pricing (CU-hour, storage $0.35/GB-mo, scale-to-zero, project counts): https://neon.com/pricing",
+    "Neon multitenancy guide (recommends project-per-tenant over schema-per-tenant): https://neon.com/docs/guides/multitenancy",
+    "Neon noisy-neighbor blog (contention points; per-tier connection/timeout caps): https://neon.com/blog/noisy-neighbor-multitenant",
+    "AWS SaaS Tenant Isolation Strategies (pool / silo / bridge models): https://docs.aws.amazon.com/whitepapers/latest/saas-tenant-isolation-strategies/saas-tenant-isolation-strategies.html",
+    "PostgreSQL runtime config — connections (max_connections default 100): https://www.postgresql.org/docs/current/runtime-config-connection.html",
+    "PostgreSQL logical replication publication row filters (PG15+; move one tenant): https://www.postgresql.org/docs/current/logical-replication-publication.html",
+    "Moving a tenant across PostgreSQL instances: https://ananthakumaran.in/2026/04/22/moving-tenant-across-postgresql-instances.html",
+    "DuckDB concurrency (single writer process; Quack beta, DuckLake): https://duckdb.org/docs/current/connect/concurrency.html",
+    "Cloudflare R2 pricing ($0.015/GB-mo, free egress): https://developers.cloudflare.com/r2/pricing/",
+    "MotherDuck pricing (Lite $0, Business $250/org/mo): https://motherduck.com/pricing/",
+    "Neo4j AuraDB pricing (provisioned per GB-hour): https://neo4j.com/pricing/",
+    "PlanetScale — Tenancy (single vs multi-tenant tradeoffs): https://planetscale.com/learn/courses/database-scaling/scaling/tenancy",
+    "Postgres RLS performance measured (overhead is index-shaped): https://daily.dev/posts/row-level-security-performance-in-postgresql-measured-ymgclktel"
+  ],
+  "uncertainty": "Numbers to treat as estimates, not vendor guarantees. (1) pgvector publishes per-vector storage (4×dimensions+8 bytes for vector, 2×+8 for halfvec) but no index-size formula; HNSW adds graph overhead, so measure the real index with pg_relation_size before treating \"index exceeds RAM\" as a trigger. (2) RLS overhead is index-shaped and near-free for a simple equality policy with the right index, but Octo's fence calls SECURITY DEFINER helper functions; whether they inline (and thus whether scans stay indexed) depends on volatility marking — verify with EXPLAIN, and mark the helpers STABLE. (3) All managed prices are public list prices as of this research, change over time, and differ in idle behaviour (Neon scales to zero; Supabase Pro does not pause; MotherDuck's real entry is the $250/mo Business tier). (4) The scale triggers (~50–100 GB, 50–100M rows, index > RAM) are engineering rules of thumb, not published thresholds — tune against observed latency. (5) Whether the owner ever needs true physical per-tenant isolation for residency/compliance is a product decision not derivable from the repo; if it never arises, rungs 2–3 may never be needed. (6) I did not benchmark Octo's actual workload; all isolation advice is from primary documentation and vendor guidance, not measured on gravebuster."
+}
