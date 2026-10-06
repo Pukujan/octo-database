@@ -15,7 +15,7 @@
 import { expect, test, APIRequestContext, Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { generateSync } from 'otplib/functional';
-import { CONFIRM_SECRET, setConfirmSecret } from './confirm-secret';
+import { CONFIRM_SECRET, setConfirmSecret, typeConfirmCode } from './confirm-secret';
 
 interface GuestSession {
   principal: { id: string; isGuest: boolean };
@@ -214,7 +214,7 @@ test.describe('MFA step-up through the dashboard', () => {
       return (list as { slug: string }[])[0]!.slug;
     }));
     await page.getByRole('dialog').locator('input[name="mfaCode"]').fill(generateSync({ secret }));
-    await page.getByRole('dialog').getByLabel('Confirmation secret', { exact: true }).fill(CONFIRM_SECRET);
+    await typeConfirmCode(page, page.getByRole('dialog'));
     await page.getByRole('dialog').getByRole('button', { name: 'Delete workspace' }).click();
 
     await expect(page.getByRole('dialog').getByRole('heading', { name: /^Delete / })).toHaveCount(0);

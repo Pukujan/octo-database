@@ -24,6 +24,7 @@ import {
   restoreFile,
 } from '../../src/storage/archive-service';
 import { capabilitiesForScopes, OctoScope } from '../../src/api/capabilities';
+import { clearPublishedObject, publishSnapshot, publishedFileUrl } from '../../src/storage/publish-service';
 
 function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
@@ -218,6 +219,118 @@ describe('MR-D: key containment', () => {
       for (const capability of keyActions) {
         expect(creatorActions.has(capability.action)).toBe(true);
       }
+    }
+  });
+});
+
+describe('MR-E: publish copies and does not move', () => {
+  it('keeps the active hash and copies equal bytes for random payloads', async () => {
+    const rand = makeRandom(0x0e17);
+    for (let i = 0; i < 24; i++) {
+      const length = 1 + Math.floor(rand() * 4096);
+      const body = Buffer.alloc(length);
+      for (let b = 0; b < length; b++) body[b] = Math.floor(rand() * 256);
+      const active = new MemoryStore();
+      const published = new MemoryStore();
+      const storageKey = `workspaces/ws/file-${i}/object`;
+      const fileId = `10000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+      await active.put(storageKey, body);
+      const before = sha256(body);
+
+      const result = await publishSnapshot({
+        fileId,
+        mimeType: `application/x-rand-${Math.floor(rand() * 1000)}`,
+        archiveState: 'active_r2',
+        baseUrl: 'https://files.example.com',
+        activeBytes: await active.get(storageKey),
+        writePublic: async (key, bytes) => {
+          await published.put(key, bytes);
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(sha256((await active.get(storageKey))!)).toBe(before);
+      expect(sha256((await published.get(fileId))!)).toBe(before);
+      expect(await active.head(storageKey)).not.toBeNull();
+    }
+  });
+});
+
+describe('MR-F: public URL identity', () => {
+  it('ends on the file id, stays stable, and hides the workspace', () => {
+    const rand = makeRandom(0xf11e);
+    for (let i = 0; i < 30; i++) {
+      const workspaceId = `11111111-1111-4111-8111-${String(i).padStart(12, '0')}`;
+      const fileId = `22222222-2222-4222-8222-${String(1000 + i).padStart(12, '0')}`;
+      const base = `https://cdn${Math.floor(rand() * 1000)}.example.com/pub`;
+      const first = publishedFileUrl(base, fileId);
+      const second = publishedFileUrl(base, fileId);
+      expect(second).toBe(first);
+      expect(first.slice(first.lastIndexOf('/') + 1)).toBe(fileId);
+      expect(first).not.toContain('workspaces/');
+      expect(first).not.toContain(workspaceId);
+    }
+  });
+});
+
+describe('MR-G: unpublish removes only the public copy', () => {
+  it('restores the public absence without deleting the active object', async () => {
+    const rand = makeRandom(0x06);
+    for (let i = 0; i < 16; i++) {
+      const original = Buffer.from(`round-${i}-${Math.floor(rand() * 10000)}`);
+      const active = new MemoryStore();
+      const published = new MemoryStore();
+      const storageKey = `workspaces/ws/${i}`;
+      const fileId = `30000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+      await active.put(storageKey, original);
+      const before = sha256(original);
+
+      const steps = 1 + Math.floor(rand() * 5);
+      let publishedAt: string | null = null;
+      for (let s = 0; s < steps; s++) {
+        if (publishedAt === null || rand() < 0.6) {
+          const result = await publishSnapshot({
+            fileId,
+            mimeType: 'application/octet-stream',
+            archiveState: 'active_r2',
+            baseUrl: 'https://files.example.com',
+            activeBytes: await active.get(storageKey),
+            writePublic: async (key, bytes) => {
+              await published.put(key, bytes);
+            },
+          });
+          expect(result.ok).toBe(true);
+          publishedAt = '2026-10-06T00:00:00.000Z';
+        } else {
+          await clearPublishedObject({
+            publishedAt,
+            publicKey: fileId,
+            deletePublic: async (key) => {
+              await published.delete(key);
+            },
+          });
+          publishedAt = null;
+        }
+        expect(await active.head(storageKey)).not.toBeNull();
+      }
+
+      await clearPublishedObject({
+        publishedAt,
+        publicKey: publishedAt ? fileId : null,
+        deletePublic: async (key) => {
+          await published.delete(key);
+        },
+      });
+      await clearPublishedObject({
+        publishedAt: null,
+        publicKey: null,
+        deletePublic: async () => {
+          throw new Error('second unpublish touched storage');
+        },
+      });
+
+      expect(await published.get(fileId)).toBeNull();
+      expect(sha256((await active.get(storageKey))!)).toBe(before);
     }
   });
 });
