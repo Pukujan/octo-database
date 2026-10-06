@@ -7,6 +7,7 @@
 
 import { expect, test, Page } from '@playwright/test';
 import { auditPage } from './vision-audit';
+import { typeConfirmCode } from './confirm-secret';
 
 /**
  * Arms the confirmation gate from the Access view's inline mint form. Minting is
@@ -14,16 +15,7 @@ import { auditPage } from './vision-audit';
  * it re-renders and clears the form, so call this before filling the key name.
  */
 async function armConfirmSecret(page: Page): Promise<void> {
-  const secretField = page.locator('input[name="secret"]');
-  await secretField.waitFor({ state: 'visible' });
-  const newSecret = page.locator('input[name="newSecret"]');
-  if ((await newSecret.count()) > 0) {
-    await newSecret.fill('e2e-confirm-secret');
-    await page.click('button[data-action="set-secret"]');
-    // Setting the secret re-renders the form; wait for it to settle before typing.
-    await newSecret.waitFor({ state: 'detached' });
-  }
-  await secretField.fill('e2e-confirm-secret');
+  await typeConfirmCode(page);
 }
 
 test.describe('Octo Full-Stack Dashboard E2E & Vision QA', () => {

@@ -8,6 +8,7 @@ import {
   capabilitiesForScopes,
   hasScope,
   KEY_CLASSES,
+  minimumRoleForCapability,
   OCTO_CAPABILITIES,
   SCOPE_PRESETS,
 } from '../../src/api/capabilities';
@@ -56,6 +57,10 @@ describe('Capability discovery', () => {
     expect(byAction.get('workspaces.create')?.requiredScope).toBe('write');
     expect(byAction.get('workspaces.provision_database')?.requiredScope).toBe('write');
     expect(byAction.get('workspaces.query')?.requiredScope).toBe('read');
+    expect(byAction.get('files.publish')?.requiredScope).toBe('write');
+    expect(byAction.get('files.publish')?.method).toBe('POST');
+    expect(byAction.get('files.unpublish')?.requiredScope).toBe('write');
+    expect(byAction.get('files.unpublish')?.method).toBe('POST');
     expect(byAction.get('files.archive')?.requiredScope).toBe('delete');
     expect(byAction.get('files.restore')?.requiredScope).toBe('write');
     expect(byAction.get('activity.list')?.requiredScope).toBe('read');
@@ -63,6 +68,20 @@ describe('Capability discovery', () => {
     expect(byAction.get('ops.summary')?.requiredScope).toBe('read');
     expect(byAction.get('graph.query')?.requiredScope).toBe('read');
     expect(byAction.get('keys.revoke')?.requiredScope).toBe('delete');
+    expect(minimumRoleForCapability('files.publish')).toBe('operator');
+    expect(minimumRoleForCapability('files.unpublish')).toBe('operator');
+
+    const program = capabilitiesForScopes(['read', 'write', 'files']);
+    expect(program.some((c) => c.action === 'files.publish')).toBe(true);
+    expect(program.some((c) => c.action === 'files.unpublish')).toBe(true);
+    for (const scopes of [['read', 'files'], ['read']] as const) {
+      const caps = capabilitiesForScopes([...scopes]);
+      expect(caps.some((c) => c.action === 'files.publish')).toBe(false);
+      expect(caps.some((c) => c.action === 'files.unpublish')).toBe(false);
+    }
+    const withoutDelete = capabilitiesForScopes(['read', 'write', 'files']);
+    expect(withoutDelete.some((c) => c.action === 'files.publish')).toBe(true);
+    expect(withoutDelete.some((c) => c.requiredScope === 'delete')).toBe(false);
   });
 
   it('records the provisioned-database exception without disclosing a credential', () => {

@@ -14,7 +14,7 @@
 import { expect, test, APIRequestContext } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { queryService } from '../../src/server/db';
-import { CONFIRM_SECRET, setConfirmSecret } from './confirm-secret';
+import { CONFIRM_SECRET, setConfirmSecret, typeConfirmCode } from './confirm-secret';
 
 interface GuestSession {
   principal: { id: string; isGuest: boolean };
@@ -79,14 +79,8 @@ test.describe('Workspace creation daily limit', () => {
     // First creation succeeds through the UI.
     await page.click('button:has-text("New Workspace")');
     await expect(page.getByRole('dialog').getByText('New Workspace')).toBeVisible();
-    const setup = page.getByRole('dialog').getByLabel(/New confirmation secret/);
-    if (await setup.isVisible().catch(() => false)) {
-      await setup.fill('e2e-confirm-secret');
-      await page.getByRole('dialog').getByRole('button', { name: 'Set confirmation secret' }).click();
-      await expect(setup).toHaveCount(0);
-    }
     await page.getByRole('dialog').locator('input[name="name"]').fill(`UI First ${Date.now()}`);
-    await page.getByRole('dialog').getByLabel('Confirmation secret', { exact: true }).fill('e2e-confirm-secret');
+    await typeConfirmCode(page, page.getByRole('dialog'));
     await page.getByRole('dialog').getByRole('button', { name: 'Create Workspace' }).click();
     await expect(page.locator('section.one-time-notice').getByText('Workspace created')).toBeVisible();
     await page.locator('section.one-time-notice').getByRole('button', { name: 'Done' }).click();
@@ -96,7 +90,7 @@ test.describe('Workspace creation daily limit', () => {
     await page.click('button:has-text("New Workspace")');
     await expect(page.getByRole('dialog').getByText('New Workspace')).toBeVisible();
     await page.getByRole('dialog').locator('input[name="name"]').fill(`UI Second ${Date.now()}`);
-    await page.getByRole('dialog').getByLabel('Confirmation secret', { exact: true }).fill('e2e-confirm-secret');
+    await typeConfirmCode(page, page.getByRole('dialog'));
     await page.getByRole('dialog').getByRole('button', { name: 'Create Workspace' }).click();
     await expect(page.getByRole('dialog').getByRole('alert')).toContainText(/WORKSPACE_DAILY_LIMIT/);
   });
