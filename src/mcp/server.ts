@@ -182,6 +182,26 @@ export function createOctoMcpServer(api: OctoApi): McpServer {
   );
 
   server.tool(
+    'query_graph',
+    'Run a read-only Cypher query against a workspace\'s graph. The graph is a rebuildable projection of the workspace\'s canonical data, and the query reaches only this workspace\'s graph — the graph name is derived server-side, so no argument can name another. Read-only; requires the read scope.',
+    {
+      workspaceId: z.string().describe('The workspace whose graph to query'),
+      query: z.string().describe('A read-only Cypher query'),
+      params: z
+        .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
+        .optional()
+        .describe('Scalar parameters bound into the query'),
+    },
+    async ({ workspaceId, query, params }) => {
+      try {
+        return asText(await api.graphQuery({ workspaceId, query, params }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
     'list_ops_events',
     'List structured operational failure events for a workspace, newest first. Optionally filter to one error code. Read-only.',
     {

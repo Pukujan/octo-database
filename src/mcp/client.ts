@@ -145,6 +145,18 @@ export class OctoApi {
     });
   }
 
+  graphQuery(input: {
+    workspaceId: string;
+    query: string;
+    params?: Record<string, string | number | boolean | null>;
+  }): Promise<unknown> {
+    return this.request('POST', '/api/graph/query', {
+      workspaceId: input.workspaceId,
+      query: input.query,
+      ...(input.params === undefined ? {} : { params: input.params }),
+    });
+  }
+
   listOpsEvents(input: { workspaceId: string; errorCode?: string }): Promise<unknown> {
     const params = new URLSearchParams({ workspaceId: input.workspaceId });
     if (input.errorCode !== undefined) params.set('errorCode', input.errorCode);

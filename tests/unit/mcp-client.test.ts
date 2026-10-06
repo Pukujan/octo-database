@@ -89,6 +89,37 @@ describe('OctoApi', () => {
     expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ workspaceId: 'w', query: 'hello' });
   });
 
+  it('sends a graph query to the mediated route without inventing params', async () => {
+    const { impl, calls } = recordingFetch();
+    const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
+
+    await api.graphQuery({ workspaceId: 'w', query: 'MATCH (n) RETURN n' });
+
+    expect(calls[0]!.url).toBe('http://localhost:3001/api/graph/query');
+    expect(calls[0]!.init.method).toBe('POST');
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      workspaceId: 'w',
+      query: 'MATCH (n) RETURN n',
+    });
+  });
+
+  it('passes graph query params through when given', async () => {
+    const { impl, calls } = recordingFetch();
+    const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });
+
+    await api.graphQuery({
+      workspaceId: 'w',
+      query: 'MATCH (n {id: $id}) RETURN n',
+      params: { id: 'x' },
+    });
+
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      workspaceId: 'w',
+      query: 'MATCH (n {id: $id}) RETURN n',
+      params: { id: 'x' },
+    });
+  });
+
   it('creates a workspace without inventing optional fields', async () => {
     const { impl, calls } = recordingFetch(201, '{"workspace":{"id":"w"},"rawSecret":"octo_live_ws_x"}');
     const api = new OctoApi({ baseUrl: 'http://localhost:3001', token: 't', fetchImpl: impl });

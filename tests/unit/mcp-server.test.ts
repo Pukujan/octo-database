@@ -50,6 +50,7 @@ describe('Octo MCP adapter', () => {
       'list_workspaces',
       'mint_key',
       'provision_database',
+      'query_graph',
       'query_workspace',
       'retry_job',
       'upload_file',
@@ -219,5 +220,35 @@ describe('Octo MCP adapter', () => {
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('403');
+  });
+
+  it('runs a graph query through the mediated graph route', async () => {
+    const calls: string[] = [];
+    const client = await connect(
+      apiWith(200, '{"query":"MATCH (n) RETURN n","rows":[],"metadata":[]}', calls)
+    );
+
+    const result = await client.callTool({
+      name: 'query_graph',
+      arguments: { workspaceId: 'w1', query: 'MATCH (n) RETURN n' },
+    });
+
+    expect(calls).toEqual(['http://octo.test/api/graph/query']);
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain('rows');
+  });
+
+  it('reports an unavailable graph engine as a tool error, not a success', async () => {
+    // An unconfigured engine answers 503; the adapter must surface that as an
+    // error rather than an empty success that reads as "the workspace has no graph".
+    const client = await connect(apiWith(503, '{"error":"GRAPH_NOT_CONFIGURED"}'));
+
+    const result = await client.callTool({
+      name: 'query_graph',
+      arguments: { workspaceId: 'w1', query: 'MATCH (n) RETURN n' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('503');
   });
 });
