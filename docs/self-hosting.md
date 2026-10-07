@@ -149,8 +149,7 @@ neither a half-applied migration nor a false "applied" record.
 1. Development takes place on feature branches and merges to `main` via auto-merge on green CI gates.
 2. When ready to promote to production:
    - Open a pull request from `main` into `production`.
-   - CI runs the full `gates` validation suite on the PR.
-   - The owner reviews and merges the PR into `production`.
+   - Arm squash auto-merge. CI runs the full `gates` validation suite, and the PR merges when `gates` is green. Do not ask the owner to merge.
 3. Within 5 minutes, the systemd timer on gravebuster invokes `autodeploy.sh`:
    - Detects the new commit on `origin/production`.
    - Runs `deploy.sh`.

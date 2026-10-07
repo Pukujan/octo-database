@@ -150,7 +150,7 @@ Use two workspaces owned by the same principal for the workspace-bound case; dif
 
 **Hidden holdout:** None. The named workspace and credential variants cover the likely false-completion cases.
 
-**Production/test smoke:** Run discovery, read, and download against the deployed candidate using a designated test workspace/credential. Main delivery requires green `gates`; production promotion follows the existing owner-merged `production` path.
+**Production/test smoke:** Run discovery, read, and download against the deployed candidate using a designated test workspace/credential. Main delivery requires green `gates`. A production promotion is a pull request into `production` with auto-merge armed.
 
 **Done:** Owner accepts/corrects this packet; all named evals pass; the end-to-end job and deployed smoke work; `gates` is green on the exact candidate. Compilation alone is insufficient.
 

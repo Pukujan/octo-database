@@ -715,6 +715,41 @@ export async function dbInsertApiKey(
   await query(sql, [id, keyHash, prefix, name, principalId, workspaceId, role, scopes, expiresAt]);
 }
 
+/** Replaces the allowances on a key the principal owns. The secret stays. */
+export async function dbUpdateApiKeyScopes(
+  id: string,
+  principalId: string,
+  scopes: string[]
+): Promise<{
+  id: string;
+  prefix: string;
+  name: string;
+  workspaceId: string | null;
+  scopes: string[];
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+} | null> {
+  const rows = await query<{
+    id: string;
+    prefix: string;
+    name: string;
+    workspaceId: string | null;
+    scopes: string[];
+    expiresAt: string | null;
+    lastUsedAt: string | null;
+    createdAt: string;
+  }>(
+    `UPDATE octo.api_keys
+     SET scopes = $3
+     WHERE id = $1 AND principal_id = $2
+     RETURNING id, prefix, name, workspace_id AS "workspaceId", scopes,
+               expires_at AS "expiresAt", last_used_at AS "lastUsedAt", created_at AS "createdAt"`,
+    [id, principalId, scopes]
+  );
+  return rows[0] ?? null;
+}
+
 export async function dbVerifyApiKey(keyHash: string): Promise<{
   keyId: string;
   prefix: string;
