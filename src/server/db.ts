@@ -1856,6 +1856,218 @@ export async function dbBeliefAsOf(
   return { belief: beliefRows[0] ?? null, evidence };
 }
 
+// 8. Graph projection (Slice 10): the canonical reads the projector consumes and
+// the projection bookkeeping. The graph is a rebuildable read model; PostgreSQL
+// stays canonical, so everything here reads octo.* rows and writes only the
+// projection's own watermark/health row.
+
+/** The epistemic ledger for one workspace, in the shape the projector consumes. */
+export async function dbReadEpistemicGraph(workspaceId: string): Promise<{
+  entities: Array<{ id: string; name: string; entityType: string }>;
+  claims: Array<{
+    id: string;
+    statement: string;
+    subjectEntityId: string | null;
+    validFrom: string;
+    validTo: string | null;
+    recordedAt: string;
+    supersededAt: string | null;
+    provenance: Record<string, unknown>;
+  }>;
+  evidence: Array<{
+    id: string;
+    locator: string | null;
+    quote: string | null;
+    contentHash: string | null;
+    sourceFileId: string | null;
+  }>;
+  perspectives: Array<{ id: string; name: string }>;
+  beliefs: Array<{
+    id: string;
+    perspectiveId: string;
+    claimId: string;
+    stance: string;
+    confidence: number | null;
+    validFrom: string;
+    validTo: string | null;
+    recordedAt: string;
+    supersededAt: string | null;
+  }>;
+  claimRelations: Array<{
+    id: string;
+    fromClaimId: string;
+    toClaimId: string;
+    relation: string;
+    recordedAt: string;
+    supersededAt: string | null;
+  }>;
+  claimEvidence: Array<{ id: string; claimId: string; evidenceId: string; stance: string }>;
+}> {
+  const [entities, claims, evidence, perspectives, beliefs, claimRelations, claimEvidence] =
+    await Promise.all([
+      query<{ id: string; name: string; entityType: string }>(
+        `SELECT id, name, entity_type AS "entityType" FROM octo.epistemic_entities WHERE workspace_id = $1`,
+        [workspaceId]
+      ),
+      query<{
+        id: string;
+        statement: string;
+        subjectEntityId: string | null;
+        validFrom: string;
+        validTo: string | null;
+        recordedAt: string;
+        supersededAt: string | null;
+        provenance: Record<string, unknown>;
+      }>(
+        `SELECT id, statement, subject_entity_id AS "subjectEntityId",
+                valid_from AS "validFrom", valid_to AS "validTo", recorded_at AS "recordedAt",
+                superseded_at AS "supersededAt", provenance
+         FROM octo.claims WHERE workspace_id = $1`,
+        [workspaceId]
+      ),
+      query<{
+        id: string;
+        locator: string | null;
+        quote: string | null;
+        contentHash: string | null;
+        sourceFileId: string | null;
+      }>(
+        `SELECT id, locator, quote, content_hash AS "contentHash", source_file_id AS "sourceFileId"
+         FROM octo.evidence WHERE workspace_id = $1`,
+        [workspaceId]
+      ),
+      query<{ id: string; name: string }>(
+        `SELECT id, name FROM octo.perspectives WHERE workspace_id = $1`,
+        [workspaceId]
+      ),
+      query<{
+        id: string;
+        perspectiveId: string;
+        claimId: string;
+        stance: string;
+        confidence: number | null;
+        validFrom: string;
+        validTo: string | null;
+        recordedAt: string;
+        supersededAt: string | null;
+      }>(
+        `SELECT id, perspective_id AS "perspectiveId", claim_id AS "claimId", stance,
+                confidence::float8 AS confidence, valid_from AS "validFrom", valid_to AS "validTo",
+                recorded_at AS "recordedAt", superseded_at AS "supersededAt"
+         FROM octo.beliefs WHERE workspace_id = $1`,
+        [workspaceId]
+      ),
+      query<{
+        id: string;
+        fromClaimId: string;
+        toClaimId: string;
+        relation: string;
+        recordedAt: string;
+        supersededAt: string | null;
+      }>(
+        `SELECT id, from_claim_id AS "fromClaimId", to_claim_id AS "toClaimId", relation,
+                recorded_at AS "recordedAt", superseded_at AS "supersededAt"
+         FROM octo.claim_relations WHERE workspace_id = $1`,
+        [workspaceId]
+      ),
+      query<{ id: string; claimId: string; evidenceId: string; stance: string }>(
+        `SELECT id, claim_id AS "claimId", evidence_id AS "evidenceId", stance
+         FROM octo.claim_evidence WHERE workspace_id = $1`,
+        [workspaceId]
+      ),
+    ]);
+
+  return { entities, claims, evidence, perspectives, beliefs, claimRelations, claimEvidence };
+}
+
+/**
+ * The newest canonical timestamp in a workspace's epistemic ledger, or null when
+ * it is empty. The projector records this as the projection's source watermark, and
+ * a query compares it to the live value to detect staleness.
+ */
+export async function dbEpistemicWatermark(workspaceId: string): Promise<string | null> {
+  const rows = await query<{ watermark: string | null }>(
+    `SELECT MAX(ts) AS watermark FROM (
+       SELECT MAX(created_at) AS ts FROM octo.epistemic_entities WHERE workspace_id = $1
+       UNION ALL SELECT MAX(recorded_at) FROM octo.claims WHERE workspace_id = $1
+       UNION ALL SELECT MAX(created_at) FROM octo.evidence WHERE workspace_id = $1
+       UNION ALL SELECT MAX(created_at) FROM octo.perspectives WHERE workspace_id = $1
+       UNION ALL SELECT MAX(recorded_at) FROM octo.beliefs WHERE workspace_id = $1
+       UNION ALL SELECT MAX(recorded_at) FROM octo.claim_relations WHERE workspace_id = $1
+       UNION ALL SELECT MAX(created_at) FROM octo.claim_evidence WHERE workspace_id = $1
+     ) t`,
+    [workspaceId]
+  );
+  return rows[0]?.watermark ?? null;
+}
+
+export interface GraphProjectionRow {
+  workspaceId: string;
+  schemaVersion: string;
+  sourceWatermark: string;
+  entityCount: number;
+  claimCount: number;
+  evidenceCount: number;
+  relationCount: number;
+  status: 'projected' | 'failed';
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export async function dbGetGraphProjection(workspaceId: string): Promise<GraphProjectionRow | null> {
+  const rows = await query<GraphProjectionRow>(
+    `SELECT workspace_id AS "workspaceId", schema_version AS "schemaVersion",
+            source_watermark AS "sourceWatermark", entity_count AS "entityCount",
+            claim_count AS "claimCount", evidence_count AS "evidenceCount",
+            relation_count AS "relationCount", status, last_error AS "lastError",
+            updated_at AS "updatedAt"
+     FROM octo.graph_projections WHERE workspace_id = $1`,
+    [workspaceId]
+  );
+  return rows[0] ?? null;
+}
+
+/** Records the outcome of a projection run (a successful watermark or a failure). */
+export async function dbUpsertGraphProjection(params: {
+  workspaceId: string;
+  schemaVersion: string;
+  sourceWatermark: string;
+  entityCount: number;
+  claimCount: number;
+  evidenceCount: number;
+  relationCount: number;
+  status: 'projected' | 'failed';
+  lastError: string | null;
+}): Promise<void> {
+  await query(
+    `INSERT INTO octo.graph_projections
+       (workspace_id, schema_version, source_watermark, entity_count, claim_count,
+        evidence_count, relation_count, status, last_error, updated_at)
+     VALUES ($1, $2, $3::timestamptz, $4, $5, $6, $7, $8, $9, now())
+     ON CONFLICT (workspace_id) DO UPDATE SET
+       schema_version = EXCLUDED.schema_version,
+       source_watermark = EXCLUDED.source_watermark,
+       entity_count = EXCLUDED.entity_count,
+       claim_count = EXCLUDED.claim_count,
+       evidence_count = EXCLUDED.evidence_count,
+       relation_count = EXCLUDED.relation_count,
+       status = EXCLUDED.status,
+       last_error = EXCLUDED.last_error,
+       updated_at = now()`,
+    [
+      params.workspaceId,
+      params.schemaVersion,
+      params.sourceWatermark,
+      params.entityCount,
+      params.claimCount,
+      params.evidenceCount,
+      params.relationCount,
+      params.status,
+      params.lastError,
+    ]
+  );
+}
+
 // 6. Workspace data plane (Slice 13): atomic workspace create, delete, and the
 // confirmation/retention helpers. Kept together so the multi-write invariant in
 // dbCreateWorkspaceAtomic is easy to audit.

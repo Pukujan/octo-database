@@ -174,6 +174,15 @@ export class OctoApi {
     });
   }
 
+  graphProject(input: { workspaceId: string }): Promise<unknown> {
+    return this.request('POST', '/api/graph/project', { workspaceId: input.workspaceId });
+  }
+
+  graphHealth(input: { workspaceId: string }): Promise<unknown> {
+    const params = new URLSearchParams({ workspaceId: input.workspaceId });
+    return this.request('GET', `/api/graph/health?${params.toString()}`);
+  }
+
   recordEpistemic(input: Record<string, unknown> & { workspaceId: string; kind: string }): Promise<unknown> {
     return this.request('POST', '/api/epistemic/record', input);
   }

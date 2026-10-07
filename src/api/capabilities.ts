@@ -185,6 +185,22 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
       'What one perspective believed about a claim as of a recorded instant, with the evidence linked to that claim. Two perspectives may hold different beliefs about the same claim; the answer cites the sources.',
   },
   {
+    action: 'graph.project',
+    method: 'POST',
+    path: '/api/graph/project',
+    requiredScope: 'write',
+    description:
+      'Rebuild an authorized workspace\'s graph from the canonical epistemic ledger. Destroy-and-rebuild: the graph is a read model, so a rebuild always converges to the same graph for the same rows. Requires operator role or higher.',
+  },
+  {
+    action: 'graph.health',
+    method: 'GET',
+    path: '/api/graph/health?workspaceId=<id>',
+    requiredScope: 'read',
+    description:
+      'The workspace graph projection\'s watermark, counts, and last outcome, plus whether the graph is stale against the live canonical ledger.',
+  },
+  {
     action: 'graph.query',
     method: 'POST',
     path: '/api/graph/query',
@@ -269,7 +285,7 @@ export function capabilitiesForScopes(scopes: string[]): CapabilityDescriptor[] 
 export function minimumRoleForCapability(action: string): 'member' | 'operator' | 'admin' {
   if (action === 'files.delete') return 'admin';
   if (
-    ['files.upload', 'files.publish', 'files.unpublish', 'files.archive', 'files.restore', 'jobs.enqueue', 'jobs.run', 'epistemic.record'].includes(
+    ['files.upload', 'files.publish', 'files.unpublish', 'files.archive', 'files.restore', 'jobs.enqueue', 'jobs.run', 'epistemic.record', 'graph.project'].includes(
       action
     )
   ) {
