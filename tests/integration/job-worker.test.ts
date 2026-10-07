@@ -14,6 +14,9 @@ import { ObjectStore } from '../../src/storage/object-store';
 import { derivedThumbnailKey } from '../../src/media/thumbnail-service';
 import { ClaimedJob } from '../../src/jobs/job-service';
 import { drainQueue, JobOutcome, processJob, WorkerDeps } from '../../src/jobs/worker';
+import { GRAPH_SCHEMA_VERSION, ProjectionInput } from '../../src/graph/projector';
+import type { GraphClient } from '../../src/graph/falkordb-client';
+import type { GraphProjectionRecord } from '../../src/server/db';
 
 class InMemoryObjectStore implements ObjectStore {
   readonly label = 'memory';
@@ -269,5 +272,167 @@ describe('Worker idempotency and convergence', () => {
     const [a, b] = await Promise.all([queue.claim(), queue.claim()]);
     const claimed = [a, b].filter(Boolean);
     expect(claimed.length).toBe(1);
+  });
+});
+
+const EMPTY_LEDGER: ProjectionInput = {
+  entities: [],
+  claims: [],
+  evidence: [],
+  perspectives: [],
+  beliefs: [],
+  claimRelations: [],
+  claimEvidence: [],
+};
+
+const LEDGER_ONE_CLAIM: ProjectionInput = {
+  ...EMPTY_LEDGER,
+  claims: [
+    {
+      id: 'c-1',
+      statement: 'A projected claim.',
+      subjectEntityId: null,
+      validFrom: '2026-01-01T00:00:00.000Z',
+      validTo: null,
+      recordedAt: '2026-01-01T00:00:00.000Z',
+      supersededAt: null,
+      provenance: {},
+    },
+  ],
+};
+
+function fakeGraphClient(overrides: Partial<GraphClient> = {}): GraphClient {
+  return {
+    deleteGraph: async () => {},
+    rwQuery: async () => {},
+    ...overrides,
+  } as unknown as GraphClient;
+}
+
+describe('Graph rebuild job', () => {
+  it('projects the workspace ledger and records the projection watermark', async () => {
+    const queue = new FakeQueue();
+    queue.enqueue({ jobId: 'job-graph', workspaceId: 'ws-1', jobType: 'graph_rebuild', payload: {} });
+    const records: GraphProjectionRecord[] = [];
+    let deletes = 0;
+    const deps = makeDeps(queue, new InMemoryObjectStore(), {
+      graphProjection: {
+        client: fakeGraphClient({
+          deleteGraph: async () => {
+            deletes += 1;
+          },
+        }),
+        readLedger: async () => LEDGER_ONE_CLAIM,
+        watermark: async () => '2026-01-01T00:00:00.000Z',
+        record: async (row) => {
+          records.push(row);
+        },
+      },
+    });
+
+    const outcomes = await drainQueue(deps);
+
+    expect(outcomes[0]!.status).toBe('completed');
+    // Destroy-and-rebuild: the graph is deleted before it is written.
+    expect(deletes).toBe(1);
+    expect(records).toHaveLength(1);
+    expect(records[0]!.status).toBe('projected');
+    expect(records[0]!.claimCount).toBe(1);
+    expect(records[0]!.sourceWatermark).toBe('2026-01-01T00:00:00.000Z');
+    expect(records[0]!.schemaVersion).toBe(GRAPH_SCHEMA_VERSION);
+  });
+
+  it('replays idempotently: a second rebuild converges to the same projection', async () => {
+    const queue = new FakeQueue();
+    queue.enqueue({ jobId: 'job-replay-a', workspaceId: 'ws-1', jobType: 'graph_rebuild', payload: {} });
+    queue.enqueue({ jobId: 'job-replay-b', workspaceId: 'ws-1', jobType: 'graph_rebuild', payload: {} });
+    const records: GraphProjectionRecord[] = [];
+    const deps = makeDeps(queue, new InMemoryObjectStore(), {
+      graphProjection: {
+        client: fakeGraphClient(),
+        readLedger: async () => LEDGER_ONE_CLAIM,
+        watermark: async () => '2026-01-01T00:00:00.000Z',
+        record: async (row) => {
+          records.push(row);
+        },
+      },
+    });
+
+    const outcomes = await drainQueue(deps);
+
+    expect(outcomes.map((o) => o.status)).toEqual(['completed', 'completed']);
+    expect(records.map((r) => r.claimCount)).toEqual([1, 1]);
+  });
+
+  it('fails permanently with GRAPH_NOT_CONFIGURED when the engine is unset', async () => {
+    const queue = new FakeQueue();
+    queue.enqueue({ jobId: 'job-unconfigured', workspaceId: 'ws-1', jobType: 'graph_rebuild', payload: {} });
+    const deps = makeDeps(queue, new InMemoryObjectStore(), {
+      graphProjection: {
+        // No client: OCTO_GRAPH_URL is unset.
+        readLedger: async () => EMPTY_LEDGER,
+        watermark: async () => null,
+        record: async () => {},
+      },
+    });
+
+    const outcomes = await drainQueue(deps);
+
+    // Deterministic: retrying cannot help, so the job terminates rather than looping.
+    expect(outcomes[0]!.status).toBe('failed');
+    expect(queue.jobs[0]!.state).toBe('failed');
+  });
+
+  it('records a failed projection and retries when the engine rejects the write', async () => {
+    const queue = new FakeQueue();
+    queue.enqueue({ jobId: 'job-engine-down', workspaceId: 'ws-1', jobType: 'graph_rebuild', payload: {} });
+    const records: GraphProjectionRecord[] = [];
+    const deps = makeDeps(queue, new InMemoryObjectStore(), {
+      graphProjection: {
+        client: fakeGraphClient({
+          rwQuery: async () => {
+            throw new Error('engine down');
+          },
+        }),
+        readLedger: async () => LEDGER_ONE_CLAIM,
+        watermark: async () => '2026-01-01T00:00:00.000Z',
+        record: async (row) => {
+          records.push(row);
+        },
+      },
+    });
+
+    // One pass, so the transient failure is observable before a retry.
+    const outcomes = await drainQueue(deps, 1);
+
+    expect(outcomes[0]!.status).toBe('retry');
+    expect(records[0]!.status).toBe('failed');
+    expect(records[0]!.lastError).toMatch(/engine down/);
+  });
+
+  it('ignores a payload-supplied workspace: the job workspace drives the rebuild', async () => {
+    const queue = new FakeQueue();
+    queue.enqueue({
+      jobId: 'job-confused',
+      workspaceId: 'ws-1',
+      jobType: 'graph_rebuild',
+      payload: { workspaceId: 'ws-other' },
+    });
+    const seen: string[] = [];
+    const deps = makeDeps(queue, new InMemoryObjectStore(), {
+      graphProjection: {
+        client: fakeGraphClient(),
+        readLedger: async (workspaceId) => {
+          seen.push(workspaceId);
+          return EMPTY_LEDGER;
+        },
+        watermark: async () => null,
+        record: async () => {},
+      },
+    });
+
+    await drainQueue(deps);
+
+    expect(seen).toEqual(['ws-1']);
   });
 });

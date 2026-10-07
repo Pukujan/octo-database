@@ -1860,9 +1860,22 @@ export async function dbBeliefAsOf(
 // the projection bookkeeping. The graph is a rebuildable read model; PostgreSQL
 // stays canonical, so everything here reads octo.* rows and writes only the
 // projection's own watermark/health row.
+//
+// Each helper has two forms. The route-facing one reads through the fenced app pool,
+// where RLS is a second layer behind the route's own membership/role check. The
+// `...Service` form reads through the trusted pool, because a job claimed by the
+// scheduler drains with no caller identity and the fenced pool would fail closed --
+// silently projecting an empty graph from a ledger RLS hid. The job's workspace is
+// the authority there, exactly as it is for the archive and thumbnail jobs.
+
+/** A pool query bound to the caller: the fenced app pool, or the trusted service pool. */
+type SqlExecutor = <T = unknown>(text: string, params?: unknown[]) => Promise<T[]>;
 
 /** The epistemic ledger for one workspace, in the shape the projector consumes. */
-export async function dbReadEpistemicGraph(workspaceId: string): Promise<{
+async function readEpistemicGraph(
+  exec: SqlExecutor,
+  workspaceId: string
+): Promise<{
   entities: Array<{ id: string; name: string; entityType: string }>;
   claims: Array<{
     id: string;
@@ -1905,11 +1918,11 @@ export async function dbReadEpistemicGraph(workspaceId: string): Promise<{
 }> {
   const [entities, claims, evidence, perspectives, beliefs, claimRelations, claimEvidence] =
     await Promise.all([
-      query<{ id: string; name: string; entityType: string }>(
+      exec<{ id: string; name: string; entityType: string }>(
         `SELECT id, name, entity_type AS "entityType" FROM octo.epistemic_entities WHERE workspace_id = $1`,
         [workspaceId]
       ),
-      query<{
+      exec<{
         id: string;
         statement: string;
         subjectEntityId: string | null;
@@ -1925,7 +1938,7 @@ export async function dbReadEpistemicGraph(workspaceId: string): Promise<{
          FROM octo.claims WHERE workspace_id = $1`,
         [workspaceId]
       ),
-      query<{
+      exec<{
         id: string;
         locator: string | null;
         quote: string | null;
@@ -1936,11 +1949,11 @@ export async function dbReadEpistemicGraph(workspaceId: string): Promise<{
          FROM octo.evidence WHERE workspace_id = $1`,
         [workspaceId]
       ),
-      query<{ id: string; name: string }>(
+      exec<{ id: string; name: string }>(
         `SELECT id, name FROM octo.perspectives WHERE workspace_id = $1`,
         [workspaceId]
       ),
-      query<{
+      exec<{
         id: string;
         perspectiveId: string;
         claimId: string;
@@ -1957,7 +1970,7 @@ export async function dbReadEpistemicGraph(workspaceId: string): Promise<{
          FROM octo.beliefs WHERE workspace_id = $1`,
         [workspaceId]
       ),
-      query<{
+      exec<{
         id: string;
         fromClaimId: string;
         toClaimId: string;
@@ -1970,7 +1983,7 @@ export async function dbReadEpistemicGraph(workspaceId: string): Promise<{
          FROM octo.claim_relations WHERE workspace_id = $1`,
         [workspaceId]
       ),
-      query<{ id: string; claimId: string; evidenceId: string; stance: string }>(
+      exec<{ id: string; claimId: string; evidenceId: string; stance: string }>(
         `SELECT id, claim_id AS "claimId", evidence_id AS "evidenceId", stance
          FROM octo.claim_evidence WHERE workspace_id = $1`,
         [workspaceId]
@@ -1980,13 +1993,22 @@ export async function dbReadEpistemicGraph(workspaceId: string): Promise<{
   return { entities, claims, evidence, perspectives, beliefs, claimRelations, claimEvidence };
 }
 
+export function dbReadEpistemicGraph(workspaceId: string) {
+  return readEpistemicGraph(query, workspaceId);
+}
+
+/** Trusted-pool ledger read for the job worker, which runs with no caller identity. */
+export function dbReadEpistemicGraphService(workspaceId: string) {
+  return readEpistemicGraph(queryService, workspaceId);
+}
+
 /**
  * The newest canonical timestamp in a workspace's epistemic ledger, or null when
  * it is empty. The projector records this as the projection's source watermark, and
  * a query compares it to the live value to detect staleness.
  */
-export async function dbEpistemicWatermark(workspaceId: string): Promise<string | null> {
-  const rows = await query<{ watermark: string | null }>(
+async function epistemicWatermark(exec: SqlExecutor, workspaceId: string): Promise<string | null> {
+  const rows = await exec<{ watermark: string | null }>(
     `SELECT MAX(ts) AS watermark FROM (
        SELECT MAX(created_at) AS ts FROM octo.epistemic_entities WHERE workspace_id = $1
        UNION ALL SELECT MAX(recorded_at) FROM octo.claims WHERE workspace_id = $1
@@ -1999,6 +2021,15 @@ export async function dbEpistemicWatermark(workspaceId: string): Promise<string 
     [workspaceId]
   );
   return rows[0]?.watermark ?? null;
+}
+
+export function dbEpistemicWatermark(workspaceId: string) {
+  return epistemicWatermark(query, workspaceId);
+}
+
+/** Trusted-pool watermark read for the job worker, which runs with no caller identity. */
+export function dbEpistemicWatermarkService(workspaceId: string) {
+  return epistemicWatermark(queryService, workspaceId);
 }
 
 export interface GraphProjectionRow {
@@ -2027,8 +2058,8 @@ export async function dbGetGraphProjection(workspaceId: string): Promise<GraphPr
   return rows[0] ?? null;
 }
 
-/** Records the outcome of a projection run (a successful watermark or a failure). */
-export async function dbUpsertGraphProjection(params: {
+/** The projection bookkeeping a run records: its watermark and counts, or a failure. */
+export interface GraphProjectionRecord {
   workspaceId: string;
   schemaVersion: string;
   sourceWatermark: string;
@@ -2038,8 +2069,14 @@ export async function dbUpsertGraphProjection(params: {
   relationCount: number;
   status: 'projected' | 'failed';
   lastError: string | null;
-}): Promise<void> {
-  await query(
+}
+
+/** Records the outcome of a projection run (a successful watermark or a failure). */
+async function upsertGraphProjection(
+  exec: SqlExecutor,
+  params: GraphProjectionRecord
+): Promise<void> {
+  await exec(
     `INSERT INTO octo.graph_projections
        (workspace_id, schema_version, source_watermark, entity_count, claim_count,
         evidence_count, relation_count, status, last_error, updated_at)
@@ -2066,6 +2103,15 @@ export async function dbUpsertGraphProjection(params: {
       params.lastError,
     ]
   );
+}
+
+export function dbUpsertGraphProjection(params: GraphProjectionRecord) {
+  return upsertGraphProjection(query, params);
+}
+
+/** Trusted-pool projection write for the job worker, which runs with no caller identity. */
+export function dbUpsertGraphProjectionService(params: GraphProjectionRecord) {
+  return upsertGraphProjection(queryService, params);
 }
 
 // 6. Workspace data plane (Slice 13): atomic workspace create, delete, and the
