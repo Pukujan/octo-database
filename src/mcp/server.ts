@@ -225,6 +225,36 @@ export function createOctoMcpServer(api: OctoApi): McpServer {
   );
 
   server.tool(
+    'project_graph',
+    'Rebuild a workspace\'s graph from its canonical epistemic ledger. Destroy-and-rebuild, so the result always converges to the same graph for the same data; safe to re-run. Requires the write scope and an operator or higher role.',
+    {
+      workspaceId: z.string().describe('The workspace whose graph to rebuild'),
+    },
+    async ({ workspaceId }) => {
+      try {
+        return asText(await api.graphProject({ workspaceId }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'graph_health',
+    'The workspace graph projection\'s watermark, counts, and last outcome, plus whether the graph is stale against the live canonical ledger. Requires the read scope.',
+    {
+      workspaceId: z.string().describe('The workspace whose projection health to read'),
+    },
+    async ({ workspaceId }) => {
+      try {
+        return asText(await api.graphHealth({ workspaceId }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
     'record_epistemic',
     'Append one record to a workspace\'s bitemporal knowledge ledger. Nothing is overwritten. `kind` selects the record and which fields it needs: entity {name, entityType?}; perspective {name, description?}; evidence {sourceFileId?|locator?|quote?|contentHash?}; claim {statement, subjectEntityId?, supersedesClaimId?, validFrom?, validTo?, recordedAt?, provenance?}; belief {perspectiveId, claimId, stance, confidence?, validFrom?, validTo?, recordedAt?}; claim_relation {fromClaimId, toClaimId, relation}; claim_evidence {claimId, evidenceId, stance}. stance for a belief is believes|disbelieves|uncertain; for claim_evidence it is supports|contradicts|qualifies. Requires the write scope and an operator or higher role.',
     {

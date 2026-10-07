@@ -80,6 +80,12 @@ export interface GraphQueryResult {
 /** A scalar query parameter, the only kind a read query needs. */
 export type GraphParam = string | number | boolean | null;
 
+/**
+ * A write parameter. The projector passes lists of maps (UNWIND batches), so unlike
+ * the read path this accepts structured JSON. Only the projector uses it, and it
+ * builds the values from canonical rows -- no request value reaches it untyped.
+ */
+export type GraphWriteParam = null | string | number | boolean | GraphWriteParam[] | { [key: string]: GraphWriteParam };
 export class GraphClient {
   private client: FalkorDB | null = null;
   private connecting: Promise<FalkorDB> | null = null;
@@ -130,6 +136,43 @@ export class GraphClient {
       if (error instanceof Error && error.message.includes(GRAPH_ABSENT_ERROR)) {
         return { rows: [], metadata: [] };
       }
+      throw error;
+    }
+  }
+
+  /**
+   * Runs a read-write Cypher statement against one workspace's graph. Reserved for
+   * the projector: no request body ever reaches this path, and the graph name is
+   * still derived from the authenticated workspace, never accepted.
+   */
+  async rwQuery(
+    workspaceId: string,
+    cypher: string,
+    params?: Record<string, unknown>
+  ): Promise<void> {
+    const graphName = graphNameForWorkspace(workspaceId);
+    const client = await this.connection();
+    const graph: Graph = client.selectGraph(graphName);
+    await graph.query(cypher, {
+      // The projector builds these from canonical rows, so the values are JSON.
+      ...(params ? { params: params as Record<string, GraphWriteParam> } : {}),
+      TIMEOUT: this.config.queryTimeoutMs,
+    });
+  }
+
+  /**
+   * Deletes one workspace's entire graph. This is the "destroy and rebuild" step:
+   * the graph is a projection, so dropping it loses no canonical knowledge.
+   */
+  async deleteGraph(workspaceId: string): Promise<void> {
+    const graphName = graphNameForWorkspace(workspaceId);
+    const client = await this.connection();
+    const graph: Graph = client.selectGraph(graphName);
+    try {
+      await graph.delete();
+    } catch (error) {
+      // Deleting a graph that was never created is a no-op, not a failure.
+      if (error instanceof Error && error.message.includes(GRAPH_ABSENT_ERROR)) return;
       throw error;
     }
   }

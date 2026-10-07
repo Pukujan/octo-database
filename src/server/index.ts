@@ -47,6 +47,7 @@ import {
 import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { GraphClient, loadGraphConfigFromEnv } from '../graph/falkordb-client';
+import { GRAPH_SCHEMA_VERSION, projectWorkspaceGraph } from '../graph/projector';
 import { hashApiKeySecret, authorizeKeyMint, parseKeyScopes } from '../api/keys';
 import { acceptConfirmChallenge, hasConfirmChallenge, issueConfirmChallenge } from '../auth/confirm-challenge';
 import { sendStaticFile } from './static-file';
@@ -129,6 +130,10 @@ import {
   dbInsertClaimEvidence,
   dbClaimsAsOf,
   dbBeliefAsOf,
+  dbReadEpistemicGraph,
+  dbEpistemicWatermark,
+  dbGetGraphProjection,
+  dbUpsertGraphProjection,
   dbEnqueueJob,
   dbRetryJob,
   dbFailJob,
@@ -3869,6 +3874,134 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
       const result = await dbBeliefAsOf(workspaceId, perspectiveId, claimId, asOfRecorded, asOfValid);
       sendJson(res, 200, { perspectiveId, claimId, asOfRecorded, asOfValid, ...result });
+      return;
+    }
+
+    // Graph: POST /api/graph/project -- rebuild one workspace's graph from the
+    // canonical epistemic ledger. Destroy-and-rebuild: the graph is a read model, so
+    // a rebuild always converges to the same graph for the same canonical rows.
+    if (pathname === '/api/graph/project' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
+        return;
+      }
+
+      const body = (await readJsonObject(req)) as Record<string, any>;
+      const { workspaceId } = body;
+
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem || !roleAllows(auth, mem.role, 'operator')) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Operator role or higher required to project a graph' });
+        return;
+      }
+
+      // Authorize before probing provider configuration: an unauthorized caller
+      // must not learn whether the graph engine is configured.
+      if (!graphClient) {
+        sendJson(res, 503, {
+          error: 'GRAPH_NOT_CONFIGURED: set OCTO_GRAPH_URL to project a workspace graph',
+        });
+        return;
+      }
+
+      const data = await dbReadEpistemicGraph(workspaceId);
+      const watermark = (await dbEpistemicWatermark(workspaceId)) ?? new Date(0).toISOString();
+
+      try {
+        const counts = await projectWorkspaceGraph(graphClient, workspaceId, data);
+        await dbUpsertGraphProjection({
+          workspaceId,
+          schemaVersion: GRAPH_SCHEMA_VERSION,
+          sourceWatermark: watermark,
+          ...counts,
+          status: 'projected',
+          lastError: null,
+        });
+        sendJson(res, 200, { workspaceId, sourceWatermark: watermark, schemaVersion: GRAPH_SCHEMA_VERSION, ...counts, status: 'projected' });
+      } catch (error) {
+        // A failed projection is recorded, not hidden: health reports the failure so
+        // an operator can retry, and the previous watermark shows the graph is stale.
+        const message = error instanceof Error ? error.message : String(error);
+        await dbUpsertGraphProjection({
+          workspaceId,
+          schemaVersion: GRAPH_SCHEMA_VERSION,
+          sourceWatermark: watermark,
+          entityCount: 0,
+          claimCount: 0,
+          evidenceCount: 0,
+          relationCount: 0,
+          status: 'failed',
+          lastError: message,
+        });
+        sendJson(res, 502, { error: 'GRAPH_PROJECTION_FAILED', message });
+      }
+      return;
+    }
+
+    // Graph: GET /api/graph/health -- the projection's watermark and counts, plus
+    // whether the graph is stale against the live canonical ledger.
+    if (pathname === '/api/graph/health' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId') ?? '';
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      const projection = await dbGetGraphProjection(workspaceId);
+      const liveWatermark = await dbEpistemicWatermark(workspaceId);
+      // Stale when the canonical ledger has moved past the watermark the graph was
+      // built from -- the graph may not reflect the newest rows. Compare instants,
+      // not the second-granularity string form.
+      const stale =
+        !projection ||
+        (liveWatermark !== null &&
+          new Date(liveWatermark).getTime() > new Date(projection.sourceWatermark).getTime());
+
+      sendJson(res, 200, {
+        workspaceId,
+        configured: Boolean(graphClient),
+        stale,
+        liveWatermark,
+        projection,
+      });
       return;
     }
 
