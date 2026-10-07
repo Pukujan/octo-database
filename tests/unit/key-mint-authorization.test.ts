@@ -7,10 +7,21 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { authorizeKeyMint } from '../../src/api/keys';
+import { authorizeKeyMint, parseKeyScopes } from '../../src/api/keys';
 
 const WS_A = '11111111-1111-4111-8111-111111111111';
 const WS_B = '22222222-2222-4222-8222-222222222222';
+
+describe('parseKeyScopes', () => {
+  it('keeps a granular allowance list and drops duplicates', () => {
+    expect(parseKeyScopes(['read', 'delete', 'read'])).toEqual({ ok: true, scopes: ['read', 'delete'] });
+  });
+
+  it('refuses an empty list and an unknown allowance', () => {
+    expect(parseKeyScopes([])).toEqual({ ok: false, error: 'BAD_REQUEST: scopes must be a non-empty array' });
+    expect(parseKeyScopes(['publish'])).toEqual({ ok: false, error: 'BAD_REQUEST: unknown scopes: publish' });
+  });
+});
 
 describe('authorizeKeyMint', () => {
   it('leaves a human session unconstrained', () => {

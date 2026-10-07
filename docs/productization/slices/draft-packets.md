@@ -72,4 +72,4 @@ Only slices that expose RAG/GraphRAG retrieval depend on this packet; file/API/U
 
 ## Optional integrated demonstration
 
-After independently shippable slices are complete, the owner may request a cross-slice demonstration on the deployed test candidate: login → workspace → discovery → file operations → clients → recovery → enabled analytics/proposal/projection jobs. It is a summary, not an additional acceptance gate for any completed slice. Production changes continue through the existing owner-merged production branch.
+After independently shippable slices are complete, the owner may request a cross-slice demonstration on the deployed test candidate: login → workspace → discovery → file operations → clients → recovery → enabled analytics/proposal/projection jobs. It is a summary, not an additional acceptance gate for any completed slice. Production changes continue through a pull request into `production` with auto-merge armed.

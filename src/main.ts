@@ -196,13 +196,24 @@ async function loadConfirmCode(): Promise<void> {
   state.confirmCode = issued.code;
 }
 
+const ALLOWANCES = ['read', 'write', 'files', 'delete'] as const;
+
+function allowanceFields(selected: readonly string[]): string {
+  return '<fieldset class="scope-choices"><legend class="sr-only">Allowances</legend>' + ALLOWANCES.map((id) => '<label><input type="checkbox" name="allowance" value="' + id + '"' + (selected.includes(id) ? ' checked' : '') + ' />' + id + '</label>').join('') + '</fieldset>';
+}
+
+function keyAllowanceForms(): string {
+  if (!state.keys.length) return '';
+  return '<div class="key-allowance-list">' + state.keys.map((key) => '<form class="key-allowance" data-form="key-allowances" data-id="' + esc(key.id) + '"><span><strong>' + esc(key.name) + '</strong></span>' + allowanceFields(key.scopes ?? []) + '<button class="button secondary" type="submit">Save allowances</button></form>').join('') + '</div>';
+}
+
 function modalMarkup(): string {
   if (!state.modal) return '';
   const close = '<button class="icon-button modal-close" type="button" data-action="close-modal" aria-label="Close dialog">×</button>';
   const shell = (title: string, body: string, footer = '') => '<dialog open class="modal" aria-labelledby="modal-title"><div class="modal-head"><div><p class="eyebrow">OCTO WORKSPACE</p><h2 id="modal-title">' + title + '</h2></div>' + close + '</div><div class="modal-body">' + body + (state.modalError ? '<p class="form-error" role="alert">' + esc(state.modalError) + '</p>' : '') + '</div>' + (footer ? '<div class="modal-foot">' + footer + '</div>' : '') + '</dialog><div class="modal-scrim" data-action="close-modal"></div>';
   if (state.modal === 'workspace') { const mfa = state.mfaEnabled ? '<label>Authenticator code<input name="mfaCode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code or recovery code" required /></label>' : ''; return shell('New Workspace', '<form data-form="workspace"><label>Workspace name<input name="name" required autocomplete="off" placeholder="e.g. Research" /></label><label>Description <span class="optional">Optional</span><textarea name="description" rows="3" placeholder="What belongs in this workspace?"></textarea></label><label>Archive after <span class="optional">Optional</span><select name="retentionDays"><option value="0">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="180">180 days</option></select></label>' + mfa + confirmByTyping() + '<button class="button primary" type="submit">Create Workspace</button></form>'); }
   if (state.modal === 'text-file') return shell('New text file', '<form data-form="text-file"><label>File name<input name="name" required placeholder="notes.txt" /></label><label>Contents<textarea name="content" rows="8" placeholder="Write something useful…"></textarea></label><button class="button primary" type="submit">Save file</button></form>');
-  if (state.modal === 'key') { const mfa = state.mfaEnabled ? '<label>Authenticator code<input name="mfaCode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code or recovery code" required /></label>' : ''; return shell('Generate API Key', '<form data-form="key"><label>Key name<input name="name" required placeholder="e.g. Ingest Agent" /></label><label>Scope<select name="scope"><option value="workspace">This workspace</option><option value="account">Account-wide</option></select></label><label>Expires in <span class="optional">Optional</span><select name="expires"><option value="">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select></label>' + mfa + confirmByTyping() + '<button class="button primary" type="submit">Generate API Key</button></form>'); }
+  if (state.modal === 'key') { const mfa = state.mfaEnabled ? '<label>Authenticator code<input name="mfaCode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code or recovery code" required /></label>' : ''; return shell('Generate API Key', '<form data-form="key"><label>Key name<input name="name" required placeholder="e.g. Ingest Agent" /></label><label>Scope<select name="scope"><option value="workspace">This workspace</option><option value="account">Account-wide</option></select></label><label>Expires in <span class="optional">Optional</span><select name="expires"><option value="">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select></label>' + allowanceFields(['read', 'write', 'files']) + mfa + confirmByTyping() + '<button class="button primary" type="submit">Generate API Key</button></form>'); }
   if (state.modal === 'share') return shell('Create share link', '<form data-form="share"><p class="muted">Anyone with this link can view this workspace gallery.</p><label>Expires in<select name="expires"><option value="0">No expiry</option><option value="24">24 hours</option><option value="168">7 days</option><option value="720">30 days</option></select></label><button class="button primary" type="submit">Create link</button></form>');
   if (state.modal === 'key-created') return shell('New API Key Minted', '<p class="muted">Copy this secret now. It is shown only once.</p><div class="secret-box"><code>' + esc(state.oneTimeSecret) + '</code><button type="button" class="text-button" data-action="copy-secret">Copy</button></div>', '<button class="button primary" data-action="done-secret" type="button">Done</button>');
   if (state.modal === 'share-created') return shell('Copy this link now', '<p class="muted">This read-only link is shown once. Anyone with it can view the shared gallery.</p><div class="secret-box"><code>' + esc(state.shareUrl) + '</code><button type="button" class="text-button" data-action="copy-share">Copy</button></div>', '<button class="button primary" data-action="done-secret" type="button">Done</button>');
@@ -273,7 +284,7 @@ function renderAccess(): string {
   const mfaBody = state.mfaEnabled
     ? '<p class="muted">Enabled. ' + state.mfaRecoveryRemaining + ' recovery codes remaining.</p><form data-form="mfa-rotate" class="access-create-form"><input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Authenticator code" aria-label="Authenticator code" required /><button class="button secondary" type="submit">Rotate recovery codes</button></form><form data-form="mfa-disable" class="access-create-form"><input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Code or recovery code" aria-label="Authenticator or recovery code" required /><button class="button danger-button" type="submit">Disable two-factor</button></form>'
     : '<p class="muted">Not enabled. Require a code from your authenticator for destructive commands like deleting a workspace.</p><button class="button secondary" type="button" data-action="mfa-begin">Set up two-factor authentication</button>';
-  return keyNotice + shareNotice + '<section class="panel"><div class="panel-head"><div><p class="eyebrow">MACHINE ACCESS</p><h2>API keys</h2><p class="panel-copy">Keys are shown once when created.</p></div><form data-form="key" class="access-create-form"><input name="name" required placeholder="e.g. Ingest Agent" aria-label="API key name" /><select name="scope" aria-label="API key scope"><option value="workspace">This workspace</option><option value="account">Account-wide</option></select><select name="expires" aria-label="API key expiration"><option value="">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select>' + confirmByTyping() + (state.mfaEnabled ? '<input name="mfaCode" required inputmode="numeric" autocomplete="one-time-code" placeholder="Authenticator code" aria-label="Authenticator code" />' : '') + '<button class="button primary" type="submit">Generate API Key</button></form></div>' + keyRows + '</section><section class="panel"><div class="panel-head"><div><p class="eyebrow">SHARED CONTENT</p><h2>Share links</h2><p class="panel-copy">Read-only access to this workspace gallery.</p></div><div class="share-create-controls"><label class="sr-only" for="share-expiry">Share link expiration</label><select id="share-expiry"><option value="0">No expiry</option><option value="1">1 hour</option><option value="24">24 hours</option><option value="168">7 days</option></select><button class="button secondary" data-action="new-share">Create link</button></div></div>' + shareRows + '</section><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">SECURITY</p><h2>Two-factor authentication</h2><p class="panel-copy">Per-account step-up for destructive commands.</p></div></div>' + mfaBody + '</section><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">WORKSPACE</p><h2>' + esc(state.workspace?.name) + '</h2><p class="panel-copy">' + esc(state.workspace?.description || 'No description') + '</p></div><span class="role-tag">' + esc(state.workspace?.role) + '</span></div><dl class="detail-list"><div><dt>Workspace slug</dt><dd>' + esc(state.workspace?.slug) + '</dd></div><div><dt>File retention</dt><dd>' + (state.workspace?.retentionDays ? state.workspace.retentionDays + ' days' : 'No automatic archive') + '</dd></div><div><dt>Confirmation</dt><dd>Type the code shown on the form</dd></div><div><dt>Two-factor</dt><dd>' + (state.mfaEnabled ? 'Enabled' : 'Not enabled') + '</dd></div></dl><button class="button danger-button" data-action="delete-workspace">Delete Workspace</button></section>';
+  return keyNotice + shareNotice + '<section class="panel"><div class="panel-head"><div><p class="eyebrow">MACHINE ACCESS</p><h2>API keys</h2><p class="panel-copy">Keys are shown once when created. Allowances are read, write, files, and delete. write includes publish and unpublish. delete removes the private file, and that call still needs an admin role on the key.</p></div><form data-form="key" class="access-create-form"><input name="name" required placeholder="e.g. Ingest Agent" aria-label="API key name" /><select name="scope" aria-label="API key scope"><option value="workspace">This workspace</option><option value="account">Account-wide</option></select><select name="expires" aria-label="API key expiration"><option value="">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select>' + allowanceFields(['read', 'write', 'files']) + confirmByTyping() + (state.mfaEnabled ? '<input name="mfaCode" required inputmode="numeric" autocomplete="one-time-code" placeholder="Authenticator code" aria-label="Authenticator code" />' : '') + '<button class="button primary" type="submit">Generate API Key</button></form></div>' + keyRows + keyAllowanceForms() + '</section><section class="panel"><div class="panel-head"><div><p class="eyebrow">SHARED CONTENT</p><h2>Share links</h2><p class="panel-copy">Read-only access to this workspace gallery.</p></div><div class="share-create-controls"><label class="sr-only" for="share-expiry">Share link expiration</label><select id="share-expiry"><option value="0">No expiry</option><option value="1">1 hour</option><option value="24">24 hours</option><option value="168">7 days</option></select><button class="button secondary" data-action="new-share">Create link</button></div></div>' + shareRows + '</section><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">SECURITY</p><h2>Two-factor authentication</h2><p class="panel-copy">Per-account step-up for destructive commands.</p></div></div>' + mfaBody + '</section><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">WORKSPACE</p><h2>' + esc(state.workspace?.name) + '</h2><p class="panel-copy">' + esc(state.workspace?.description || 'No description') + '</p></div><span class="role-tag">' + esc(state.workspace?.role) + '</span></div><dl class="detail-list"><div><dt>Workspace slug</dt><dd>' + esc(state.workspace?.slug) + '</dd></div><div><dt>File retention</dt><dd>' + (state.workspace?.retentionDays ? state.workspace.retentionDays + ' days' : 'No automatic archive') + '</dd></div><div><dt>Confirmation</dt><dd>Type the code shown on the form</dd></div><div><dt>Two-factor</dt><dd>' + (state.mfaEnabled ? 'Enabled' : 'Not enabled') + '</dd></div></dl><button class="button danger-button" data-action="delete-workspace">Delete Workspace</button></section>';
 }
 
 function renderApp(): void {
@@ -298,12 +309,37 @@ function render(): void {
   document.documentElement.dataset.octoSystem = state.theme;
   if (location.pathname.match(/^\/share\/.+/)) { void renderPublicShare(); return; }
   if (!state.token || !state.principal) renderLogin(); else renderApp();
+  finishReveal();
 }
 
 function notify(message: string): void {
   state.notice = message;
   render();
   window.setTimeout(() => { if (state.notice === message) { state.notice = ''; render(); } }, 3200);
+}
+
+// notify() only flashes a toast. This brings a control that was just drawn
+// (the confirmation code, or the one-time secret) into the visible viewport.
+// Set before render(). A workspace load can paint again after the click handler,
+// which rebuilds the page and would leave the form under the fold. The flag stays
+// until a render that is not still loading.
+let revealAccess: 'form' | 'secret' | '' = '';
+
+function reveal(selector: string, block: ScrollLogicalPosition = 'nearest'): void {
+  const node = document.querySelector(selector);
+  if (!(node instanceof HTMLElement)) return;
+  // innerHTML has just been replaced. Measuring forces layout so the scroll
+  // lands on the new form instead of the empty one from the previous paint.
+  node.getBoundingClientRect();
+  node.scrollIntoView({ block, inline: 'nearest' });
+}
+
+function finishReveal(): void {
+  if (!revealAccess || state.loading) return;
+  const mode = revealAccess;
+  revealAccess = '';
+  if (mode === 'secret') reveal('.one-time-notice', 'start');
+  else if (state.view === 'access') reveal('.access-create-form .button', 'end');
 }
 
 function openModal(modal: Modal): void { state.modal = modal; state.modalError = ''; render(); }
@@ -359,7 +395,10 @@ root.addEventListener('click', async (event) => {
   const view = target.dataset.view as View | undefined;
   if (view) {
     state.view = view;
-    if (view === 'access') await loadConfirmCode();
+    if (view === 'access') {
+      revealAccess = 'form';
+      await loadConfirmCode();
+    }
     render();
     return;
   }
@@ -434,10 +473,19 @@ root.addEventListener('submit', async (event) => {
       await api('/api/files/upload', { method: 'POST', body: JSON.stringify({ workspaceId: wsId(), name: String(data.get('name') ?? '').trim(), mimeType: 'text/plain', data: String(data.get('content') ?? ''), dataEncoding: 'utf8' }) });
       closeModal(); await loadWorkspace(wsId());
     } else if (form.dataset.form === 'key') {
-      const result = await api<{ apiKey: ApiKey; rawSecret: string }>('/api/keys', { method: 'POST', body: JSON.stringify({ name: String(data.get('name') ?? '').trim(), workspaceId: data.get('scope') === 'account' ? null : wsId(), expiresInDays: Number(data.get('expires')) || undefined, confirmSecret: String(data.get('secret') ?? ''), mfaCode: String(data.get('mfaCode') ?? '') || undefined }) });
+      const result = await api<{ apiKey: ApiKey; rawSecret: string }>('/api/keys', { method: 'POST', body: JSON.stringify({ name: String(data.get('name') ?? '').trim(), workspaceId: data.get('scope') === 'account' ? null : wsId(), scopes: data.getAll('allowance').map(String), expiresInDays: Number(data.get('expires')) || undefined, confirmSecret: String(data.get('secret') ?? ''), mfaCode: String(data.get('mfaCode') ?? '') || undefined }) });
       state.keys = [result.apiKey, ...state.keys]; state.oneTimeSecret = result.rawSecret; state.oneTimeKind = 'key'; state.modal = null;
       await loadConfirmCode();
+      revealAccess = 'secret';
       render();
+    } else if (form.dataset.form === 'key-allowances') {
+      const stamp = document.querySelector('form[data-form="key"]');
+      const confirmSecret = (stamp?.querySelector('input[name="secret"]') as HTMLInputElement | null)?.value ?? '';
+      const mfaCode = (stamp?.querySelector('input[name="mfaCode"]') as HTMLInputElement | null)?.value || undefined;
+      const updated = await api<ApiKey>('/api/keys/' + encodeURIComponent(form.dataset.id ?? ''), { method: 'PATCH', body: JSON.stringify({ scopes: data.getAll('allowance').map(String), confirmSecret, mfaCode }) });
+      state.keys = state.keys.map((key) => key.id === updated.id ? { ...key, scopes: updated.scopes } : key);
+      await loadConfirmCode();
+      notify('Allowances saved');
     } else if (form.dataset.form === 'share') {
       const expiry = Number(data.get('expires')) || null;
       const result = await api<{ rawToken: string; share: Omit<ShareSummary, 'active'> }>('/api/workspaces/shares', { method: 'POST', body: JSON.stringify({ workspaceId: wsId(), resourceType: 'gallery', permission: 'read', expiresInHours: expiry }) });
@@ -461,10 +509,11 @@ root.addEventListener('submit', async (event) => {
     }
   } catch (error) {
     state.modalError = error instanceof Error ? error.message : 'Could not complete this action.';
-    if (form.dataset.form === 'workspace' || form.dataset.form === 'key' || form.dataset.form === 'delete-workspace') {
+    if (form.dataset.form === 'workspace' || form.dataset.form === 'key' || form.dataset.form === 'key-allowances' || form.dataset.form === 'delete-workspace') {
       try { await loadConfirmCode(); } catch { /* keep the action error */ }
     }
-    render();
+    if (state.modal) render();
+    else notify(state.modalError);
   }
 });
 
