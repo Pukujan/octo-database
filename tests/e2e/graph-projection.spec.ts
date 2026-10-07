@@ -274,4 +274,56 @@ test.describe('Rebuildable workspace-graph projection', () => {
     expect(staleHealth.status()).toBe(200);
     expect(((await staleHealth.json()) as any).stale).toBe(true);
   });
+
+  test('a queued graph_rebuild job projects the workspace graph', async ({ request }) => {
+    const owner = await createGuest(request);
+    const key = await mintKey(request, owner.sessionToken, owner.workspace.id, ['read', 'write']);
+    const token = key.rawSecret;
+    const ws = owner.workspace.id;
+
+    const probe = await project(request, token, ws);
+    test.skip(probe.status() === 503, 'A FalkorDB engine is required for the projection eval');
+
+    const entity = await record(request, token, {
+      workspaceId: ws,
+      kind: 'entity',
+      name: `Job Entity ${randomUUID()}`,
+      entityType: 'policy',
+    });
+    await record(request, token, {
+      workspaceId: ws,
+      kind: 'claim',
+      subjectEntityId: entity.entity.id,
+      statement: 'A claim projected by a queued rebuild.',
+      validFrom: T1,
+      recordedAt: T1,
+    });
+
+    // Enqueue through the generic job route, then drain one worker pass: the graph
+    // is a read model the queue drives, not only the on-demand project route.
+    const enqueued = await request.post('/api/jobs', {
+      headers: bearer(token),
+      data: {
+        workspaceId: ws,
+        jobType: 'graph_rebuild',
+        idempotencyKey: `graph-rebuild-${randomUUID()}`,
+        payload: {},
+      },
+    });
+    expect(enqueued.status(), await enqueued.text()).toBe(201);
+
+    const run = await request.post(`/api/jobs/run?workspaceId=${ws}`, { headers: bearer(token) });
+    expect(run.status()).toBe(200);
+    expect((((await run.json()) as any).outcomes as Array<{ status: string }>).some((o) => o.status === 'completed')).toBe(true);
+
+    const projected = await queryGraph(request, token, ws, 'MATCH (c:Claim) RETURN count(c) AS n');
+    expect(projected.status()).toBe(200);
+    const rows = ((await projected.json()) as any).rows as Array<{ n: number }>;
+    expect(Number(rows[0]?.n)).toBe(1);
+
+    // The job recorded a fresh projection, so health reports the graph as current.
+    const fresh = await health(request, token, ws);
+    expect(fresh.status()).toBe(200);
+    expect(((await fresh.json()) as any).stale).toBe(false);
+  });
 });

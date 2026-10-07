@@ -131,9 +131,12 @@ import {
   dbClaimsAsOf,
   dbBeliefAsOf,
   dbReadEpistemicGraph,
+  dbReadEpistemicGraphService,
   dbEpistemicWatermark,
+  dbEpistemicWatermarkService,
   dbGetGraphProjection,
   dbUpsertGraphProjection,
+  dbUpsertGraphProjectionService,
   dbEnqueueJob,
   dbRetryJob,
   dbFailJob,
@@ -589,6 +592,19 @@ async function drainQueueOnce(targetWorkspaceId?: string, maxJobs = 10): Promise
       },
       archive: archiveDeps ?? undefined,
       loadArchiveTarget: archiveDeps ? loadArchiveRecord : undefined,
+      // A queued `graph_rebuild` projects the workspace's canonical ledger into its
+      // graph, the same destroy-and-rebuild the on-demand project route performs. The
+      // graph name is derived from the job's workspace by the client, so a rebuild is
+      // confined to one tenant. The scheduler drain runs with no caller identity, so
+      // the ledger read and the projection write go through the trusted pool -- the
+      // job's workspace is the authority, as it is for the archive jobs above. Absent
+      // `OCTO_GRAPH_URL`, the handler fails the job with GRAPH_NOT_CONFIGURED.
+      graphProjection: {
+        client: graphClient ?? undefined,
+        readLedger: (workspaceId) => dbReadEpistemicGraphService(workspaceId),
+        watermark: (workspaceId) => dbEpistemicWatermarkService(workspaceId),
+        record: (row) => dbUpsertGraphProjectionService(row),
+      },
       // Resolve the thumbnail target through the trusted service pool: the app
       // pool is RLS-fenced and the scheduler drain runs with no caller identity.
       // Pinning to the job's workspace is what stops a payload from pointing the
@@ -1636,6 +1652,24 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         }
       }
 
+      // The graph is a derived read model with no irreplaceable data, so its
+      // lifecycle ends with the workspace: leaving it behind would accumulate
+      // in-memory graphs the engine never reclaims. Best effort, like the database
+      // drop above -- the workspace is already gone, so a failure is reported
+      // rather than failing the delete.
+      let orphanedGraph = false;
+      if (graphClient) {
+        try {
+          await graphClient.deleteGraph(workspaceId);
+        } catch (err) {
+          console.error(
+            `[workspaces] failed to delete graph for ${workspaceId}:`,
+            err instanceof Error ? err.message : String(err)
+          );
+          orphanedGraph = true;
+        }
+      }
+
       sendJson(res, 200, {
         success: true,
         workspaceId,
@@ -1645,6 +1679,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         // instead of a silent leak.
         orphanedObjects: storageKeys,
         orphanedDatabase,
+        orphanedGraph,
       });
       return;
     }
