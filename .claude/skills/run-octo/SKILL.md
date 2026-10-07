@@ -112,13 +112,20 @@ Use the returned `sessionToken` as `Authorization: Bearer <token>` for
 ## Test
 
 ```bash
-npm test          # vitest unit tests
-npx playwright test   # e2e (auto-starts server:3001 + vite:3000 via webServer)
+npm test          # vitest unit tests — 341 tests, ~17s
+```
+
+E2E needs the local `DATABASE_URL` in the **runner's** env (not only the server's),
+or specs that seed fixtures fail with `owner-db: DATABASE_URL ... is required`:
+
+```bash
+DATABASE_URL="postgresql://postgres@localhost:54329/octo" npx playwright test tests/e2e/dashboard-ui.spec.ts
 ```
 
 Playwright's `webServer` config starts its own API on 3001 and Vite on 3000, and
 reuses an already-running server when not in `CI`. Set `CI=1` to force a fresh
-server when validating a server-source change.
+server when validating a server-source change. The full suite (`npx playwright test`)
+runs 40+ specs at `workers: 1` and takes many minutes — prefer a targeted spec.
 
 ## Gotchas
 
