@@ -1560,6 +1560,302 @@ export async function dbMatchChunks(
   );
 }
 
+// 7. Epistemic ledger (Slice 9): append-only bitemporal claims, beliefs, evidence.
+//
+// Every helper here runs on the fenced app pool (`query`/`withTransaction`), so the
+// RLS operator-insert policy and the tenant fence are the authorization gate. This
+// module adds no policy of its own: it writes the row the schema permits, and a
+// caller below operator (or outside the workspace) is refused by Postgres.
+
+export type BeliefStance = 'believes' | 'disbelieves' | 'uncertain';
+export type ClaimEvidenceStance = 'supports' | 'contradicts' | 'qualifies';
+export type ClaimRelation =
+  | 'SUPPORTS'
+  | 'CONTRADICTS'
+  | 'SUPERSEDES'
+  | 'QUALIFIES'
+  | 'DERIVED_FROM'
+  | 'DUPLICATES'
+  | 'REFINES';
+
+/** Idempotent: a repeat of (workspace, name, entity_type) returns the existing row. */
+export async function dbEnsureEpistemicEntity(
+  workspaceId: string,
+  name: string,
+  entityType: string
+): Promise<{ id: string; name: string; entityType: string }> {
+  const inserted = await query<{ id: string; name: string; entityType: string }>(
+    `INSERT INTO octo.epistemic_entities (workspace_id, name, entity_type)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (workspace_id, name, entity_type) DO NOTHING
+     RETURNING id, name, entity_type AS "entityType"`,
+    [workspaceId, name, entityType]
+  );
+  if (inserted[0]) return inserted[0];
+
+  const existing = await query<{ id: string; name: string; entityType: string }>(
+    `SELECT id, name, entity_type AS "entityType"
+     FROM octo.epistemic_entities
+     WHERE workspace_id = $1 AND name = $2 AND entity_type = $3`,
+    [workspaceId, name, entityType]
+  );
+  return existing[0]!;
+}
+
+/** Idempotent: a repeat of (workspace, name) returns the existing perspective. */
+export async function dbEnsurePerspective(
+  workspaceId: string,
+  name: string,
+  description: string | null
+): Promise<{ id: string; name: string; description: string | null }> {
+  const inserted = await query<{ id: string; name: string; description: string | null }>(
+    `INSERT INTO octo.perspectives (workspace_id, name, description)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (workspace_id, name) DO NOTHING
+     RETURNING id, name, description`,
+    [workspaceId, name, description]
+  );
+  if (inserted[0]) return inserted[0];
+
+  const existing = await query<{ id: string; name: string; description: string | null }>(
+    `SELECT id, name, description FROM octo.perspectives WHERE workspace_id = $1 AND name = $2`,
+    [workspaceId, name]
+  );
+  return existing[0]!;
+}
+
+/** An immutable evidence reference. Never stores bytes; only points at a source. */
+export async function dbInsertEvidence(params: {
+  workspaceId: string;
+  sourceFileId: string | null;
+  locator: string | null;
+  quote: string | null;
+  contentHash: string | null;
+  createdBy: string | null;
+}): Promise<{ id: string; createdAt: string }> {
+  const rows = await query<{ id: string; createdAt: string }>(
+    `INSERT INTO octo.evidence (workspace_id, source_file_id, locator, quote, content_hash, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, created_at AS "createdAt"`,
+    [params.workspaceId, params.sourceFileId, params.locator, params.quote, params.contentHash, params.createdBy]
+  );
+  return rows[0]!;
+}
+
+/**
+ * Records a claim. When `supersedesClaimId` is given, the superseding relation and
+ * the closing of the older claim's recorded-time interval happen in the same
+ * transaction, so history is appended to, never rewritten: the old row survives
+ * with `superseded_at` set and stops counting as current after that instant.
+ */
+export async function dbInsertClaim(params: {
+  workspaceId: string;
+  subjectEntityId: string | null;
+  statement: string;
+  validFrom: string | null;
+  validTo: string | null;
+  recordedAt: string | null;
+  provenance: Record<string, unknown>;
+  supersedesClaimId: string | null;
+  createdBy: string | null;
+}): Promise<{ id: string; recordedAt: string; supersededClaimId: string | null }> {
+  return withTransaction(async (tx) => {
+    const inserted = (await tx.query(
+      `INSERT INTO octo.claims
+
+         (workspace_id, subject_entity_id, statement, valid_from, valid_to, recorded_at, provenance, created_by)
+       VALUES (
+         $1, $2, $3,
+         COALESCE($4::timestamptz, now()),
+         $5::timestamptz,
+         COALESCE($6::timestamptz, now()),
+         $7::jsonb, $8
+       )
+       RETURNING id, recorded_at AS "recordedAt"`,
+      [
+        params.workspaceId,
+        params.subjectEntityId,
+        params.statement,
+        params.validFrom,
+        params.validTo,
+        params.recordedAt,
+        JSON.stringify(params.provenance),
+        params.createdBy,
+      ]
+    )).rows as Array<{ id: string; recordedAt: string }>;
+    const claim = inserted[0]!;
+
+    if (params.supersedesClaimId) {
+      await tx.query(
+        `INSERT INTO octo.claim_relations
+           (workspace_id, from_claim_id, to_claim_id, relation, recorded_at, created_by)
+         VALUES ($1, $2, $3, 'SUPERSEDES', $4::timestamptz, $5)`,
+        [params.workspaceId, claim.id, params.supersedesClaimId, claim.recordedAt, params.createdBy]
+      );
+      await tx.query(
+        `UPDATE octo.claims
+         SET superseded_at = $3::timestamptz
+         WHERE workspace_id = $1 AND id = $2 AND superseded_at IS NULL`,
+        [params.workspaceId, params.supersedesClaimId, claim.recordedAt]
+      );
+    }
+
+    return { id: claim.id, recordedAt: claim.recordedAt, supersededClaimId: params.supersedesClaimId };
+  });
+}
+
+/** One perspective's stance on one claim, bitemporal and append-only. */
+export async function dbInsertBelief(params: {
+  workspaceId: string;
+  perspectiveId: string;
+  claimId: string;
+  stance: BeliefStance;
+  confidence: number | null;
+  validFrom: string | null;
+  validTo: string | null;
+  recordedAt: string | null;
+}): Promise<{ id: string; recordedAt: string }> {
+  const rows = await query<{ id: string; recordedAt: string }>(
+    `INSERT INTO octo.beliefs
+       (workspace_id, perspective_id, claim_id, stance, confidence, valid_from, valid_to, recorded_at)
+     VALUES (
+       $1, $2, $3, $4, $5,
+       COALESCE($6::timestamptz, now()),
+       $7::timestamptz,
+       COALESCE($8::timestamptz, now())
+     )
+     RETURNING id, recorded_at AS "recordedAt"`,
+    [
+      params.workspaceId,
+      params.perspectiveId,
+      params.claimId,
+      params.stance,
+      params.confidence,
+      params.validFrom,
+      params.validTo,
+      params.recordedAt,
+    ]
+  );
+  return rows[0]!;
+}
+
+export async function dbInsertClaimRelation(params: {
+  workspaceId: string;
+  fromClaimId: string;
+  toClaimId: string;
+  relation: ClaimRelation;
+  recordedAt: string | null;
+  createdBy: string | null;
+}): Promise<{ id: string }> {
+  const rows = await query<{ id: string }>(
+    `INSERT INTO octo.claim_relations
+       (workspace_id, from_claim_id, to_claim_id, relation, recorded_at, created_by)
+     VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), $6)
+     RETURNING id`,
+    [params.workspaceId, params.fromClaimId, params.toClaimId, params.relation, params.recordedAt, params.createdBy]
+  );
+  return rows[0]!;
+}
+
+export async function dbInsertClaimEvidence(params: {
+  workspaceId: string;
+  claimId: string;
+  evidenceId: string;
+  stance: ClaimEvidenceStance;
+}): Promise<{ id: string }> {
+  const rows = await query<{ id: string }>(
+    `INSERT INTO octo.claim_evidence (workspace_id, claim_id, evidence_id, stance)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (claim_id, evidence_id, stance) DO NOTHING
+     RETURNING id`,
+    [params.workspaceId, params.claimId, params.evidenceId, params.stance]
+  );
+  if (rows[0]) return rows[0];
+  const existing = await query<{ id: string }>(
+    `SELECT id FROM octo.claim_evidence
+     WHERE workspace_id = $1 AND claim_id = $2 AND evidence_id = $3 AND stance = $4`,
+    [params.workspaceId, params.claimId, params.evidenceId, params.stance]
+  );
+  return existing[0]!;
+}
+
+/**
+ * Query mode 2: with current knowledge, which claims do we now consider valid at a
+ * world instant? The canonical function applies both time axes; the join adds the
+ * provenance the caller needs to cite the run/source that produced each claim.
+ */
+export async function dbClaimsAsOf(
+  workspaceId: string,
+  asOfRecorded: string,
+  asOfValid: string | null
+): Promise<
+  Array<{
+    claimId: string;
+    statement: string;
+    validFrom: string;
+    validTo: string | null;
+    recordedAt: string;
+    provenance: Record<string, unknown>;
+  }>
+> {
+  return query(
+    `SELECT f.claim_id AS "claimId", f.statement, f.valid_from AS "validFrom", f.valid_to AS "validTo",
+            c.recorded_at AS "recordedAt", c.provenance
+     FROM octo.claims_as_of($1::uuid, $2::timestamptz, $3::timestamptz) f
+     LEFT JOIN octo.claims c ON c.id = f.claim_id
+     ORDER BY c.recorded_at DESC`,
+    [workspaceId, asOfRecorded, asOfValid]
+  );
+}
+
+/**
+ * Query mode 1: what did perspective P believe about a claim as of a recorded
+ * instant (and a world instant)? Returns the belief plus the evidence linked to the
+ * claim, so the answer cites its sources.
+ */
+export async function dbBeliefAsOf(
+  workspaceId: string,
+  perspectiveId: string,
+  claimId: string,
+  asOfRecorded: string,
+  asOfValid: string
+): Promise<{
+  belief: { stance: string; confidence: number | null; beliefId: string } | null;
+  evidence: Array<{
+    evidenceId: string;
+    stance: string;
+    locator: string | null;
+    quote: string | null;
+    contentHash: string | null;
+    sourceFileId: string | null;
+  }>;
+}> {
+  const beliefRows = await query<{ stance: string; confidence: number | null; beliefId: string }>(
+    `SELECT stance, confidence, belief_id AS "beliefId"
+     FROM octo.belief_as_of($1::uuid, $2::uuid, $3::uuid, $4::timestamptz, $5::timestamptz)`,
+    [workspaceId, perspectiveId, claimId, asOfRecorded, asOfValid]
+  );
+
+  const evidence = await query<{
+    evidenceId: string;
+    stance: string;
+    locator: string | null;
+    quote: string | null;
+    contentHash: string | null;
+    sourceFileId: string | null;
+  }>(
+    `SELECT e.id AS "evidenceId", ce.stance, e.locator, e.quote,
+            e.content_hash AS "contentHash", e.source_file_id AS "sourceFileId"
+     FROM octo.claim_evidence ce
+     JOIN octo.evidence e ON e.id = ce.evidence_id
+     WHERE ce.workspace_id = $1 AND ce.claim_id = $2
+     ORDER BY ce.created_at`,
+    [workspaceId, claimId]
+  );
+
+  return { belief: beliefRows[0] ?? null, evidence };
+}
+
 // 6. Workspace data plane (Slice 13): atomic workspace create, delete, and the
 // confirmation/retention helpers. Kept together so the multi-write invariant in
 // dbCreateWorkspaceAtomic is easy to audit.

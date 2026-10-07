@@ -161,6 +161,30 @@ export const OCTO_CAPABILITIES: CapabilityDescriptor[] = [
       'Classified failures for an authorized workspace: counts by error code, by job type and day, and the jobs needing attention.',
   },
   {
+    action: 'epistemic.record',
+    method: 'POST',
+    path: '/api/epistemic/record',
+    requiredScope: 'write',
+    description:
+      'Append one record to an authorized workspace\'s bitemporal knowledge ledger. `kind` selects the record: entity, perspective, evidence, claim, belief, claim_relation, or claim_evidence. Nothing is overwritten -- a correction is a new row; recording a claim with supersedesClaimId closes the older claim\'s recorded-time interval instead of rewriting it. Requires operator role or higher.',
+  },
+  {
+    action: 'epistemic.claims_as_of',
+    method: 'GET',
+    path: '/api/epistemic/claims-as-of?workspaceId=<id>&asOfRecorded=<iso>&asOfValid=<iso>',
+    requiredScope: 'read',
+    description:
+      'With current knowledge, list the claims considered valid at a world instant, each with its provenance. Applies both time axes: recorded time (what had been recorded by asOfRecorded) and valid time (what was true at asOfValid).',
+  },
+  {
+    action: 'epistemic.belief_as_of',
+    method: 'GET',
+    path: '/api/epistemic/belief-as-of?workspaceId=<id>&perspectiveId=<id>&claimId=<id>&asOfRecorded=<iso>&asOfValid=<iso>',
+    requiredScope: 'read',
+    description:
+      'What one perspective believed about a claim as of a recorded instant, with the evidence linked to that claim. Two perspectives may hold different beliefs about the same claim; the answer cites the sources.',
+  },
+  {
     action: 'graph.query',
     method: 'POST',
     path: '/api/graph/query',
@@ -245,7 +269,7 @@ export function capabilitiesForScopes(scopes: string[]): CapabilityDescriptor[] 
 export function minimumRoleForCapability(action: string): 'member' | 'operator' | 'admin' {
   if (action === 'files.delete') return 'admin';
   if (
-    ['files.upload', 'files.publish', 'files.unpublish', 'files.archive', 'files.restore', 'jobs.enqueue', 'jobs.run'].includes(
+    ['files.upload', 'files.publish', 'files.unpublish', 'files.archive', 'files.restore', 'jobs.enqueue', 'jobs.run', 'epistemic.record'].includes(
       action
     )
   ) {
