@@ -112,7 +112,11 @@ export function parseKeyScopes(
   if (unknown.length > 0) {
     return { ok: false, error: `BAD_REQUEST: unknown scopes: ${unknown.join(', ')}` };
   }
-  return { ok: true, scopes: [...new Set(requested as string[])] };
+  const scopes: string[] = [];
+  for (const scope of requested as string[]) {
+    if (!scopes.includes(scope)) scopes.push(scope);
+  }
+  return { ok: true, scopes };
 }
 
 /**
