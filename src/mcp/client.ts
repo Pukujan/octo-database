@@ -174,6 +174,36 @@ export class OctoApi {
     });
   }
 
+  recordEpistemic(input: Record<string, unknown> & { workspaceId: string; kind: string }): Promise<unknown> {
+    return this.request('POST', '/api/epistemic/record', input);
+  }
+
+  claimsAsOf(input: { workspaceId: string; asOfRecorded: string; asOfValid?: string }): Promise<unknown> {
+    const params = new URLSearchParams({
+      workspaceId: input.workspaceId,
+      asOfRecorded: input.asOfRecorded,
+    });
+    if (input.asOfValid !== undefined) params.set('asOfValid', input.asOfValid);
+    return this.request('GET', `/api/epistemic/claims-as-of?${params.toString()}`);
+  }
+
+  beliefAsOf(input: {
+    workspaceId: string;
+    perspectiveId: string;
+    claimId: string;
+    asOfRecorded: string;
+    asOfValid?: string;
+  }): Promise<unknown> {
+    const params = new URLSearchParams({
+      workspaceId: input.workspaceId,
+      perspectiveId: input.perspectiveId,
+      claimId: input.claimId,
+      asOfRecorded: input.asOfRecorded,
+    });
+    if (input.asOfValid !== undefined) params.set('asOfValid', input.asOfValid);
+    return this.request('GET', `/api/epistemic/belief-as-of?${params.toString()}`);
+  }
+
   listOpsEvents(input: { workspaceId: string; errorCode?: string }): Promise<unknown> {
     const params = new URLSearchParams({ workspaceId: input.workspaceId });
     if (input.errorCode !== undefined) params.set('errorCode', input.errorCode);
