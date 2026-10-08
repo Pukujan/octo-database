@@ -20,6 +20,9 @@ import type { GraphClient } from './falkordb-client';
 /** Bumped when the node/edge shape changes; stored so staleness is visible. */
 export const GRAPH_SCHEMA_VERSION = '1';
 
+/** The labels whose `id` the projector MERGEs and MATCHes on. */
+const INDEXED_LABELS = ['Entity', 'Claim', 'Evidence', 'Perspective', 'Belief'] as const;
+
 export interface ProjectionInput {
   entities: Array<{ id: string; name: string; entityType: string }>;
   claims: Array<{
@@ -104,6 +107,14 @@ export async function projectWorkspaceGraph(
   data: ProjectionInput
 ): Promise<ProjectionCounts> {
   await client.deleteGraph(workspaceId);
+
+  // Index the `id` the projector MERGEs and MATCHes on. Without an index every MERGE
+  // scans the whole label, making a rebuild quadratic in the workspace's row count.
+  // The graph was just deleted, so no index exists yet -- a rebuild always starts
+  // from a clean graph, so these never collide with an existing index.
+  for (const label of INDEXED_LABELS) {
+    await client.rwQuery(workspaceId, `CREATE INDEX FOR (n:${label}) ON (n.id)`);
+  }
 
   for (const chunk of batches(data.entities)) {
     await client.rwQuery(
