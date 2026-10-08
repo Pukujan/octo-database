@@ -47,6 +47,7 @@ import {
 import { chunkKey, chunkText, contentHash, extractText } from '../rag/pipeline';
 import { embedTexts, loadEmbeddingConfigFromEnv } from '../rag/embeddings';
 import { GraphClient, loadGraphConfigFromEnv } from '../graph/falkordb-client';
+import { GRAPH_SCHEMA_VERSION, projectWorkspaceGraph } from '../graph/projector';
 import { hashApiKeySecret, authorizeKeyMint, parseKeyScopes } from '../api/keys';
 import { acceptConfirmChallenge, hasConfirmChallenge, issueConfirmChallenge } from '../auth/confirm-challenge';
 import { sendStaticFile } from './static-file';
@@ -120,6 +121,22 @@ import {
   dbMatchChunks,
   dbReplaceChunksAndEmbeddings,
   dbUpsertDocumentVersion,
+  dbEnsureEpistemicEntity,
+  dbEnsurePerspective,
+  dbInsertEvidence,
+  dbInsertClaim,
+  dbInsertBelief,
+  dbInsertClaimRelation,
+  dbInsertClaimEvidence,
+  dbClaimsAsOf,
+  dbBeliefAsOf,
+  dbReadEpistemicGraph,
+  dbReadEpistemicGraphService,
+  dbEpistemicWatermark,
+  dbEpistemicWatermarkService,
+  dbGetGraphProjection,
+  dbUpsertGraphProjection,
+  dbUpsertGraphProjectionService,
   dbEnqueueJob,
   dbRetryJob,
   dbFailJob,
@@ -575,6 +592,19 @@ async function drainQueueOnce(targetWorkspaceId?: string, maxJobs = 10): Promise
       },
       archive: archiveDeps ?? undefined,
       loadArchiveTarget: archiveDeps ? loadArchiveRecord : undefined,
+      // A queued `graph_rebuild` projects the workspace's canonical ledger into its
+      // graph, the same destroy-and-rebuild the on-demand project route performs. The
+      // graph name is derived from the job's workspace by the client, so a rebuild is
+      // confined to one tenant. The scheduler drain runs with no caller identity, so
+      // the ledger read and the projection write go through the trusted pool -- the
+      // job's workspace is the authority, as it is for the archive jobs above. Absent
+      // `OCTO_GRAPH_URL`, the handler fails the job with GRAPH_NOT_CONFIGURED.
+      graphProjection: {
+        client: graphClient ?? undefined,
+        readLedger: (workspaceId) => dbReadEpistemicGraphService(workspaceId),
+        watermark: (workspaceId) => dbEpistemicWatermarkService(workspaceId),
+        record: (row) => dbUpsertGraphProjectionService(row),
+      },
       // Resolve the thumbnail target through the trusted service pool: the app
       // pool is RLS-fenced and the scheduler drain runs with no caller identity.
       // Pinning to the job's workspace is what stops a payload from pointing the
@@ -1622,6 +1652,24 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         }
       }
 
+      // The graph is a derived read model with no irreplaceable data, so its
+      // lifecycle ends with the workspace: leaving it behind would accumulate
+      // in-memory graphs the engine never reclaims. Best effort, like the database
+      // drop above -- the workspace is already gone, so a failure is reported
+      // rather than failing the delete.
+      let orphanedGraph = false;
+      if (graphClient) {
+        try {
+          await graphClient.deleteGraph(workspaceId);
+        } catch (err) {
+          console.error(
+            `[workspaces] failed to delete graph for ${workspaceId}:`,
+            err instanceof Error ? err.message : String(err)
+          );
+          orphanedGraph = true;
+        }
+      }
+
       sendJson(res, 200, {
         success: true,
         workspaceId,
@@ -1631,6 +1679,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         // instead of a silent leak.
         orphanedObjects: storageKeys,
         orphanedDatabase,
+        orphanedGraph,
       });
       return;
     }
@@ -3503,6 +3552,490 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         matches: results,
         // Provenance: each match carries the version and the exact embedding/chunker
         // configuration that produced it.
+      });
+      return;
+    }
+
+    // Epistemic ledger: POST /api/epistemic/record -- one append-only write into a
+    // workspace's bitemporal knowledge ledger. The `kind` selects which record is
+    // being written; each kind validates only its own fields.
+    if (pathname === '/api/epistemic/record' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
+        return;
+      }
+
+      const body = (await readJsonObject(req)) as Record<string, any>;
+      const { workspaceId, kind } = body;
+
+      if (!workspaceId || !kind) {
+        sendJson(res, 400, { error: 'workspaceId and kind are required' });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem || !roleAllows(auth, mem.role, 'operator')) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Operator role or higher required to record epistemic data' });
+        return;
+      }
+
+      const createdBy = auth.principal.id;
+      const asTimestamp = (value: unknown, field: string): { ok: true; value: string | null } | { ok: false } => {
+        if (value === undefined || value === null) return { ok: true, value: null };
+        if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+          sendJson(res, 400, { error: `${field} must be an ISO 8601 timestamp` });
+          return { ok: false };
+        }
+        return { ok: true, value };
+      };
+      const asUuidOrNull = (value: unknown, field: string): { ok: true; value: string | null } | { ok: false } => {
+        if (value === undefined || value === null || value === '') return { ok: true, value: null };
+        if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
+          sendJson(res, 400, { error: `${field} must be a UUID` });
+          return { ok: false };
+        }
+        return { ok: true, value };
+      };
+
+      try {
+        if (kind === 'entity') {
+          const { name, entityType } = body;
+          if (typeof name !== 'string' || !name.trim()) {
+            sendJson(res, 400, { error: 'name is required to record an entity' });
+            return;
+          }
+          const entity = await dbEnsureEpistemicEntity(
+            workspaceId,
+            name,
+            typeof entityType === 'string' && entityType.trim() ? entityType : 'entity'
+          );
+          sendJson(res, 201, { kind, entity });
+          return;
+        }
+
+        if (kind === 'perspective') {
+          const { name, description } = body;
+          if (typeof name !== 'string' || !name.trim()) {
+            sendJson(res, 400, { error: 'name is required to record a perspective' });
+            return;
+          }
+          const perspective = await dbEnsurePerspective(
+            workspaceId,
+            name,
+            typeof description === 'string' ? description : null
+          );
+          sendJson(res, 201, { kind, perspective });
+          return;
+        }
+
+        if (kind === 'evidence') {
+          const sourceFileId = asUuidOrNull(body.sourceFileId, 'sourceFileId');
+          if (!sourceFileId.ok) return;
+          const { locator, quote, contentHash } = body;
+          if (
+            sourceFileId.value === null &&
+            !(typeof locator === 'string' && locator.trim()) &&
+            !(typeof quote === 'string' && quote.trim()) &&
+            !(typeof contentHash === 'string' && contentHash.trim())
+          ) {
+            sendJson(res, 400, {
+              error: 'evidence requires at least one of sourceFileId, locator, quote, or contentHash',
+            });
+            return;
+          }
+          const evidence = await dbInsertEvidence({
+            workspaceId,
+            sourceFileId: sourceFileId.value,
+            locator: typeof locator === 'string' ? locator : null,
+            quote: typeof quote === 'string' ? quote : null,
+            contentHash: typeof contentHash === 'string' ? contentHash : null,
+            createdBy,
+          });
+          sendJson(res, 201, { kind, evidence });
+          return;
+        }
+
+        if (kind === 'claim') {
+          const subjectEntityId = asUuidOrNull(body.subjectEntityId, 'subjectEntityId');
+          if (!subjectEntityId.ok) return;
+          const supersedesClaimId = asUuidOrNull(body.supersedesClaimId, 'supersedesClaimId');
+          if (!supersedesClaimId.ok) return;
+          const validFrom = asTimestamp(body.validFrom, 'validFrom');
+          if (!validFrom.ok) return;
+          const validTo = asTimestamp(body.validTo, 'validTo');
+          if (!validTo.ok) return;
+          const recordedAt = asTimestamp(body.recordedAt, 'recordedAt');
+          if (!recordedAt.ok) return;
+          const { statement, provenance } = body;
+          if (typeof statement !== 'string' || !statement.trim()) {
+            sendJson(res, 400, { error: 'statement is required to record a claim' });
+            return;
+          }
+          if (provenance !== undefined && (typeof provenance !== 'object' || provenance === null || Array.isArray(provenance))) {
+            sendJson(res, 400, { error: 'provenance must be a JSON object' });
+            return;
+          }
+          const claim = await dbInsertClaim({
+            workspaceId,
+            subjectEntityId: subjectEntityId.value,
+            statement,
+            validFrom: validFrom.value,
+            validTo: validTo.value,
+            recordedAt: recordedAt.value,
+            provenance: (provenance as Record<string, unknown>) ?? {},
+            supersedesClaimId: supersedesClaimId.value,
+            createdBy,
+          });
+          sendJson(res, 201, { kind, claim });
+          return;
+        }
+
+        if (kind === 'belief') {
+          const perspectiveId = asUuidOrNull(body.perspectiveId, 'perspectiveId');
+          if (!perspectiveId.ok) return;
+          const claimId = asUuidOrNull(body.claimId, 'claimId');
+          if (!claimId.ok) return;
+          const validFrom = asTimestamp(body.validFrom, 'validFrom');
+          if (!validFrom.ok) return;
+          const validTo = asTimestamp(body.validTo, 'validTo');
+          if (!validTo.ok) return;
+          const recordedAt = asTimestamp(body.recordedAt, 'recordedAt');
+          if (!recordedAt.ok) return;
+          const { stance, confidence } = body;
+          if (!perspectiveId.value || !claimId.value) {
+            sendJson(res, 400, { error: 'perspectiveId and claimId are required to record a belief' });
+            return;
+          }
+          if (!['believes', 'disbelieves', 'uncertain'].includes(stance)) {
+            sendJson(res, 400, { error: 'stance must be one of believes, disbelieves, uncertain' });
+            return;
+          }
+          if (confidence !== undefined && confidence !== null && (typeof confidence !== 'number' || confidence < 0 || confidence > 1)) {
+            sendJson(res, 400, { error: 'confidence must be a number between 0 and 1' });
+            return;
+          }
+          const belief = await dbInsertBelief({
+            workspaceId,
+            perspectiveId: perspectiveId.value,
+            claimId: claimId.value,
+            stance,
+            confidence: typeof confidence === 'number' ? confidence : null,
+            validFrom: validFrom.value,
+            validTo: validTo.value,
+            recordedAt: recordedAt.value,
+          });
+          sendJson(res, 201, { kind, belief });
+          return;
+        }
+
+        if (kind === 'claim_relation') {
+          const fromClaimId = asUuidOrNull(body.fromClaimId, 'fromClaimId');
+          if (!fromClaimId.ok) return;
+          const toClaimId = asUuidOrNull(body.toClaimId, 'toClaimId');
+          if (!toClaimId.ok) return;
+          const recordedAt = asTimestamp(body.recordedAt, 'recordedAt');
+          if (!recordedAt.ok) return;
+          const { relation } = body;
+          if (!fromClaimId.value || !toClaimId.value) {
+            sendJson(res, 400, { error: 'fromClaimId and toClaimId are required' });
+            return;
+          }
+          const relations = ['SUPPORTS', 'CONTRADICTS', 'SUPERSEDES', 'QUALIFIES', 'DERIVED_FROM', 'DUPLICATES', 'REFINES'];
+          if (!relations.includes(relation)) {
+            sendJson(res, 400, { error: `relation must be one of ${relations.join(', ')}` });
+            return;
+          }
+          if (fromClaimId.value === toClaimId.value) {
+            sendJson(res, 400, { error: 'a claim cannot relate to itself' });
+            return;
+          }
+          const created = await dbInsertClaimRelation({
+            workspaceId,
+            fromClaimId: fromClaimId.value,
+            toClaimId: toClaimId.value,
+            relation,
+            recordedAt: recordedAt.value,
+            createdBy,
+          });
+          sendJson(res, 201, { kind, claimRelation: created });
+          return;
+        }
+
+        if (kind === 'claim_evidence') {
+          const claimId = asUuidOrNull(body.claimId, 'claimId');
+          if (!claimId.ok) return;
+          const evidenceId = asUuidOrNull(body.evidenceId, 'evidenceId');
+          if (!evidenceId.ok) return;
+          const { stance } = body;
+          if (!claimId.value || !evidenceId.value) {
+            sendJson(res, 400, { error: 'claimId and evidenceId are required' });
+            return;
+          }
+          if (!['supports', 'contradicts', 'qualifies'].includes(stance)) {
+            sendJson(res, 400, { error: 'stance must be one of supports, contradicts, qualifies' });
+            return;
+          }
+          const link = await dbInsertClaimEvidence({
+            workspaceId,
+            claimId: claimId.value,
+            evidenceId: evidenceId.value,
+            stance,
+          });
+          sendJson(res, 201, { kind, claimEvidence: link });
+          return;
+        }
+
+        sendJson(res, 400, {
+          error: 'kind must be one of entity, perspective, evidence, claim, belief, claim_relation, claim_evidence',
+        });
+        return;
+      } catch (error) {
+        // A foreign key to another workspace's row, or a value the schema rejects,
+        // surfaces as a clean 400 rather than a raw 500 with database text.
+        const message = error instanceof Error ? error.message : 'record failed';
+        sendJson(res, 400, { error: 'EPISTEMIC_RECORD_REJECTED', message });
+        return;
+      }
+    }
+
+    // Epistemic ledger: GET /api/epistemic/claims-as-of -- query mode 2. With
+    // current knowledge, which claims do we now consider valid at a world instant?
+    if (pathname === '/api/epistemic/claims-as-of' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId') ?? '';
+      const asOfRecorded = url.searchParams.get('asOfRecorded') ?? '';
+      const asOfValid = url.searchParams.get('asOfValid');
+
+      if (!workspaceId || !asOfRecorded) {
+        sendJson(res, 400, { error: 'workspaceId and asOfRecorded are required' });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+      if (Number.isNaN(Date.parse(asOfRecorded))) {
+        sendJson(res, 400, { error: 'asOfRecorded must be an ISO 8601 timestamp' });
+        return;
+      }
+      if (asOfValid !== null && Number.isNaN(Date.parse(asOfValid))) {
+        sendJson(res, 400, { error: 'asOfValid must be an ISO 8601 timestamp' });
+        return;
+      }
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      const claims = await dbClaimsAsOf(workspaceId, asOfRecorded, asOfValid ?? null);
+      sendJson(res, 200, { asOfRecorded, asOfValid: asOfValid ?? null, claims });
+      return;
+    }
+
+    // Epistemic ledger: GET /api/epistemic/belief-as-of -- query mode 1. What did
+    // perspective P believe about a claim as of a recorded instant?
+    if (pathname === '/api/epistemic/belief-as-of' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId') ?? '';
+      const perspectiveId = url.searchParams.get('perspectiveId') ?? '';
+      const claimId = url.searchParams.get('claimId') ?? '';
+      const asOfRecorded = url.searchParams.get('asOfRecorded') ?? '';
+      const asOfValidParam = url.searchParams.get('asOfValid');
+
+      if (!workspaceId || !perspectiveId || !claimId || !asOfRecorded) {
+        sendJson(res, 400, {
+          error: 'workspaceId, perspectiveId, claimId, and asOfRecorded are required',
+        });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+      if (!requireUuid(res, perspectiveId, 'perspectiveId')) return;
+      if (!requireUuid(res, claimId, 'claimId')) return;
+      if (Number.isNaN(Date.parse(asOfRecorded))) {
+        sendJson(res, 400, { error: 'asOfRecorded must be an ISO 8601 timestamp' });
+        return;
+      }
+      // Valid time defaults to the recorded instant: "what did we believe at T
+      // about T". A caller may separate the two axes explicitly.
+      const asOfValid = asOfValidParam ?? asOfRecorded;
+      if (Number.isNaN(Date.parse(asOfValid))) {
+        sendJson(res, 400, { error: 'asOfValid must be an ISO 8601 timestamp' });
+        return;
+      }
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      const result = await dbBeliefAsOf(workspaceId, perspectiveId, claimId, asOfRecorded, asOfValid);
+      sendJson(res, 200, { perspectiveId, claimId, asOfRecorded, asOfValid, ...result });
+      return;
+    }
+
+    // Graph: POST /api/graph/project -- rebuild one workspace's graph from the
+    // canonical epistemic ledger. Destroy-and-rebuild: the graph is a read model, so
+    // a rebuild always converges to the same graph for the same canonical rows.
+    if (pathname === '/api/graph/project' && req.method === 'POST') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'write')) {
+        scopeDenied(res, 'write');
+        return;
+      }
+
+      const body = (await readJsonObject(req)) as Record<string, any>;
+      const { workspaceId } = body;
+
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem || !roleAllows(auth, mem.role, 'operator')) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Operator role or higher required to project a graph' });
+        return;
+      }
+
+      // Authorize before probing provider configuration: an unauthorized caller
+      // must not learn whether the graph engine is configured.
+      if (!graphClient) {
+        sendJson(res, 503, {
+          error: 'GRAPH_NOT_CONFIGURED: set OCTO_GRAPH_URL to project a workspace graph',
+        });
+        return;
+      }
+
+      const data = await dbReadEpistemicGraph(workspaceId);
+      const watermark = (await dbEpistemicWatermark(workspaceId)) ?? new Date(0).toISOString();
+
+      try {
+        const counts = await projectWorkspaceGraph(graphClient, workspaceId, data);
+        await dbUpsertGraphProjection({
+          workspaceId,
+          schemaVersion: GRAPH_SCHEMA_VERSION,
+          sourceWatermark: watermark,
+          ...counts,
+          status: 'projected',
+          lastError: null,
+        });
+        sendJson(res, 200, { workspaceId, sourceWatermark: watermark, schemaVersion: GRAPH_SCHEMA_VERSION, ...counts, status: 'projected' });
+      } catch (error) {
+        // A failed projection is recorded, not hidden: health reports the failure so
+        // an operator can retry, and the previous watermark shows the graph is stale.
+        const message = error instanceof Error ? error.message : String(error);
+        await dbUpsertGraphProjection({
+          workspaceId,
+          schemaVersion: GRAPH_SCHEMA_VERSION,
+          sourceWatermark: watermark,
+          entityCount: 0,
+          claimCount: 0,
+          evidenceCount: 0,
+          relationCount: 0,
+          status: 'failed',
+          lastError: message,
+        });
+        sendJson(res, 502, { error: 'GRAPH_PROJECTION_FAILED', message });
+      }
+      return;
+    }
+
+    // Graph: GET /api/graph/health -- the projection's watermark and counts, plus
+    // whether the graph is stale against the live canonical ledger.
+    if (pathname === '/api/graph/health' && req.method === 'GET') {
+      const auth = await authenticateRequest(req);
+      if (!auth) {
+        sendJson(res, 401, { error: 'UNAUTHENTICATED' });
+        return;
+      }
+      if (!requireScope(auth, 'read')) {
+        scopeDenied(res, 'read');
+        return;
+      }
+
+      const workspaceId = url.searchParams.get('workspaceId') ?? '';
+      if (!workspaceId) {
+        sendJson(res, 400, { error: 'workspaceId is required' });
+        return;
+      }
+      if (!requireUuid(res, workspaceId, 'workspaceId')) return;
+
+      if (!keyWorkspaceMatches(auth, workspaceId)) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Key restricted to different workspace' });
+        return;
+      }
+
+      const mem = await dbGetWorkspaceMembership(workspaceId, auth.principal.id);
+      if (!mem) {
+        sendJson(res, 403, { error: 'FORBIDDEN: Not a member of this workspace' });
+        return;
+      }
+
+      const projection = await dbGetGraphProjection(workspaceId);
+      const liveWatermark = await dbEpistemicWatermark(workspaceId);
+      // Stale when the canonical ledger has moved past the watermark the graph was
+      // built from -- the graph may not reflect the newest rows. Compare instants,
+      // not the second-granularity string form.
+      const stale =
+        !projection ||
+        (liveWatermark !== null &&
+          new Date(liveWatermark).getTime() > new Date(projection.sourceWatermark).getTime());
+
+      sendJson(res, 200, {
+        workspaceId,
+        configured: Boolean(graphClient),
+        stale,
+        liveWatermark,
+        projection,
       });
       return;
     }

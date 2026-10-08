@@ -15,6 +15,28 @@ import { ObjectStore } from '../storage/object-store';
 import { ensureThumbnail } from '../media/thumbnail-service';
 import { ArchiveDeps, ArchiveFileRecord, archiveFile, restoreFile } from '../storage/archive-service';
 import { ClaimedJob, completeJob, failJob, recordActivity } from './job-service';
+import type { GraphClient } from '../graph/falkordb-client';
+import { GRAPH_SCHEMA_VERSION, ProjectionInput, projectWorkspaceGraph } from '../graph/projector';
+import type { GraphProjectionRecord } from '../server/db';
+
+/**
+ * Graph projection wiring for a `graph_rebuild` job. The graph is a rebuildable read
+ * model, so a rebuild is always a full destroy-and-rebuild of the workspace's graph
+ * from canonical rows -- the same operation `POST /api/graph/project` performs, driven
+ * by the queue instead of a request.
+ *
+ * `client` is absent when `OCTO_GRAPH_URL` is unset: the graph surface is optional, so
+ * a queued rebuild then fails with a clear, non-retryable code rather than looping.
+ */
+export interface GraphProjectionDeps {
+  client?: GraphClient;
+  /** Reads the canonical epistemic ledger the projector consumes. */
+  readLedger: (workspaceId: string) => Promise<ProjectionInput>;
+  /** The newest canonical instant, or null when the ledger is empty. */
+  watermark: (workspaceId: string) => Promise<string | null>;
+  /** Records the projection's watermark, counts, and status. */
+  record: (row: GraphProjectionRecord) => Promise<void>;
+}
 
 export interface WorkerDeps {
   /** Claims the next runnable job, or null when the queue is empty. */
@@ -31,6 +53,8 @@ export interface WorkerDeps {
   activity: (job: ClaimedJob, summary: string) => Promise<void>;
   /** Archive lifecycle wiring. Absent when Drive is not configured. */
   archive?: ArchiveDeps;
+  /** Graph projection wiring for `graph_rebuild` jobs. Absent outside the server. */
+  graphProjection?: GraphProjectionDeps;
   /** Loads the file record an archive/restore job targets. */
   loadArchiveTarget?: (workspaceId: string, fileId: string) => Promise<ArchiveFileRecord | null>;
   /**
@@ -153,6 +177,70 @@ export async function handleArchiveJob(
   };
 }
 
+/**
+ * Handles a graph rebuild: project the workspace's canonical epistemic ledger into
+ * its graph. Idempotent by construction -- the projector deletes the graph and writes
+ * it from canonical rows, so a replay converges to the same graph rather than
+ * duplicating nodes.
+ *
+ * The workspace comes from the job (the queue pins it), never from the payload, and
+ * the client derives the graph name from that workspace, so a rebuild cannot target
+ * another tenant's graph.
+ */
+export async function handleGraphProjectionJob(
+  job: ClaimedJob,
+  deps: WorkerDeps
+): Promise<HandlerResult> {
+  const projection = deps.graphProjection;
+  if (!projection?.client) {
+    // Optional surface: a deterministic failure, not a retry loop. Mirrors the
+    // route's GRAPH_NOT_CONFIGURED so the reason is legible on the job.
+    return {
+      ok: false,
+      code: 'GRAPH_NOT_CONFIGURED',
+      summary: 'set OCTO_GRAPH_URL to project a workspace graph',
+      retryable: false,
+    };
+  }
+
+  const workspaceId = job.workspaceId;
+  const data = await projection.readLedger(workspaceId);
+  const watermark = (await projection.watermark(workspaceId)) ?? new Date(0).toISOString();
+
+  try {
+    const counts = await projectWorkspaceGraph(projection.client, workspaceId, data);
+    await projection.record({
+      workspaceId,
+      schemaVersion: GRAPH_SCHEMA_VERSION,
+      sourceWatermark: watermark,
+      ...counts,
+      status: 'projected',
+      lastError: null,
+    });
+    return {
+      ok: true,
+      detail: `projected ${counts.claimCount} claims, ${counts.entityCount} entities, ${counts.relationCount} relations`,
+    };
+  } catch (err) {
+    // A failed projection is recorded, not hidden: health reports the failure so an
+    // operator can see it, and the retryable flag lets a transient engine outage
+    // converge on a later attempt.
+    const message = err instanceof Error ? err.message : String(err);
+    await projection.record({
+      workspaceId,
+      schemaVersion: GRAPH_SCHEMA_VERSION,
+      sourceWatermark: watermark,
+      entityCount: 0,
+      claimCount: 0,
+      evidenceCount: 0,
+      relationCount: 0,
+      status: 'failed',
+      lastError: message,
+    });
+    return { ok: false, code: 'GRAPH_PROJECTION_FAILED', summary: message, retryable: true };
+  }
+}
+
 /** Runs a single claimed job through its handler and records the outcome. */
 export async function processJob(job: ClaimedJob, deps: WorkerDeps): Promise<JobOutcome> {
   try {
@@ -164,6 +252,8 @@ export async function processJob(job: ClaimedJob, deps: WorkerDeps): Promise<Job
       outcome = await handleArchiveJob(job, deps, 'archive');
     } else if (job.jobType === 'restore_file') {
       outcome = await handleArchiveJob(job, deps, 'restore');
+    } else if (job.jobType === 'graph_rebuild') {
+      outcome = await handleGraphProjectionJob(job, deps);
     } else {
       outcome = { ok: false, code: 'UNKNOWN_JOB_TYPE', summary: `No handler for job type ${job.jobType}`, retryable: false };
     }
