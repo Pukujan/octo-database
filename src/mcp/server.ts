@@ -225,6 +225,115 @@ export function createOctoMcpServer(api: OctoApi): McpServer {
   );
 
   server.tool(
+    'project_graph',
+    'Rebuild a workspace\'s graph from its canonical epistemic ledger. Destroy-and-rebuild, so the result always converges to the same graph for the same data; safe to re-run. Requires the write scope and an operator or higher role.',
+    {
+      workspaceId: z.string().describe('The workspace whose graph to rebuild'),
+    },
+    async ({ workspaceId }) => {
+      try {
+        return asText(await api.graphProject({ workspaceId }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'graph_health',
+    'The workspace graph projection\'s watermark, counts, and last outcome, plus whether the graph is stale against the live canonical ledger. Requires the read scope.',
+    {
+      workspaceId: z.string().describe('The workspace whose projection health to read'),
+    },
+    async ({ workspaceId }) => {
+      try {
+        return asText(await api.graphHealth({ workspaceId }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'record_epistemic',
+    'Append one record to a workspace\'s bitemporal knowledge ledger. Nothing is overwritten. `kind` selects the record and which fields it needs: entity {name, entityType?}; perspective {name, description?}; evidence {sourceFileId?|locator?|quote?|contentHash?}; claim {statement, subjectEntityId?, supersedesClaimId?, validFrom?, validTo?, recordedAt?, provenance?}; belief {perspectiveId, claimId, stance, confidence?, validFrom?, validTo?, recordedAt?}; claim_relation {fromClaimId, toClaimId, relation}; claim_evidence {claimId, evidenceId, stance}. stance for a belief is believes|disbelieves|uncertain; for claim_evidence it is supports|contradicts|qualifies. Requires the write scope and an operator or higher role.',
+    {
+      workspaceId: z.string().describe('The workspace to record into'),
+      kind: z
+        .enum(['entity', 'perspective', 'evidence', 'claim', 'belief', 'claim_relation', 'claim_evidence'])
+        .describe('Which record is being written'),
+      name: z.string().optional().describe('entity, perspective: the name'),
+      entityType: z.string().optional().describe('entity: type label (default "entity")'),
+      description: z.string().optional().describe('perspective: optional description'),
+      sourceFileId: z.string().optional().describe('evidence: file id the evidence points at'),
+      locator: z.string().optional().describe('evidence: where in the source'),
+      quote: z.string().optional().describe('evidence: the quoted passage'),
+      contentHash: z.string().optional().describe('evidence: content hash of the source'),
+      subjectEntityId: z.string().optional().describe('claim: the entity the claim is about'),
+      statement: z.string().optional().describe('claim: the assertion'),
+      supersedesClaimId: z.string().optional().describe('claim: close this older claim at the new claim\'s recorded instant'),
+      provenance: z.record(z.string(), z.unknown()).optional().describe('claim: provenance to the run/source/version'),
+      perspectiveId: z.string().optional().describe('belief: whose belief'),
+      claimId: z.string().optional().describe('belief, claim_evidence: the claim'),
+      evidenceId: z.string().optional().describe('claim_evidence: the evidence'),
+      stance: z.string().optional().describe('belief: believes|disbelieves|uncertain; claim_evidence: supports|contradicts|qualifies'),
+      confidence: z.number().optional().describe('belief: 0..1'),
+      relation: z
+        .string()
+        .optional()
+        .describe('claim_relation: SUPPORTS|CONTRADICTS|SUPERSEDES|QUALIFIES|DERIVED_FROM|DUPLICATES|REFINES'),
+      fromClaimId: z.string().optional().describe('claim_relation: the source claim'),
+      toClaimId: z.string().optional().describe('claim_relation: the target claim'),
+      validFrom: z.string().optional().describe('ISO 8601 valid-time start'),
+      validTo: z.string().optional().describe('ISO 8601 valid-time end'),
+      recordedAt: z.string().optional().describe('ISO 8601 recorded-time instant (defaults to now)'),
+    },
+    async (args) => {
+      try {
+        return asText(await api.recordEpistemic(args));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'query_claims_as_of',
+    'With current knowledge, list the claims considered valid at a world instant, each with its provenance. Applies both time axes: what had been recorded by asOfRecorded, and what was true at asOfValid. Read-only.',
+    {
+      workspaceId: z.string().describe('The workspace to query'),
+      asOfRecorded: z.string().describe('ISO 8601 recorded-time instant (what had been recorded by then)'),
+      asOfValid: z.string().optional().describe('ISO 8601 world-time instant (what was true then)'),
+    },
+    async ({ workspaceId, asOfRecorded, asOfValid }) => {
+      try {
+        return asText(await api.claimsAsOf({ workspaceId, asOfRecorded, asOfValid }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
+    'query_belief_as_of',
+    'What one perspective believed about a claim as of a recorded instant, with the evidence linked to that claim. Two perspectives may hold different beliefs about the same claim. Read-only.',
+    {
+      workspaceId: z.string().describe('The workspace to query'),
+      perspectiveId: z.string().describe('Whose belief to read'),
+      claimId: z.string().describe('The claim in question'),
+      asOfRecorded: z.string().describe('ISO 8601 recorded-time instant'),
+      asOfValid: z.string().optional().describe('ISO 8601 world-time instant (defaults to asOfRecorded)'),
+    },
+    async ({ workspaceId, perspectiveId, claimId, asOfRecorded, asOfValid }) => {
+      try {
+        return asText(await api.beliefAsOf({ workspaceId, perspectiveId, claimId, asOfRecorded, asOfValid }));
+      } catch (error) {
+        return asError(error);
+      }
+    }
+  );
+
+  server.tool(
     'list_ops_events',
     'List structured operational failure events for a workspace, newest first. Optionally filter to one error code. Read-only.',
     {
