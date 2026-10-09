@@ -33,6 +33,12 @@ services:
       - .env
     environment:
       - PORT=3001
+    # Only written when OCTO_STORAGE_BACKEND=local (the default backend is R2, which
+    # stores nothing here). On a local-backend host this volume is what keeps
+    # uploaded file bytes across a container recreate -- without it the local
+    # backend's /tmp/octo-storage is ephemeral and every deploy loses the files.
+    volumes:
+      - octo-file-data:/tmp/octo-storage
     depends_on:
       octo-db:
         condition: service_healthy
@@ -108,3 +114,5 @@ networks:
 volumes:
   octo-db-data:
     name: octo-db-data
+  octo-file-data:
+    name: octo-file-data
