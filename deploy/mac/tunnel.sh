@@ -46,6 +46,9 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 TUNNEL_TOKEN="$(grep -E '^TUNNEL_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d ' "\r' || true)"
+# Must be exported: `docker run -e TUNNEL_TOKEN` with no value reads it from the
+# docker client's environment, which only sees exported variables.
+export TUNNEL_TOKEN
 if [ -z "$TUNNEL_TOKEN" ]; then
   echo "ERROR: TUNNEL_TOKEN is not set in $ENV_FILE" >&2
   echo "Get it from Cloudflare Zero Trust -> Networks -> Tunnels -> <tunnel> -> Install connector." >&2
