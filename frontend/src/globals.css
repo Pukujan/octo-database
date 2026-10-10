@@ -1,0 +1,11 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@layer base {
+ /* Dark is the default palette; the paper system overrides the same tokens. */
+ :root { --background: 172 17% 8%; --foreground: 132 25% 93%; --card: 163 16% 13%; --card-foreground:132 25% 93%; --primary:161 57% 44%; --primary-foreground:160 30% 7%; --muted:160 10% 20%; --muted-foreground:150 11% 65%; --accent:32 72% 63%; --accent-foreground:172 17% 8%; --border:160 12% 23%; --input:160 12% 23%; --ring:161 57% 44%; --destructive:0 62% 50%; --destructive-foreground:0 0% 98%; --radius:.65rem; }
+ :root[data-octo-system='paper'] { --background: 40 18% 96%; --foreground: 172 17% 12%; --card: 40 20% 100%; --card-foreground:172 17% 12%; --primary:168 61% 26%; --primary-foreground:40 20% 100%; --muted:40 12% 89%; --muted-foreground:160 8% 40%; --accent:32 72% 45%; --accent-foreground:40 20% 100%; --border:40 10% 80%; --input:40 10% 80%; --ring:168 61% 26%; --destructive:0 60% 45%; --destructive-foreground:40 20% 100%; }
+ * { @apply border-border; } body { @apply bg-background text-foreground; font-family:Inter,sans-serif; } h1,h2,h3,h4 { font-family:'Space Grotesk',sans-serif; } button,input,select,textarea { font:inherit; }
+}
+@layer components { .panel { @apply rounded-xl border border-border bg-card; } .eyebrow { @apply text-[10px] font-bold uppercase tracking-[.2em] text-primary; } .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition hover:brightness-110 disabled:cursor-not-allowed; } .field { @apply w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary; } .chip { @apply rounded-full border border-border px-2 py-1 text-[11px] font-semibold; } }
