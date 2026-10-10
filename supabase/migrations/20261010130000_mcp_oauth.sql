@@ -12,12 +12,16 @@
 -- therefore carry no RLS policy: the fence is keyed on a bound principal, and
 -- nothing here is ever read by a bound identity.
 --
--- That trusted-path intent has to be enforced, not assumed: this schema grants
+-- That trusted-path intent has to be enforced, not assumed. This schema grants
 -- DML on every new table to `authenticated` (ALTER DEFAULT PRIVILEGES in the
--- Slice 1 migration), and `octo_app` inherits it. The REVOKEs below take that
--- back for these three tables, so a fenced request-path role -- which the RLS
--- fence cannot cover here -- has no access to live authorization codes or
--- refresh tokens at all.
+-- Slice 1 migration), and the fenced request role `octo_app` inherits it, so
+-- without a fence a request-path caller could read live authorization codes and
+-- refresh tokens. RLS with no policies is what closes that: every role subject
+-- to row security is denied by default, and only `octo_service` (BYPASSRLS)
+-- reads these tables. The grant is repeated to `octo_service` directly for the
+-- same reason Slice 21 does it -- and the access must NOT be taken back from
+-- `authenticated`, because `octo_service` is a member of `authenticated` and a
+-- REVOKE there would strip the trusted path's access too.
 
 CREATE TABLE IF NOT EXISTS octo.oauth_clients (
     client_id TEXT PRIMARY KEY,
@@ -71,6 +75,10 @@ CREATE TABLE IF NOT EXISTS octo.oauth_refresh_tokens (
 CREATE INDEX IF NOT EXISTS oauth_refresh_tokens_family_idx
     ON octo.oauth_refresh_tokens (family_id);
 
-REVOKE ALL ON octo.oauth_clients FROM authenticated;
-REVOKE ALL ON octo.oauth_auth_codes FROM authenticated;
-REVOKE ALL ON octo.oauth_refresh_tokens FROM authenticated;
+ALTER TABLE octo.oauth_clients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE octo.oauth_auth_codes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE octo.oauth_refresh_tokens ENABLE ROW LEVEL SECURITY;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON octo.oauth_clients TO octo_service;
+GRANT SELECT, INSERT, UPDATE, DELETE ON octo.oauth_auth_codes TO octo_service;
+GRANT SELECT, INSERT, UPDATE, DELETE ON octo.oauth_refresh_tokens TO octo_service;
