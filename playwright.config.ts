@@ -63,7 +63,7 @@ export default defineConfig({
       },
     },
     {
-      command: 'npx vite --port 3000',
+      command: 'npm --prefix frontend run dev',
       url: 'http://localhost:3000',
       reuseExistingServer: !process.env['CI'],
       timeout: 30000,
