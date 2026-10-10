@@ -15,6 +15,7 @@ export interface ApiKey {
   name: string;
   principalId: string;
   workspaceId: string | null; // null = Account-wide
+  workspaceName?: string | null;
   role: WorkspaceRole | null;
   scopes: string[];
   expiresAt: string | null;

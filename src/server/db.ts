@@ -783,12 +783,16 @@ export async function dbVerifyApiKey(keyHash: string): Promise<{
   return rows[0] ?? null;
 }
 
-export async function dbListApiKeys(principalId: string): Promise<
+export async function dbListApiKeys(
+  principalId: string,
+  workspaceId?: string
+): Promise<
   {
     id: string;
     prefix: string;
     name: string;
     workspaceId: string | null;
+    workspaceName: string | null;
     scopes: string[];
     expiresAt: string | null;
     lastUsedAt: string | null;
@@ -796,13 +800,14 @@ export async function dbListApiKeys(principalId: string): Promise<
   }[]
 > {
   const sql = `
-    SELECT id, prefix, name, workspace_id AS "workspaceId", scopes,
-           expires_at AS "expiresAt", last_used_at AS "lastUsedAt", created_at AS "createdAt"
-    FROM octo.api_keys
-    WHERE principal_id = $1
-    ORDER BY created_at DESC;
+    SELECT k.id, k.prefix, k.name, k.workspace_id AS "workspaceId", w.name AS "workspaceName",
+           k.scopes, k.expires_at AS "expiresAt", k.last_used_at AS "lastUsedAt", k.created_at AS "createdAt"
+    FROM octo.api_keys k
+    LEFT JOIN octo.workspaces w ON w.id = k.workspace_id
+    WHERE k.principal_id = $1 AND (k.workspace_id IS NULL${workspaceId ? ' OR k.workspace_id = $2' : ''})
+    ORDER BY k.created_at DESC;
   `;
-  return query(sql, [principalId]);
+  return query(sql, workspaceId ? [principalId, workspaceId] : [principalId]);
 }
 
 // 4. Scoped Share Operations (Slice 4)
