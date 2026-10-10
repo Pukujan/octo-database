@@ -175,6 +175,7 @@ jobs:
           OCTO_MEDIA_SECRET: ci-media-secret
           OCTO_MFA_SECRET: ci-mfa-secret
           OCTO_SESSION_SECRET: ci-session-secret
+          OCTO_OAUTH_SECRET: ci-oauth-secret
           DATABASE_URL: postgresql://postgres:postgres@localhost:54329/postgres
           # Run the server's request path as the fenced octo_app role so the E2E
           # suite proves the golden flows still work under RLS, and the trusted

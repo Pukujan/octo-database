@@ -18,8 +18,21 @@
         reverse_proxy octo-api:3001
     }
 
+    # OAuth 2.1 authorization server for the remote MCP endpoint. A custom MCP
+    # client (ChatGPT, ...) discovers these from the 401 challenge on /mcp:
+    # the protected-resource and authorization-server metadata, the dynamic
+    # client registration endpoint, and the authorize/token endpoints.
+    handle /.well-known/* {
+        reverse_proxy octo-api:3001
+    }
+
+    handle /oauth/* {
+        reverse_proxy octo-api:3001
+    }
+
     # Remote MCP endpoint (Streamable HTTP) for hosted clients such as ChatGPT.
-    # Matches /mcp and /mcp/<key>, the "no authentication" connector form.
+    # /mcp authenticates with a bearer key or an OAuth access token; /mcp/<key>
+    # is retired and answers 404 (a long-lived key no longer belongs in a URL).
     handle /mcp* {
         reverse_proxy octo-api:3001
     }

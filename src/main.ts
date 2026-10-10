@@ -117,6 +117,32 @@ async function loadWorkspace(id: string): Promise<void> {
   render();
 }
 
+// A connector that asks for authorization while this browser is not signed in is
+// bounced to /#oauth_return=<authorize-url>. The URL is stashed here rather than
+// left in the hash because a Google sign-in is a full-page round trip that would
+// drop it; the sign-in handler resumes it once a session exists.
+const OAUTH_RETURN_KEY = 'octo_oauth_return';
+
+async function resumeOAuthReturn(token: string): Promise<void> {
+  const returnTo = localStorage.getItem(OAUTH_RETURN_KEY);
+  if (!returnTo) return;
+  // Only ever bounce back to an authorize URL on this origin: the value arrives
+  // in the URL hash, so without this check a crafted link could turn the
+  // dashboard into an open redirect for a visitor who is already signed in.
+  let target: URL;
+  try { target = new URL(returnTo, location.origin); } catch { localStorage.removeItem(OAUTH_RETURN_KEY); return; }
+  if (target.origin !== location.origin || target.pathname !== '/oauth/authorize') { localStorage.removeItem(OAUTH_RETURN_KEY); return; }
+  try {
+    // The authorization server reads Octo sessions from localStorage-hosted
+    // tokens it cannot see; this hands it the same session as a short-lived
+    // HttpOnly cookie so the consent page can render for a real principal.
+    const response = await fetch('/oauth/dance', { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+    if (!response.ok) { localStorage.removeItem(OAUTH_RETURN_KEY); return; }
+  } catch { return; }
+  localStorage.removeItem(OAUTH_RETURN_KEY);
+  location.replace(target.toString());
+}
+
 async function enterSession(token: string, principal?: Principal): Promise<void> {
   state.token = token;
   state.notice = '';
@@ -132,18 +158,20 @@ async function enterSession(token: string, principal?: Principal): Promise<void>
   state.workspace = null;
   if (state.workspaces.length) await loadWorkspace(state.workspaces[0]!.id);
   else render();
+  await resumeOAuthReturn(token);
 }
 
 async function bootstrap(): Promise<void> {
   const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
   const callbackToken = hash.get('token');
   const authError = hash.get('auth_error');
+  const oauthReturn = hash.get('oauth_return');
+  if (oauthReturn) localStorage.setItem(OAUTH_RETURN_KEY, oauthReturn);
+  if (callbackToken || authError || oauthReturn) history.replaceState(null, '', location.pathname + location.search);
   if (callbackToken) {
-    history.replaceState(null, '', location.pathname + location.search);
     try { await enterSession(callbackToken); } catch { clearSession(); render(); }
     return;
   }
-  if (authError) history.replaceState(null, '', location.pathname + location.search);
   try {
     const health = await fetch('/health');
     if (health.ok) {
