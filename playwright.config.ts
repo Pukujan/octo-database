@@ -36,6 +36,9 @@ export default defineConfig({
         // Signs bearer session tokens (ISS-1). A stable value across the server
         // and test processes lets the e2e suite forge a correctly-signed token.
         OCTO_SESSION_SECRET: process.env['OCTO_SESSION_SECRET'] ?? 'e2e-session-secret',
+        // Signs the OAuth access tokens the /mcp authorization server mints. A
+        // stable value keeps issued tokens verifiable across a server restart.
+        OCTO_OAUTH_SECRET: process.env['OCTO_OAUTH_SECRET'] ?? 'e2e-oauth-secret',
         DATABASE_URL:
           process.env['DATABASE_URL'] ??
           'postgresql://postgres:postgres@localhost:54329/postgres',

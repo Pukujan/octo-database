@@ -28,12 +28,12 @@ let lastActivity = Date.now();
 const state: {
   principal: Principal | null; token: string | null; workspaces: WorkspaceSummary[]; workspace: WorkspaceSummary | null;
   files: FileRecord[]; gallery: GalleryItem[]; keys: ApiKey[]; shares: ShareSummary[]; jobs: Job[]; activity: Activity[]; opsSummary: OpsSummary | null;
-  googleAuthEnabled: boolean; confirmSecretSet: boolean; confirmCode: string; mfaEnabled: boolean; view: View; loading: boolean; theme: 'midnight' | 'paper';
+  googleAuthEnabled: boolean; turnstileSiteKey: string | null; confirmSecretSet: boolean; confirmCode: string; mfaEnabled: boolean; view: View; loading: boolean; theme: 'midnight' | 'paper';
   modal: Modal; modalError: string; oneTimeSecret: string; oneTimeLabel: string; oneTimeKind: 'key' | 'workspace' | null; shareUrl: string; previewItem: GalleryItem | null; notice: string;
   loadError: string; mfaSetupUri: string; mfaSetupSecret: string; mfaRecoveryCodes: string[]; mfaRecoveryRemaining: number;
 } = {
   principal: null, token: null, workspaces: [], workspace: null, files: [], gallery: [], keys: [], shares: [], jobs: [], activity: [], opsSummary: null,
-  googleAuthEnabled: false, confirmSecretSet: false, confirmCode: '', mfaEnabled: false, view: 'overview', loading: false,
+  googleAuthEnabled: false, turnstileSiteKey: null, confirmSecretSet: false, confirmCode: '', mfaEnabled: false, view: 'overview', loading: false,
   theme: localStorage.getItem('octo-design-system') === 'paper' ? 'paper' : 'midnight', modal: null, modalError: '',
   oneTimeSecret: '', oneTimeLabel: '', oneTimeKind: null, shareUrl: '', previewItem: null, notice: '', loadError: '',
   mfaSetupUri: '', mfaSetupSecret: '', mfaRecoveryCodes: [], mfaRecoveryRemaining: 0,
@@ -117,6 +117,32 @@ async function loadWorkspace(id: string): Promise<void> {
   render();
 }
 
+// A connector that asks for authorization while this browser is not signed in is
+// bounced to /#oauth_return=<authorize-url>. The URL is stashed here rather than
+// left in the hash because a Google sign-in is a full-page round trip that would
+// drop it; the sign-in handler resumes it once a session exists.
+const OAUTH_RETURN_KEY = 'octo_oauth_return';
+
+async function resumeOAuthReturn(token: string): Promise<void> {
+  const returnTo = localStorage.getItem(OAUTH_RETURN_KEY);
+  if (!returnTo) return;
+  // Only ever bounce back to an authorize URL on this origin: the value arrives
+  // in the URL hash, so without this check a crafted link could turn the
+  // dashboard into an open redirect for a visitor who is already signed in.
+  let target: URL;
+  try { target = new URL(returnTo, location.origin); } catch { localStorage.removeItem(OAUTH_RETURN_KEY); return; }
+  if (target.origin !== location.origin || target.pathname !== '/oauth/authorize') { localStorage.removeItem(OAUTH_RETURN_KEY); return; }
+  try {
+    // The authorization server reads Octo sessions from localStorage-hosted
+    // tokens it cannot see; this hands it the same session as a short-lived
+    // HttpOnly cookie so the consent page can render for a real principal.
+    const response = await fetch('/oauth/dance', { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+    if (!response.ok) { localStorage.removeItem(OAUTH_RETURN_KEY); return; }
+  } catch { return; }
+  localStorage.removeItem(OAUTH_RETURN_KEY);
+  location.replace(target.toString());
+}
+
 async function enterSession(token: string, principal?: Principal): Promise<void> {
   state.token = token;
   state.notice = '';
@@ -132,22 +158,28 @@ async function enterSession(token: string, principal?: Principal): Promise<void>
   state.workspace = null;
   if (state.workspaces.length) await loadWorkspace(state.workspaces[0]!.id);
   else render();
+  await resumeOAuthReturn(token);
 }
 
 async function bootstrap(): Promise<void> {
   const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
   const callbackToken = hash.get('token');
   const authError = hash.get('auth_error');
+  const oauthReturn = hash.get('oauth_return');
+  if (oauthReturn) localStorage.setItem(OAUTH_RETURN_KEY, oauthReturn);
+  if (callbackToken || authError || oauthReturn) history.replaceState(null, '', location.pathname + location.search);
   if (callbackToken) {
-    history.replaceState(null, '', location.pathname + location.search);
     try { await enterSession(callbackToken); } catch { clearSession(); render(); }
     return;
   }
-  if (authError) history.replaceState(null, '', location.pathname + location.search);
   try {
     const health = await fetch('/health');
-    if (health.ok) state.googleAuthEnabled = Boolean((await health.json()).googleAuthEnabled);
-  } catch { state.googleAuthEnabled = false; }
+    if (health.ok) {
+      const body = await health.json();
+      state.googleAuthEnabled = Boolean(body.googleAuthEnabled);
+      state.turnstileSiteKey = typeof body.turnstileSiteKey === 'string' ? body.turnstileSiteKey : null;
+    }
+  } catch { state.googleAuthEnabled = false; state.turnstileSiteKey = null; }
   const saved = localStorage.getItem('octo_token');
   if (saved) {
     if (isSessionExpired(saved, Date.now())) {
@@ -228,7 +260,41 @@ function modalMarkup(): string {
 }
 
 function renderLogin(): void {
-  root!.innerHTML = '<main class="login-screen"><section class="login-card"><div class="brand-lockup"><span class="brand-mark">◉</span><span>octo</span></div><p class="eyebrow">WORKSPACE DATA PLATFORM</p><h1>Welcome to Octo</h1><p class="login-copy">A calm home for your workspace data, files, and activity.</p>' + (state.notice ? '<p class="login-notice" role="alert">' + esc(state.notice) + '</p>' : '') + '<div class="login-actions">' + (state.googleAuthEnabled ? '<button class="button google-button" data-action="google" type="button"><span class="google-g">G</span>Sign in with Google</button>' : '<button class="button google-button" disabled type="button" aria-label="Google sign-in not configured"><span class="google-g">G</span>Google sign-in not configured</button>') + '<button class="button primary" data-action="guest" type="button">Continue as Guest<span aria-hidden="true">→</span></button></div><p class="login-note">Your workspaces stay separate and scoped to your account.</p></section><div class="login-art" aria-hidden="true"><div class="orb orb-one"></div><div class="orb orb-two"></div><div class="art-grid"></div><div class="art-caption"><span class="live-dot"></span> Your workspace, in one place</div></div></main>';
+  const turnstileSlot = state.turnstileSiteKey
+    ? '<div class="turnstile-slot" id="turnstile-slot"></div>'
+    : '';
+  root!.innerHTML = '<main class="login-screen"><section class="login-card"><div class="brand-lockup"><span class="brand-mark">◉</span><span>octo</span></div><p class="eyebrow">WORKSPACE DATA PLATFORM</p><h1>Welcome to Octo</h1><p class="login-copy">A calm home for your workspace data, files, and activity.</p>' + (state.notice ? '<p class="login-notice" role="alert">' + esc(state.notice) + '</p>' : '') + '<div class="login-actions">' + (state.googleAuthEnabled ? '<button class="button google-button" data-action="google" type="button"><span class="google-g">G</span>Sign in with Google</button>' : '<button class="button google-button" disabled type="button" aria-label="Google sign-in not configured"><span class="google-g">G</span>Google sign-in not configured</button>') + turnstileSlot + '<button class="button primary" data-action="guest" type="button">Continue as Guest<span aria-hidden="true">→</span></button></div><p class="login-note">Your workspaces stay separate and scoped to your account.</p></section><div class="login-art" aria-hidden="true"><div class="orb orb-one"></div><div class="orb orb-two"></div><div class="art-grid"></div><div class="art-caption"><span class="live-dot"></span> Your workspace, in one place</div></div></main>';
+  mountTurnstile();
+}
+
+// Turnstile issues a single-use token that expires (~5 min); the widget is
+// re-rendered on every login screen draw, so a stale token is discarded here.
+let turnstileToken: string | null = null;
+let turnstileWidgetId: string | null = null;
+
+function mountTurnstile(): void {
+  if (!state.turnstileSiteKey) return;
+  turnstileToken = null;
+  const slot = $('#turnstile-slot');
+  if (!slot) return;
+  const renderWidget = (): void => {
+    const turnstile = (window as unknown as { turnstile?: { render: (el: HTMLElement, opts: Record<string, unknown>) => string } }).turnstile;
+    if (!turnstile || !slot.isConnected) return;
+    turnstileWidgetId = turnstile.render(slot, {
+      sitekey: state.turnstileSiteKey,
+      theme: state.theme === 'paper' ? 'light' : 'dark',
+      callback: (token: string) => { turnstileToken = token; },
+      'expired-callback': () => { turnstileToken = null; },
+    });
+  };
+  const existing = (window as unknown as { turnstile?: unknown }).turnstile;
+  if (existing) { renderWidget(); return; }
+  const script = document.createElement('script');
+  script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+  script.async = true;
+  script.defer = true;
+  script.onload = renderWidget;
+  document.head.appendChild(script);
 }
 
 function renderOverview(): string {
@@ -406,8 +472,16 @@ root.addEventListener('click', async (event) => {
   const id = target.dataset.id ?? '';
   try {
     if (action === 'guest') {
+      // Capture before the re-render below: redrawing the login screen mounts a
+      // fresh Turnstile widget, which clears the single-use token.
+      const turnstile = turnstileToken;
+      if (state.turnstileSiteKey && !turnstile) {
+        state.notice = 'Please complete the human check before continuing.';
+        render();
+        return;
+      }
       state.loading = true; render();
-      const result = await api<{ principal: Principal; sessionToken: string; workspace: WorkspaceSummary }>('/api/auth/guest', { method: 'POST', body: JSON.stringify({ displayName: 'Guest User' }) });
+      const result = await api<{ principal: Principal; sessionToken: string; workspace: WorkspaceSummary }>('/api/auth/guest', { method: 'POST', body: JSON.stringify({ displayName: 'Guest User', turnstileToken: turnstile }) });
       await enterSession(result.sessionToken, result.principal);
     } else if (action === 'google') location.href = '/api/auth/google';
     else if (action === 'sign-out') { clearSession(); render(); }
