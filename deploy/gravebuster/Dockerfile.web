@@ -4,8 +4,9 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 # The app is built from frontend/, which carries its own dependency tree; the
-# root install alone would not pull it in.
-COPY frontend/package.json frontend/package-lock.json ./frontend/
+# root install alone would not pull it in. `.npmrc` must come along too: it
+# sets legacy-peer-deps, without which the frontend install fails on peers.
+COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./frontend/
 RUN npm ci && npm --prefix frontend ci
 
 COPY . .
