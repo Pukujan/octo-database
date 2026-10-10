@@ -67,6 +67,9 @@ import {
 } from './query';
 import { guestSlug, personalSlug } from '../lib/provisioning-slug';
 import { signSessionToken, verifySessionToken } from '../lib/session-token';
+import { getPublicOrigin } from '../lib/public-origin';
+import { verifyOAuthAccessToken, oauthResource } from '../lib/oauth-token';
+import { handleOAuthRoutes, sendWwwAuthenticate } from './oauth';
 import {
   generateTotpSecret,
   totpProvisioningUri,
@@ -456,7 +459,58 @@ async function authenticateRequest(req: IncomingMessage): Promise<AuthContext | 
     };
   }
 
-  // 2. Signed session token (guest login / OAuth callback). A raw principal UUID
+  // 2. OAuth access token (the MCP authorization server). A stateless HMAC JWT
+  // minted for one resource and one workspace. The audience check refuses a token
+  // minted for a different resource, and the workspace claim binds the RLS fence,
+  // so an OAuth client cannot reach beyond the workspace its user consented to.
+  if (token.startsWith('eyJ')) {
+    const verified = verifyOAuthAccessToken(token, oauthResource());
+    if (!verified) return null;
+    const { claims } = verified;
+
+    const rows = await queryService<{
+      id: string;
+      auth_user_id: string;
+      email: string;
+      display_name: string | null;
+      avatar_url: string | null;
+      is_guest: boolean;
+      is_platform_owner: boolean;
+    }>(
+      'SELECT id, auth_user_id, email, display_name, avatar_url, is_guest, is_platform_owner FROM octo.principals WHERE id = $1',
+      [claims.sub]
+    );
+
+    if (rows.length === 0) return null;
+    const pRow = rows[0]!;
+
+    bindRequestIdentity(pRow.id, claims.workspace_id);
+
+    return {
+      principal: {
+        id: pRow.id,
+        authUserId: pRow.auth_user_id,
+        email: pRow.email,
+        displayName: pRow.display_name,
+        avatarUrl: pRow.avatar_url ?? null,
+        isPlatformOwner: pRow.is_platform_owner,
+        isGuest: pRow.is_guest,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      apiKey: {
+        keyId: `oauth:${claims.jti}`,
+        prefix: 'octo_oauth',
+        name: 'OAuth client',
+        workspaceId: claims.workspace_id,
+        role: null,
+        scopes: claims.scope.split(' ').filter(Boolean),
+        isAccountWide: false,
+      },
+    };
+  }
+
+  // 3. Signed session token (guest login / OAuth callback). A raw principal UUID
   // is deliberately NOT accepted: it is a public identifier that also rides in
   // media query strings, so treating it as a bearer credential would let anyone
   // who observes it act as that principal (ISS-1).
@@ -880,29 +934,52 @@ async function captureOpsEvent(
 
 /**
  * Resolves the public origin from PUBLIC_BASE_URL, X-Forwarded-* headers,
- * Host header, or fallback local URL origin.
+ * Host header, or fallback local URL origin. Defined in lib/public-origin so the
+ * OAuth routes can share it without importing this module; re-exported here for
+ * the callers and tests that already import it from the server.
  */
-export function getPublicOrigin(req: IncomingMessage, url: URL): string {
-  const publicBase = process.env['PUBLIC_BASE_URL'];
-  if (publicBase) {
-    return publicBase.replace(/\/+$/, '');
-  }
-  const hostHeader = req.headers['x-forwarded-host'] ?? req.headers.host;
-  if (hostHeader) {
-    const host = (Array.isArray(hostHeader) ? hostHeader[0] : hostHeader).split(',')[0]!.trim();
-    const protoHeader = req.headers['x-forwarded-proto'];
-    const proto = protoHeader
-      ? (Array.isArray(protoHeader) ? protoHeader[0] : protoHeader).split(',')[0]!.trim()
-      : 'http';
-    return `${proto}://${host}`;
-  }
-  return url.origin;
-}
+export { getPublicOrigin } from '../lib/public-origin';
 
 export function getGoogleClientCredentials(): { clientId: string | null; clientSecret: string | null } {
   const clientId = process.env['GOOGLE_OAUTH_CLIENT_ID'] ?? process.env['GOOGLE_CLIENT_ID'] ?? null;
   const clientSecret = process.env['GOOGLE_OAUTH_CLIENT_SECRET'] ?? process.env['GOOGLE_CLIENT_SECRET'] ?? null;
   return { clientId, clientSecret };
+}
+
+/** Public Turnstile site key for the login widget, or null when unconfigured. */
+export function getTurnstileSiteKey(): string | null {
+  return process.env['TURNSTILE_SITE_KEY']?.trim() || null;
+}
+
+/**
+ * Verifies a Cloudflare Turnstile token for the guest-login challenge.
+ *
+ * Returns true when the challenge passed. When no secret is configured the
+ * check is skipped (true): CI and local dev run without Cloudflare, and a
+ * deployment that has not set the secret yet must not lock guests out — the
+ * same fail-open shape as googleAuthEnabled. Set TURNSTILE_SECRET_KEY to arm it.
+ */
+async function verifyTurnstile(token: unknown, remoteIp: string | null): Promise<boolean> {
+  const secret = process.env['TURNSTILE_SECRET_KEY']?.trim();
+  if (!secret) return true;
+  if (typeof token !== 'string' || !token.trim()) return false;
+
+  const body = new URLSearchParams({ secret, response: token });
+  if (remoteIp) body.set('remoteip', remoteIp);
+
+  try {
+    const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    if (!res.ok) return false;
+    const result = (await res.json()) as { success?: boolean };
+    return result.success === true;
+  } catch {
+    // A network failure must not admit an unverified caller.
+    return false;
+  }
 }
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -942,26 +1019,27 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         database: dbStatus,
         r2: r2Status,
         googleAuthEnabled: Boolean(clientId),
+        turnstileSiteKey: getTurnstileSiteKey(),
       });
       return;
     }
 
-    // 1a. Remote MCP endpoint (Streamable HTTP) for hosted clients such as
-    // ChatGPT. Its custom connectors offer only OAuth or no authentication —
-    // no bearer field — so a caller either sends the Octo key as a bearer
-    // header (`/mcp`) or carries it in the path (`/mcp/<key>`), the
-    // "no authentication" form. Either way authenticateRequest does the key
-    // verification and RLS binding, and the raw token is forwarded so the MCP
-    // tools act as that same principal.
-    if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
-      const pathToken = pathname.startsWith('/mcp/') ? pathname.slice('/mcp/'.length) : '';
-      if (pathToken && !pathToken.includes('/')) {
-        req.headers['authorization'] = `Bearer ${pathToken}`;
-      }
+    // 1a. OAuth 2.1 authorization server for the MCP endpoint: the discovery
+    // metadata, dynamic client registration, and the authorize/token endpoints.
+    // Runs before any body-reading route below, since it consumes the request
+    // body on the endpoints that have one.
+    if (await handleOAuthRoutes(req, res, url)) return;
+
+    // 1b. Remote MCP endpoint (Streamable HTTP) for hosted clients such as
+    // ChatGPT. A caller authenticates with an Octo bearer key or an OAuth access
+    // token; when neither is present the 401 carries the RFC 6750 challenge that
+    // points a client at the authorization server. /mcp/<key> is retired: a
+    // long-lived key does not belong in a URL.
+    if (pathname === '/mcp') {
       const auth = await authenticateRequest(req);
       const token = bearerToken(req);
       if (!auth || !token) {
-        sendJson(res, 401, { error: 'UNAUTHORIZED: a valid Octo bearer key is required' });
+        sendWwwAuthenticate(res, getPublicOrigin(req, url));
         return;
       }
       await handleMcpRequest(req, res, { baseUrl: `http://127.0.0.1:${PORT}`, token });
@@ -1142,10 +1220,18 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
     // 2. Guest Login: POST /api/auth/guest
     if (pathname === '/api/auth/guest' && req.method === 'POST') {
-      // Tolerate a malformed, empty, or non-object body: this endpoint is
-      // anonymous and bodyless-friendly, so an absent displayName defaults rather
-      // than throwing a bare JSON.parse error as a 500.
+      // Cloudflare Turnstile challenge ("are you a bot"). Fail-open when the
+      // secret is unset (CI/dev); armed once TURNSTILE_SECRET_KEY exists.
+      const remoteIp =
+        (req.headers['cf-connecting-ip'] as string | undefined)?.trim() ||
+        (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
+        req.socket.remoteAddress ||
+        null;
       const parsed = await readJsonObject(req);
+      if (!(await verifyTurnstile(parsed.turnstileToken, remoteIp))) {
+        sendJson(res, 403, { error: 'TURNSTILE_FAILED: complete the human check and try again.' });
+        return;
+      }
       const displayName = typeof parsed.displayName === 'string' ? parsed.displayName : 'Guest User';
 
       const guestId = randomUUID();

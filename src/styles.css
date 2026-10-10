@@ -40,3 +40,5 @@
   .one-time-notice,.confirm-code,.access-create-form .button{scroll-margin:12px}
   .modal{top:max(12px,env(safe-area-inset-top));left:14px;right:14px;bottom:auto;width:auto;max-height:calc(100dvh - 24px);transform:none}
 }
+
+.turnstile-slot{display:flex;justify-content:center;min-height:65px}
