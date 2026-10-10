@@ -13,7 +13,7 @@
 # Usage: ./backup.sh
 # Env:
 #   OCTO_BACKUP_DIR    local destination (default: $HOME/octo-backups)
-#   OCTO_BACKUP_KEEP   local dumps to retain (default: 14)
+#   OCTO_BACKUP_KEEP   local dumps to retain (default: 1)
 #   OCTO_BACKUP_R2     rclone remote:path for offsite copy (default: r2:octo-backups)
 
 set -euo pipefail
@@ -21,7 +21,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/../gravebuster/docker-compose.yml"
 BACKUP_DIR="${OCTO_BACKUP_DIR:-$HOME/octo-backups}"
-KEEP="${OCTO_BACKUP_KEEP:-14}"
+KEEP="${OCTO_BACKUP_KEEP:-1}"
 R2_TARGET="${OCTO_BACKUP_R2:-r2:octo-backups}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 FILE="$BACKUP_DIR/octo-$STAMP.dump"
@@ -54,10 +54,13 @@ if docker volume inspect octo-file-data >/dev/null 2>&1; then
   fi
 fi
 
-# Prune local dumps beyond KEEP, newest first.
+# Prune local dumps beyond KEEP, newest first. The file archive for a pruned
+# dump is removed alongside it; it is named octo-files-<stamp>.tar.gz.
 ls -1t "$BACKUP_DIR"/octo-*.dump 2>/dev/null | tail -n +"$((KEEP + 1))" | while read -r old; do
-  rm -f "$old"
-  rm -f "${old%.dump}-files-"*.tar.gz 2>/dev/null || true
+  stamp="$(basename "$old")"
+  stamp="${stamp#octo-}"
+  stamp="${stamp%.dump}"
+  rm -f "$old" "$BACKUP_DIR/octo-files-$stamp.tar.gz"
   echo "pruned: $old"
 done
 
