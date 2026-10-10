@@ -18,6 +18,12 @@
         reverse_proxy octo-api:3001
     }
 
+    # Remote MCP endpoint (Streamable HTTP) for hosted clients such as ChatGPT.
+    # Matches /mcp and /mcp/<key>, the "no authentication" connector form.
+    handle /mcp* {
+        reverse_proxy octo-api:3001
+    }
+
     # Static Vite build with SPA routing fallback
     handle {
         root * /srv
