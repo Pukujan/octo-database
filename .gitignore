@@ -22,6 +22,7 @@ build/
 coverage/
 test-results/
 playwright-report/
+.playwright-mcp/
 shots/
 .DS_Store
 Thumbs.db
