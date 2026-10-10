@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Run the Cloudflare Tunnel connector for Octo on this host.
+#
+# This joins the existing tunnel that already serves octodb.design-bakery.com:
+# its ingress rule maps that hostname to `http://octo-web:80`, so attaching a
+# connector to the same network the edge overlay uses (study-os_edge, where
+# octo-web is aliased) is all that is needed -- no DNS or ingress change.
+#
+# The connector dials outbound, so no inbound port is opened and the host needs
+# no public address.
+#
+# Usage:
+#   ./tunnel.sh            start (or restart) the connector
+#   ./tunnel.sh stop       stop and remove it
+#   ./tunnel.sh status     show container state and recent log lines
+#
+# The tunnel token comes from TUNNEL_TOKEN in deploy/gravebuster/.env (Cloudflare
+# Zero Trust -> Networks -> Tunnels -> <tunnel> -> Install connector).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/../gravebuster/.env"
+NETWORK="study-os_edge"
+CONTAINER="octo-cloudflared"
+
+usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+case "${1:-start}" in
+  stop)
+    docker rm -f "$CONTAINER" >/dev/null 2>&1 && echo "stopped: $CONTAINER" || echo "not running: $CONTAINER"
+    exit 0
+    ;;
+  status)
+    docker ps -a --filter "name=^${CONTAINER}$" --format "{{.Names}}|{{.Status}}"
+    docker logs --tail 15 "$CONTAINER" 2>&1 || true
+    exit 0
+    ;;
+  start) ;;
+  *) usage; exit 2 ;;
+esac
+
+if [ ! -f "$ENV_FILE" ]; then
+  echo "ERROR: $ENV_FILE not found" >&2
+  exit 1
+fi
+
+TUNNEL_TOKEN="$(grep -E '^TUNNEL_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d ' "\r' || true)"
+# Must be exported: `docker run -e TUNNEL_TOKEN` with no value reads it from the
+# docker client's environment, which only sees exported variables.
+export TUNNEL_TOKEN
+if [ -z "$TUNNEL_TOKEN" ]; then
+  echo "ERROR: TUNNEL_TOKEN is not set in $ENV_FILE" >&2
+  echo "Get it from Cloudflare Zero Trust -> Networks -> Tunnels -> <tunnel> -> Install connector." >&2
+  exit 1
+fi
+
+docker network inspect "$NETWORK" >/dev/null 2>&1 || docker network create "$NETWORK" >/dev/null
+
+docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+
+# The token is passed in the environment rather than the command line so it does
+# not appear in `docker inspect` / the process table.
+docker run -d --name "$CONTAINER" --restart unless-stopped \
+  --network "$NETWORK" \
+  -e TUNNEL_TOKEN \
+  cloudflare/cloudflared:latest tunnel --no-autoupdate run >/dev/null
+
+echo "started: $CONTAINER on network $NETWORK"
+sleep 5
+docker logs --tail 20 "$CONTAINER" 2>&1 | sed 's/\(token=\)[^ ]*/\1<redacted>/g' || true
