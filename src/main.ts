@@ -31,12 +31,14 @@ const state: {
   googleAuthEnabled: boolean; turnstileSiteKey: string | null; confirmSecretSet: boolean; confirmCode: string; mfaEnabled: boolean; view: View; loading: boolean; theme: 'midnight' | 'paper';
   modal: Modal; modalError: string; oneTimeSecret: string; oneTimeLabel: string; oneTimeKind: 'key' | 'workspace' | null; shareUrl: string; previewItem: GalleryItem | null; notice: string;
   loadError: string; mfaSetupUri: string; mfaSetupSecret: string; mfaRecoveryCodes: string[]; mfaRecoveryRemaining: number;
+  keyFilter: string; keyView: 'table' | 'cards'; shareFilter: string; shareView: 'table' | 'cards';
 } = {
   principal: null, token: null, workspaces: [], workspace: null, files: [], gallery: [], keys: [], shares: [], jobs: [], activity: [], opsSummary: null,
   googleAuthEnabled: false, turnstileSiteKey: null, confirmSecretSet: false, confirmCode: '', mfaEnabled: false, view: 'overview', loading: false,
   theme: localStorage.getItem('octo-design-system') === 'paper' ? 'paper' : 'midnight', modal: null, modalError: '',
   oneTimeSecret: '', oneTimeLabel: '', oneTimeKind: null, shareUrl: '', previewItem: null, notice: '', loadError: '',
   mfaSetupUri: '', mfaSetupSecret: '', mfaRecoveryCodes: [], mfaRecoveryRemaining: 0,
+  keyFilter: '', keyView: 'table', shareFilter: '', shareView: 'table',
 };
 
 const $ = <T extends HTMLElement = HTMLElement>(selector: string): T | null => root!.querySelector<T>(selector);
@@ -98,7 +100,7 @@ async function loadWorkspace(id: string): Promise<void> {
   const labels = ['files', 'gallery', 'jobs', 'activity', 'shares', 'API keys', 'failure classifications'];
   const results = await Promise.allSettled([
     api<FileRecord[]>('/api/files' + query), api<GalleryItem[]>('/api/gallery' + query), api<Job[]>('/api/jobs' + query),
-    api<Activity[]>('/api/activity' + query), api<ShareSummary[]>('/api/workspaces/shares' + query), api<ApiKey[]>('/api/keys'),
+    api<Activity[]>('/api/activity' + query), api<ShareSummary[]>('/api/workspaces/shares' + query), api<ApiKey[]>('/api/keys' + query),
     api<OpsSummary>('/api/ops/summary' + query),
   ]);
   const failed = results.map((result, index) => (result.status === 'rejected' ? labels[index] : null)).filter(Boolean);
@@ -234,10 +236,26 @@ function allowanceFields(selected: readonly string[]): string {
   return '<fieldset class="scope-choices"><legend class="sr-only">Allowances</legend>' + ALLOWANCES.map((id) => '<label><input type="checkbox" name="allowance" value="' + id + '"' + (selected.includes(id) ? ' checked' : '') + ' />' + id + '</label>').join('') + '</fieldset>';
 }
 
-function keyAllowanceForms(): string {
-  if (!state.keys.length) return '';
-  return '<div class="key-allowance-list">' + state.keys.map((key) => '<form class="key-allowance" data-form="key-allowances" data-id="' + esc(key.id) + '"><span><strong>' + esc(key.name) + '</strong></span>' + allowanceFields(key.scopes ?? []) + '<button class="button secondary" type="submit">Save allowances</button></form>').join('') + '</div>';
+/** Collapsed allowance editor. The summary shows what the key can do right now. */
+function allowanceDropdown(selected: readonly string[]): string {
+  const current = selected.length ? selected.join(', ') : 'none';
+  return '<details class="dropdown"><summary class="dropdown-summary"><span class="scope-text">' + esc(current) + '</span><span class="caret" aria-hidden="true">▾</span></summary><div class="dropdown-body">' + allowanceFields(selected) + '<button class="button secondary small" type="submit">Save</button></div></details>';
 }
+
+/** Per-row action menu, so destructive verbs sit behind one control. */
+function actionDropdown(id: string, label: string): string {
+  return '<details class="dropdown dropdown-end"><summary class="dropdown-summary icon-summary" aria-label="' + esc(label) + ' actions"><span aria-hidden="true">⋯</span></summary><div class="dropdown-body"><button class="text-button danger" type="button" data-action="revoke-key" data-id="' + esc(id) + '">Revoke key</button></div></details>';
+}
+
+function filterField(kind: 'keys' | 'shares', value: string, placeholder: string): string {
+  return '<label class="filter-field"><input type="search" data-filter="' + kind + '" value="' + esc(value) + '" placeholder="' + esc(placeholder) + '" aria-label="' + esc(placeholder) + '" /></label>';
+}
+
+function viewToggle(kind: 'keys' | 'shares', mode: 'table' | 'cards'): string {
+  return '<div class="view-toggle" role="group" aria-label="' + esc(kind) + ' view">' + (['table', 'cards'] as const).map((option) => '<button type="button" class="view-button' + (mode === option ? ' is-active' : '') + '" data-view-mode="' + kind + ':' + option + '">' + option + '</button>').join('') + '</div>';
+}
+
+const matchesFilter = (value: string, needle: string): boolean => value.toLowerCase().includes(needle.trim().toLowerCase());
 
 function modalMarkup(): string {
   if (!state.modal) return '';
@@ -342,15 +360,37 @@ function opsFailurePanel(): string {
   return '<section class="panel"><div class="panel-head"><div><p class="eyebrow">FAILURE ANALYSIS</p><h2>What is failing</h2><p class="panel-copy">Failures classified by error code, by job type and day, and the jobs currently needing attention.</p></div></div><h3 class="subhead">By error code</h3>' + countsBody + '<h3 class="subhead">By job type and day</h3>' + dayBody + '<h3 class="subhead">Jobs needing attention</h3>' + unhealthyBody + '</section>';
 }
 
+function keyTable(keys: ApiKey[]): string {
+  return '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Workspace</th><th>Created</th><th>Last used</th><th>Allowances</th><th></th></tr></thead><tbody>' + keys.map((key) => '<tr><td><strong>' + esc(key.name) + '</strong><small><code>' + esc(key.prefix) + '…</code></small></td><td>' + esc(key.isAccountWide ? 'Account-wide' : key.workspaceName ?? 'This workspace') + '</td><td>' + date(key.createdAt) + '</td><td>' + date(key.lastUsedAt) + '</td><td><form class="key-allowance" data-form="key-allowances" data-id="' + esc(key.id) + '">' + allowanceDropdown(key.scopes ?? []) + '</form></td><td class="row-actions">' + actionDropdown(key.id, key.name) + '</td></tr>').join('') + '</tbody></table></div>';
+}
+
+function keyCards(keys: ApiKey[]): string {
+  return '<div class="record-cards">' + keys.map((key) => '<article class="record-card"><header><strong>' + esc(key.name) + '</strong><span class="role-tag">' + esc(key.isAccountWide ? 'Account-wide' : key.workspaceName ?? 'This workspace') + '</span></header><small><code>' + esc(key.prefix) + '…</code></small><dl class="record-facts"><div><dt>Created</dt><dd>' + date(key.createdAt) + '</dd></div><div><dt>Last used</dt><dd>' + date(key.lastUsedAt) + '</dd></div></dl><form class="key-allowance" data-form="key-allowances" data-id="' + esc(key.id) + '">' + allowanceDropdown(key.scopes ?? []) + '</form><footer>' + actionDropdown(key.id, key.name) + '</footer></article>').join('') + '</div>';
+}
+
+function shareTable(shares: ShareSummary[]): string {
+  return '<div class="table-wrap"><table><thead><tr><th>Link</th><th>Permission</th><th>Created</th><th>Visits</th><th></th></tr></thead><tbody>' + shares.map((share) => '<tr><td><strong>' + (share.active ? 'Active gallery link' : 'Revoked') + '</strong><small>Expires ' + date(share.validUntil) + '</small></td><td>' + esc(share.permission) + '</td><td>' + date(share.createdAt) + '</td><td>' + share.accessCount + '</td><td class="row-actions">' + (share.active ? '<button class="text-button danger" data-action="revoke-share" data-id="' + esc(share.id) + '">Revoke</button>' : '<span class="muted">—</span>') + '</td></tr>').join('') + '</tbody></table></div>';
+}
+
+function shareCards(shares: ShareSummary[]): string {
+  return '<div class="record-cards">' + shares.map((share) => '<article class="record-card"><header><strong>' + (share.active ? 'Active gallery link' : 'Revoked') + '</strong><span class="role-tag">' + esc(share.permission) + '</span></header><small>Expires ' + date(share.validUntil) + '</small><dl class="record-facts"><div><dt>Created</dt><dd>' + date(share.createdAt) + '</dd></div><div><dt>Visits</dt><dd>' + share.accessCount + '</dd></div></dl><footer>' + (share.active ? '<button class="text-button danger" data-action="revoke-share" data-id="' + esc(share.id) + '">Revoke link</button>' : '<span class="muted">Revoked</span>') + '</footer></article>').join('') + '</div>';
+}
+
 function renderAccess(): string {
-  const keyRows = state.keys.length ? '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>' + state.keys.map((key) => '<tr><td><strong>' + esc(key.name) + '</strong><small><code>' + esc(key.prefix) + '…</code></small></td><td>' + (key.isAccountWide ? 'Account-wide' : 'Workspace') + '</td><td>' + date(key.createdAt) + '</td><td>' + date(key.lastUsedAt) + '</td><td><button class="text-button danger" data-action="revoke-key" data-id="' + esc(key.id) + '">Revoke</button></td></tr>').join('') + '</tbody></table></div>' : '<div class="empty-panel compact"><strong>No API keys yet</strong><p>Create one for an application or agent.</p></div>';
-  const shareRows = state.shares.length ? '<div class="table-wrap"><table><thead><tr><th>Link</th><th>Permission</th><th>Created</th><th>Visits</th><th></th></tr></thead><tbody>' + state.shares.map((share) => '<tr><td><strong>' + (share.active ? 'Active gallery link' : 'Revoked') + '</strong><small>Expires ' + date(share.validUntil) + '</small></td><td>' + esc(share.permission) + '</td><td>' + date(share.createdAt) + '</td><td>' + share.accessCount + '</td><td>' + (share.active ? '<button class="text-button danger" data-action="revoke-share" data-id="' + esc(share.id) + '">Revoke</button>' : '<span class="muted">—</span>') + '</td></tr>').join('') + '</tbody></table></div>' : '<div class="empty-panel compact"><strong>No share links</strong><p>Create a read-only gallery link for this workspace.</p></div>';
+  // Keys are scoped to the active workspace plus any account-wide key, which can
+  // act here too. Other projects' keys are not this workspace's business.
+  const visibleKeys = state.keys.filter((key) => !state.keyFilter.trim() || matchesFilter(key.name, state.keyFilter) || matchesFilter(key.workspaceName ?? (key.isAccountWide ? 'account-wide' : ''), state.keyFilter));
+  const visibleShares = state.shares.filter((share) => !state.shareFilter.trim() || matchesFilter(share.active ? 'active gallery link' : 'revoked', state.shareFilter) || matchesFilter(share.permission, state.shareFilter));
+  const emptyKeys = '<div class="empty-panel compact"><strong>No API keys yet</strong><p>Create one for an application or agent.</p></div>';
+  const keyBody = !state.keys.length ? emptyKeys : '<div class="table-toolbar">' + filterField('keys', state.keyFilter, 'Filter keys…') + viewToggle('keys', state.keyView) + '</div>' + (visibleKeys.length ? (state.keyView === 'cards' ? keyCards(visibleKeys) : keyTable(visibleKeys)) : '<div class="empty-panel compact"><strong>No keys match</strong><p>Nothing here matches “' + esc(state.keyFilter) + '”.</p></div>');
+  const emptyShares = '<div class="empty-panel compact"><strong>No share links</strong><p>Create a read-only gallery link for this workspace.</p></div>';
+  const shareBody = !state.shares.length ? emptyShares : '<div class="table-toolbar">' + filterField('shares', state.shareFilter, 'Filter links…') + viewToggle('shares', state.shareView) + '</div>' + (visibleShares.length ? (state.shareView === 'cards' ? shareCards(visibleShares) : shareTable(visibleShares)) : '<div class="empty-panel compact"><strong>No links match</strong><p>Nothing here matches “' + esc(state.shareFilter) + '”.</p></div>');
   const keyNotice = state.oneTimeKind === 'key' && state.oneTimeSecret ? '<section class="one-time-notice" role="status"><div><strong>New API Key Minted</strong><p>Copy this secret now. It is shown only once.</p><code>' + esc(state.oneTimeSecret) + '</code></div><button class="text-button" data-action="copy-secret">Copy</button><button class="text-button" data-action="done-secret">Done</button></section>' : '';
   const shareNotice = state.shareUrl ? '<section class="one-time-notice" role="status"><div><strong>Copy this link now</strong><p>This read-only link is shown once.</p><code>' + esc(state.shareUrl) + '</code></div><button class="text-button" data-action="copy-share">Copy</button><button class="text-button" data-action="done-secret">Done</button></section>' : '';
   const mfaBody = state.mfaEnabled
     ? '<p class="muted">Enabled. ' + state.mfaRecoveryRemaining + ' recovery codes remaining.</p><form data-form="mfa-rotate" class="access-create-form"><input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Authenticator code" aria-label="Authenticator code" required /><button class="button secondary" type="submit">Rotate recovery codes</button></form><form data-form="mfa-disable" class="access-create-form"><input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Code or recovery code" aria-label="Authenticator or recovery code" required /><button class="button danger-button" type="submit">Disable two-factor</button></form>'
     : '<p class="muted">Not enabled. Require a code from your authenticator for destructive commands like deleting a workspace.</p><button class="button secondary" type="button" data-action="mfa-begin">Set up two-factor authentication</button>';
-  return keyNotice + shareNotice + '<section class="panel"><div class="panel-head"><div><p class="eyebrow">MACHINE ACCESS</p><h2>API keys</h2><p class="panel-copy">Keys are shown once when created. Allowances are read, write, files, and delete. write includes publish and unpublish. delete removes the private file, and that call still needs an admin role on the key.</p></div><form data-form="key" class="access-create-form"><input name="name" required placeholder="e.g. Ingest Agent" aria-label="API key name" /><select name="scope" aria-label="API key scope"><option value="workspace">This workspace</option><option value="account">Account-wide</option></select><select name="expires" aria-label="API key expiration"><option value="">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select>' + allowanceFields(['read', 'write', 'files']) + confirmByTyping() + (state.mfaEnabled ? '<input name="mfaCode" required inputmode="numeric" autocomplete="one-time-code" placeholder="Authenticator code" aria-label="Authenticator code" />' : '') + '<button class="button primary" type="submit">Generate API Key</button></form></div>' + keyRows + keyAllowanceForms() + '</section><section class="panel"><div class="panel-head"><div><p class="eyebrow">SHARED CONTENT</p><h2>Share links</h2><p class="panel-copy">Read-only access to this workspace gallery.</p></div><div class="share-create-controls"><label class="sr-only" for="share-expiry">Share link expiration</label><select id="share-expiry"><option value="0">No expiry</option><option value="1">1 hour</option><option value="24">24 hours</option><option value="168">7 days</option></select><button class="button secondary" data-action="new-share">Create link</button></div></div>' + shareRows + '</section><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">SECURITY</p><h2>Two-factor authentication</h2><p class="panel-copy">Per-account step-up for destructive commands.</p></div></div>' + mfaBody + '</section><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">WORKSPACE</p><h2>' + esc(state.workspace?.name) + '</h2><p class="panel-copy">' + esc(state.workspace?.description || 'No description') + '</p></div><span class="role-tag">' + esc(state.workspace?.role) + '</span></div><dl class="detail-list"><div><dt>Workspace slug</dt><dd>' + esc(state.workspace?.slug) + '</dd></div><div><dt>File retention</dt><dd>' + (state.workspace?.retentionDays ? state.workspace.retentionDays + ' days' : 'No automatic archive') + '</dd></div><div><dt>Confirmation</dt><dd>Type the code shown on the form</dd></div><div><dt>Two-factor</dt><dd>' + (state.mfaEnabled ? 'Enabled' : 'Not enabled') + '</dd></div></dl><button class="button danger-button" data-action="delete-workspace">Delete Workspace</button></section>';
+  return keyNotice + shareNotice + '<section class="panel"><div class="panel-head"><div><p class="eyebrow">MACHINE ACCESS</p><h2>API keys</h2><p class="panel-copy">Keys for this workspace, plus account-wide keys that can act here. Allowances are read, write, files, and delete. write includes publish and unpublish. delete removes the private file, and that call still needs an admin role on the key.</p></div><form data-form="key" class="access-create-form"><input name="name" required placeholder="e.g. Ingest Agent" aria-label="API key name" /><select name="scope" aria-label="API key scope"><option value="workspace">This workspace</option><option value="account">Account-wide</option></select><select name="expires" aria-label="API key expiration"><option value="">Never</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select>' + allowanceFields(['read', 'write', 'files']) + confirmByTyping() + (state.mfaEnabled ? '<input name="mfaCode" required inputmode="numeric" autocomplete="one-time-code" placeholder="Authenticator code" aria-label="Authenticator code" />' : '') + '<button class="button primary" type="submit">Generate API Key</button></form></div>' + keyBody + '</section><section class="panel"><div class="panel-head"><div><p class="eyebrow">SHARED CONTENT</p><h2>Share links</h2><p class="panel-copy">Read-only access to this workspace gallery.</p></div><div class="share-create-controls"><label class="sr-only" for="share-expiry">Share link expiration</label><select id="share-expiry"><option value="0">No expiry</option><option value="1">1 hour</option><option value="24">24 hours</option><option value="168">7 days</option></select><button class="button secondary" data-action="new-share">Create link</button></div></div>' + shareBody + '</section><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">SECURITY</p><h2>Two-factor authentication</h2><p class="panel-copy">Per-account step-up for destructive commands.</p></div></div>' + mfaBody + '</section><section class="panel settings-panel"><div class="panel-head"><div><p class="eyebrow">WORKSPACE</p><h2>' + esc(state.workspace?.name) + '</h2><p class="panel-copy">' + esc(state.workspace?.description || 'No description') + '</p></div><span class="role-tag">' + esc(state.workspace?.role) + '</span></div><dl class="detail-list"><div><dt>Workspace slug</dt><dd>' + esc(state.workspace?.slug) + '</dd></div><div><dt>File retention</dt><dd>' + (state.workspace?.retentionDays ? state.workspace.retentionDays + ' days' : 'No automatic archive') + '</dd></div><div><dt>Confirmation</dt><dd>Type the code shown on the form</dd></div><div><dt>Two-factor</dt><dd>' + (state.mfaEnabled ? 'Enabled' : 'Not enabled') + '</dd></div></dl><button class="button danger-button" data-action="delete-workspace">Delete Workspace</button></section>';
 }
 
 function renderApp(): void {
@@ -444,6 +484,18 @@ async function renderPublicShare(): Promise<void> {
   }
 }
 
+root.addEventListener('input', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  const kind = target.dataset.filter;
+  if (kind !== 'keys' && kind !== 'shares') return;
+  if (kind === 'keys') state.keyFilter = target.value; else state.shareFilter = target.value;
+  render();
+  // render() rebuilds the toolbar, so put the caret back where the user left it.
+  const restored = $<HTMLInputElement>('input[data-filter="' + kind + '"]');
+  if (restored) { restored.focus(); restored.setSelectionRange(restored.value.length, restored.value.length); }
+});
+
 root.addEventListener('change', async (event) => {
   const target = event.target;
   if (target instanceof HTMLSelectElement && target.id === 'workspace-select') await loadWorkspace(target.value);
@@ -456,8 +508,15 @@ root.addEventListener('change', async (event) => {
 });
 
 root.addEventListener('click', async (event) => {
-  const target = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-action], [data-view]') : null;
+  const target = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-action], [data-view], [data-view-mode]') : null;
   if (!target) return;
+  const viewMode = target.dataset.viewMode;
+  if (viewMode) {
+    const [kind, mode] = viewMode.split(':') as ['keys' | 'shares', 'table' | 'cards'];
+    if (kind === 'keys') state.keyView = mode; else state.shareView = mode;
+    render();
+    return;
+  }
   const view = target.dataset.view as View | undefined;
   if (view) {
     state.view = view;
@@ -509,7 +568,7 @@ root.addEventListener('click', async (event) => {
     else if (action === 'preview') { state.previewItem = state.gallery.find((item) => item.id === id) ?? null; openModal('preview'); }
     else if (action === 'retry') { await api('/api/jobs/' + encodeURIComponent(id) + '/retry?workspaceId=' + encodeURIComponent(wsId()), { method: 'POST' }); await loadWorkspace(wsId()); }
     else if (action === 'run-worker') { await api('/api/jobs/run?workspaceId=' + encodeURIComponent(wsId()), { method: 'POST' }); await loadWorkspace(wsId()); }
-    else if (action === 'revoke-key') { await api('/api/keys/' + encodeURIComponent(id), { method: 'DELETE' }); state.keys = await api<ApiKey[]>('/api/keys'); render(); }
+    else if (action === 'revoke-key') { await api('/api/keys/' + encodeURIComponent(id), { method: 'DELETE' }); state.keys = await api<ApiKey[]>('/api/keys?workspaceId=' + encodeURIComponent(wsId())); render(); }
     else if (action === 'revoke-share') { await api('/api/shares/' + encodeURIComponent(id) + '?workspaceId=' + encodeURIComponent(wsId()), { method: 'DELETE' }); await loadWorkspace(wsId()); }
     else if (action === 'set-secret') {
       const secret = $('input[name="newSecret"]') as HTMLInputElement | null;
@@ -548,7 +607,7 @@ root.addEventListener('submit', async (event) => {
       closeModal(); await loadWorkspace(wsId());
     } else if (form.dataset.form === 'key') {
       const result = await api<{ apiKey: ApiKey; rawSecret: string }>('/api/keys', { method: 'POST', body: JSON.stringify({ name: String(data.get('name') ?? '').trim(), workspaceId: data.get('scope') === 'account' ? null : wsId(), scopes: data.getAll('allowance').map(String), expiresInDays: Number(data.get('expires')) || undefined, confirmSecret: String(data.get('secret') ?? ''), mfaCode: String(data.get('mfaCode') ?? '') || undefined }) });
-      state.keys = [result.apiKey, ...state.keys]; state.oneTimeSecret = result.rawSecret; state.oneTimeKind = 'key'; state.modal = null;
+      state.keys = await api<ApiKey[]>('/api/keys?workspaceId=' + encodeURIComponent(wsId())); state.oneTimeSecret = result.rawSecret; state.oneTimeKind = 'key'; state.modal = null;
       await loadConfirmCode();
       revealAccess = 'secret';
       render();

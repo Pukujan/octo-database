@@ -2606,7 +2606,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
 
-      const keys = await dbListApiKeys(auth.principal.id);
+      const workspaceId = url.searchParams.get('workspaceId') ?? undefined;
+      const keys = await dbListApiKeys(auth.principal.id, workspaceId);
       sendJson(
         res,
         200,
