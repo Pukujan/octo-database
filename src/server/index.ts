@@ -51,6 +51,7 @@ import { GRAPH_SCHEMA_VERSION, projectWorkspaceGraph } from '../graph/projector'
 import { hashApiKeySecret, authorizeKeyMint, parseKeyScopes } from '../api/keys';
 import { acceptConfirmChallenge, hasConfirmChallenge, issueConfirmChallenge } from '../auth/confirm-challenge';
 import { sendStaticFile } from './static-file';
+import { bearerToken, handleMcpRequest } from './mcp-http';
 import {
   provisioningConfigured,
   provisionDatabase,
@@ -942,6 +943,28 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         r2: r2Status,
         googleAuthEnabled: Boolean(clientId),
       });
+      return;
+    }
+
+    // 1a. Remote MCP endpoint (Streamable HTTP) for hosted clients such as
+    // ChatGPT. Its custom connectors offer only OAuth or no authentication —
+    // no bearer field — so a caller either sends the Octo key as a bearer
+    // header (`/mcp`) or carries it in the path (`/mcp/<key>`), the
+    // "no authentication" form. Either way authenticateRequest does the key
+    // verification and RLS binding, and the raw token is forwarded so the MCP
+    // tools act as that same principal.
+    if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
+      const pathToken = pathname.startsWith('/mcp/') ? pathname.slice('/mcp/'.length) : '';
+      if (pathToken && !pathToken.includes('/')) {
+        req.headers['authorization'] = `Bearer ${pathToken}`;
+      }
+      const auth = await authenticateRequest(req);
+      const token = bearerToken(req);
+      if (!auth || !token) {
+        sendJson(res, 401, { error: 'UNAUTHORIZED: a valid Octo bearer key is required' });
+        return;
+      }
+      await handleMcpRequest(req, res, { baseUrl: `http://127.0.0.1:${PORT}`, token });
       return;
     }
 
